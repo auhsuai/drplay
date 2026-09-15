@@ -105,6 +105,34 @@ describe("logWorkerError", () => {
     expect(callArg.message).not.toContain("ya29.leaky");
   });
 
+  it("does not throw when a context value contains a circular reference", () => {
+    const circular: Record<string, unknown> = { name: "loop" };
+    circular.self = circular;
+
+    expect(() => {
+      logWorkerError("scanner/list", { circular }, new Error("oops"), "error");
+    }).not.toThrow();
+
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].message).toContain("[unserializable]");
+  });
+
+  it("does not throw when a context value contains a BigInt", () => {
+    expect(() => {
+      logWorkerError(
+        "scanner/list",
+        { payload: { size: BigInt(10) } },
+        new Error("oops"),
+        "error",
+      );
+    }).not.toThrow();
+
+    const firstCall = vi.mocked(captureError).mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected captureError call");
+    expect(firstCall[0].message).toContain("[unserializable]");
+  });
+
   it("uses warn level for non-error severity", () => {
     logWorkerError(
       "scanner/cache",

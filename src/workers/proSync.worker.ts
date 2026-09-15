@@ -4,13 +4,9 @@ import {
   refreshTokenAndRetry,
   resolveTokenRefresh,
 } from "./tokenRefresh";
-import type { RefreshTokenRetryDeps, SyncRetryState } from "./tokenRefresh";
+import type { SyncRetryState } from "./tokenRefresh";
 import { delay, fetchDrive, isTransientStatus } from "./driveFetch";
-import {
-  isValidDriveFile,
-  partitionValidFiles,
-  toUpsertableFileRow,
-} from "./driveMapping";
+import { isValidDriveFile, partitionValidFiles } from "./driveMapping";
 
 // userEmail rides on both request frames (schema v10 per-account stamping).
 // It is OPTIONAL at the guard level so a frame missing the field reaches
@@ -71,7 +67,7 @@ export async function handleWorkerMessage(e: MessageEvent): Promise<void> {
   await runSync(token, userEmail);
 }
 
-export { toUpsertableFileRow, isValidDriveFile, partitionValidFiles };
+export { isValidDriveFile, partitionValidFiles };
 export { refreshTokenAndRetry };
 export { delay, isTransientStatus, fetchDrive };
-export type { SyncRetryState, RefreshTokenRetryDeps };
+export type { SyncRetryState };

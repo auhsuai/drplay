@@ -45,9 +45,15 @@ const SENSITIVE_KEYS =
 function stringifyContextValue(v: unknown): string {
   switch (typeof v) {
     case "object":
-      // Template interpolation below turns an exotic-toJSON `undefined`
-      // return into "undefined" — identical to the old inline behavior.
-      return JSON.stringify(v);
+      // A circular reference or a BigInt makes JSON.stringify throw; logging
+      // must never throw, so such context degrades to a marker instead.
+      try {
+        // Template interpolation below turns an exotic-toJSON `undefined`
+        // return into "undefined" — identical to the old inline behavior.
+        return JSON.stringify(v);
+      } catch {
+        return "[unserializable]";
+      }
     case "string":
       return v;
     case "symbol":

@@ -23,8 +23,9 @@ export const DRIVE_START_PAGE_TOKEN_URL = `${DRIVE_CHANGES_URL}/startPageToken`;
 export const FILES_FIELDS = "id,name,mimeType,parents,size,modifiedTime";
 
 // Bearer token recorded per wire frame ("sync"/"token" messages). Read at
-// fetch time via getCurrentToken so a mid-run rotation (pushToken) is picked
-// up by every retry refetch — identical to the pre-split module variable.
+// fetch time by every fetch/refetch below, so a mid-run rotation (pushToken)
+// is picked up by every retry refetch — identical to the pre-split module
+// variable.
 let currentToken: string | null = null;
 
 export function setCurrentToken(token: string): void {
@@ -33,10 +34,6 @@ export function setCurrentToken(token: string): void {
 
 export function hasCurrentToken(): boolean {
   return currentToken !== null;
-}
-
-export function getCurrentToken(): string | null {
-  return currentToken;
 }
 
 // Retry budget shared by all 401 paths of one sync pass; reset on successful
@@ -66,13 +63,19 @@ export async function fetchDriveWithAuthRetry(
 ): Promise<Response> {
   let res = await fetchDrive(fetchCtx, currentToken as string, url);
   let authAttempts = 0;
+  let lastRefreshOk = false;
   while (
     !res.ok &&
     res.status === 401 &&
     authAttempts < MAX_AUTH_RETRIES_PER_CALL
   ) {
     authAttempts += 1;
-    if (!(await refreshTokenAndRetry(syncRetry, syncRetryDeps, retryCtx))) {
+    lastRefreshOk = await refreshTokenAndRetry(
+      syncRetry,
+      syncRetryDeps,
+      retryCtx,
+    );
+    if (!lastRefreshOk) {
       break;
     }
     res = await fetchDrive(fetchCtx, currentToken as string, url);
@@ -80,7 +83,8 @@ export async function fetchDriveWithAuthRetry(
   if (
     !res.ok &&
     res.status === 401 &&
-    authAttempts >= MAX_AUTH_RETRIES_PER_CALL
+    authAttempts >= MAX_AUTH_RETRIES_PER_CALL &&
+    lastRefreshOk
   ) {
     // Never silent: the caller will report SYNC_ERROR, but the ceiling itself
     // (refresh succeeded yet Drive keeps rejecting) deserves its own line.
@@ -116,5 +120,3 @@ export function buildOwnerRow(
     userEmail: ownerEmail,
   };
 }
-
-export { refreshTokenAndRetry, syncRetryDeps };

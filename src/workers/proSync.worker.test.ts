@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db, type DriveFile } from "../db/db";
 import {
   delay,
@@ -15,6 +15,13 @@ import type { SyncRetryState } from "./proSync.worker";
 import { syncRetryDeps } from "./tokenRefresh";
 import { syncRetry } from "./syncState";
 import { DEFAULT_USER_EMAIL } from "../utils/storageKeys";
+
+vi.mock("../utils/errorLog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/errorLog")>()),
+  captureError: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { captureError } from "../utils/errorLog";
 
 // Wire owner used by every pre-existing sync fixture: schema v10 requires a
 // REAL account email on the frame and on every persisted row ("default" is
@@ -1239,6 +1246,117 @@ describe("bounded 401 auth retries per call", () => {
     } as MessageEvent);
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(posted.filter((m) => m.type === "SYNC_ERROR")).toHaveLength(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+});
+
+// B19-5: the ceiling log must report the REAL exit reason. The loop stops at
+// MAX_AUTH_RETRIES_PER_CALL either because every refresh succeeded yet Drive
+// kept rejecting the token (a real ceiling) or because the LAST refresh
+// failed (break). Only the first case may log "max-auth-attempts-per-call".
+describe("auth-ceiling log names the real exit reason", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    syncRetry.count = 0;
+    await resetSyncTables();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Answers each TOKEN_EXPIRED with the next scripted reply: a token string
+  // refreshes successfully, "refresh_failed" releases the wait as false.
+  function stubScriptedRefreshReplies(
+    replies: string[],
+  ): Array<{ type: string }> {
+    const posted: Array<{ type: string }> = [];
+    let call = 0;
+    vi.stubGlobal("self", {
+      postMessage: (msg: { type: string }) => {
+        posted.push(msg);
+        if (msg.type === "TOKEN_EXPIRED") {
+          const reply =
+            replies[Math.min(call, replies.length - 1)] ?? "refresh_failed";
+          call += 1;
+          setTimeout(() => {
+            void handleWorkerMessage({
+              data:
+                reply === "refresh_failed"
+                  ? { type: "refresh_failed" }
+                  : { type: "token", token: reply },
+            } as MessageEvent);
+          }, 0);
+        }
+      },
+    });
+    return posted;
+  }
+
+  function ceilingLogCalls(): number {
+    return vi
+      .mocked(captureError)
+      .mock.calls.filter((call) =>
+        call[0].message.includes("max-auth-attempts-per-call"),
+      ).length;
+  }
+
+  it("does NOT log the ceiling when the loop stops because the LAST refresh failed", async () => {
+    await resetSyncTables();
+    syncRetry.count = 0;
+    const posted = stubScriptedRefreshReplies([
+      "fresh-1",
+      "fresh-2",
+      "refresh_failed",
+    ]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: {
+        type: "sync",
+        token: "tok-last-fail",
+        userEmail: FIXTURE_EMAIL,
+      },
+    } as MessageEvent);
+
+    // 1 initial fetch + one refetch after each of the 2 successful refreshes;
+    // the third refresh fails → break, response is still the previous 401.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(ceilingLogCalls()).toBe(0);
+    expect(posted.filter((m) => m.type === "SYNC_ERROR")).toHaveLength(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+
+  it("logs the ceiling exactly once when refresh keeps succeeding but Drive always answers 401", async () => {
+    await resetSyncTables();
+    syncRetry.count = 0;
+    const posted = stubScriptedRefreshReplies([
+      "fresh-1",
+      "fresh-2",
+      "fresh-3",
+    ]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: {
+        type: "sync",
+        token: "tok-real-ceiling",
+        userEmail: FIXTURE_EMAIL,
+      },
+    } as MessageEvent);
+
+    // 1 initial fetch + 3 bounded auth retries, then give up honestly.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(ceilingLogCalls()).toBe(1);
     expect(posted.filter((m) => m.type === "SYNC_ERROR")).toHaveLength(1);
     expect(posted).not.toContainEqual({ type: "SYNC_COMPLETE" });
   });

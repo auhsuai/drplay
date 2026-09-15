@@ -17,7 +17,7 @@ let isBusy = false;
 // validated per run below — a run never reads a mutable module-level email,
 // so a mid-run rotation (sentinel → real once the userinfo lands) can never
 // split one pass across two owners.
-export function isValidSyncOwnerEmail(
+function isValidSyncOwnerEmail(
   email: string | null | undefined,
 ): email is string {
   return (
