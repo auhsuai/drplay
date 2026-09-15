@@ -878,6 +878,9 @@ describe("getTrackMetadata inflight abort isolation (B09-1)", () => {
       "join.mp3",
       controller.signal,
     );
+    // Swallow-side handler attached NOW so the abort rejection is never
+    // unhandled while the awaits below run; `creator` itself still rejects.
+    void creator.catch(() => undefined);
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
@@ -972,6 +975,9 @@ describe("getTrackMetadata inflight abort isolation (B09-1)", () => {
       "pic.mp3",
       controller.signal,
     );
+    // Swallow-side handler attached NOW so the abort rejection is never
+    // unhandled while the awaits below run; `p` itself still rejects.
+    void p.catch(() => undefined);
     await vi.waitFor(() => {
       expect(vi.mocked(compressCoverVariants)).toHaveBeenCalledTimes(1);
     });
