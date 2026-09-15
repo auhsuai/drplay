@@ -180,6 +180,22 @@ describe("FullRecentView menu delete flow", () => {
     ]);
   });
 
+  it("closes the right-click menu after Download Song and keeps the dialog open", () => {
+    const { container } = renderRecent([makeTrack("t1", "Alpha")]);
+    const card = Array.from(
+      container.querySelectorAll<HTMLElement>(".cursor-pointer"),
+    ).find((el) => el.textContent?.includes("Alpha"));
+    expect(card).not.toBeUndefined();
+
+    fireEvent.contextMenu(card as HTMLElement);
+    expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Download Song" }));
+
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(screen.getByText("File name")).toBeTruthy();
+  });
+
   it("deleting a track removes it from the visible list (local removal)", async () => {
     renderRecent([makeTrack("t1", "Alpha"), makeTrack("t2", "Beta")]);
     expect(screen.getByText("Alpha")).toBeTruthy();

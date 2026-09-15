@@ -48,6 +48,8 @@ export function PlaylistsSubmenu({
 
   return (
     <div
+      role="menu"
+      aria-label={t("sidebar.playlists")}
       className={`absolute bottom-0 ${playlistSubmenuOpenLeft ? "right-full mr-3" : "left-full ml-3"} w-64 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 z-50 flex flex-col animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none`}
     >
       <div className="px-3 py-2 flex items-center justify-between gap-2">
@@ -77,12 +79,16 @@ export function PlaylistsSubmenu({
       <div className="flex flex-col gap-0.5">
         {filteredPlaylists.length === 0 ? (
           <div className="px-3 py-3 text-sm text-gray-400 text-center italic">
-            {t("menu.no_playlists")}
+            {queryActive
+              ? t("menu.no_playlist_results")
+              : t("menu.no_playlists")}
           </div>
         ) : (
           currentPlaylists.map((p) => (
             <button
               key={p.id}
+              type="button"
+              role="menuitem"
               onClick={(e) => {
                 onAddToPlaylist(e, p.id);
               }}
@@ -98,6 +104,8 @@ export function PlaylistsSubmenu({
       {playlistTotalPages > 1 && (
         <div className="px-2 pt-2 pb-1 mt-1 border-t border-gray-100 dark:border-gray-800/60 flex items-center justify-center gap-4">
           <button
+            type="button"
+            aria-label={t("playlist.prev")}
             onClick={(e) => {
               e.stopPropagation();
               setPlaylistCurrentPage((prev) => Math.max(1, prev - 1));
@@ -111,6 +119,8 @@ export function PlaylistsSubmenu({
             {playlistCurrentPage} / {playlistTotalPages}
           </span>
           <button
+            type="button"
+            aria-label={t("playlist.next")}
             onClick={(e) => {
               e.stopPropagation();
               setPlaylistCurrentPage((prev) =>

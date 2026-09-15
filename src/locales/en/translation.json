@@ -175,6 +175,7 @@
     "add_to_playlist": "Add to Playlist",
     "add_to_playlist_error": "Couldn't add to playlist. Try again.",
     "no_playlists": "No playlists yet",
+    "no_playlist_results": "No matching playlists",
     "download_song": "Download Song",
     "navigate": "Locate File",
     "download": "Download Song",

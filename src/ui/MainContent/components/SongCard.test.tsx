@@ -480,6 +480,36 @@ describe("SongCard MoreMenu WAI-ARIA APG menu button pattern", () => {
   });
 });
 
+describe("SongCard context menu closes after Download Song (forceOpen path)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: "Fetched Artist",
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("closes the right-click menu after Download Song while the dialog stays open", () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    const card = container.querySelector(".cursor-pointer") as Element;
+    expect(card).not.toBeNull();
+
+    fireEvent.contextMenu(card);
+    expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "menu.download" }));
+
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(screen.getByText("menu.file_name")).toBeTruthy();
+  });
+});
+
 describe("SongCard navigate/locate highlight flash (single on→off cycle)", () => {
   const originalScrollIntoView = (
     Element.prototype.scrollIntoView as

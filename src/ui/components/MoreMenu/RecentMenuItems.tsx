@@ -54,6 +54,7 @@ export function RecentMenuItems({
             label={t("menu.download_song")}
             onClick={(e) => {
               handleDownloadClick(e, track, setIsOpen);
+              onClose?.();
             }}
             className={`${MENU_ITEM_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
           />
