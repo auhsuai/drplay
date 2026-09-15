@@ -1,12 +1,16 @@
 // Secure storage for the Google OAuth refresh token.
 //
-// WHY this exists: the refresh token is a long-lived credential — anyone who
-// holds it can mint new access tokens and take over the user's Google Drive
-// account permanently. Google's OAuth best practices require storing it
-// securely (https://developers.google.com/identity/protocols/oauth2/resources/best-practices),
-// so it lives in the OS credential vault — Windows Credential Manager via the
-// `keyring` crate (v1 feature auto-selects the platform store) — instead of
-// plaintext WebView localStorage, which any XSS could exfiltrate.
+// Threat model: this store defends the token AT REST. It lives in the OS
+// credential vault — Windows Credential Manager via the `keyring` crate (v1
+// feature auto-selects the platform store) — so it never sits in plaintext on
+// disk or in profile backups, as Google's OAuth best practices require
+// (https://developers.google.com/identity/protocols/oauth2/resources/best-practices).
+//
+// It does NOT defend against a live XSS inside the webview: `get_refresh_token`
+// deliberately hands the refresh token back over IPC because the frontend
+// drives the refresh flow, so script already running in the webview can read it
+// just like localStorage. Residual risk accepted; a design that keeps the token
+// entirely in Rust (no command returns it) would close this gap.
 //
 // The short-lived access token (~1h expiry) intentionally stays in the
 // frontend (localStorage): its exposure window is bounded, and keeping it
@@ -26,7 +30,12 @@ fn refresh_token_entry() -> Result<Entry, String> {
 }
 
 /// Persist the Google OAuth refresh token in the OS credential vault.
-#[tauri::command]
+///
+/// `#[tauri::command(async)]` on a non-async fn runs the body on a runtime
+/// thread-pool thread instead of the main thread, so a stalled vault call
+/// cannot freeze the UI. The signature stays sync because an in-repo caller
+/// (stream_proxy token refresh) needs it.
+#[tauri::command(async)]
 pub fn set_refresh_token(token: String) -> Result<(), String> {
     let entry = refresh_token_entry()?;
     entry.set_password(&token).map_err(|e| {
@@ -36,7 +45,7 @@ pub fn set_refresh_token(token: String) -> Result<(), String> {
 }
 
 /// Read the persisted refresh token, or `None` when nothing is stored.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_refresh_token() -> Result<Option<String>, String> {
     let entry = refresh_token_entry()?;
     match entry.get_password() {
@@ -50,7 +59,7 @@ pub fn get_refresh_token() -> Result<Option<String>, String> {
 }
 
 /// Delete the persisted refresh token; a missing entry is not an error.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_refresh_token() -> Result<(), String> {
     let entry = refresh_token_entry()?;
     match entry.delete_credential() {

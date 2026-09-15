@@ -118,7 +118,7 @@ fn validate_path_for_scope(path: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     use tauri_plugin_fs::FsExt;
     let canonical = validate_path_for_scope(&path)?;
@@ -132,13 +132,13 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivityEvent) {
     if let Some(webview_window) = window.get_webview_window("main") {
         apply_window_activity(&webview_window, event);
     }
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_result = protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_opener::init())
@@ -161,6 +161,10 @@ pub fn run() {
                 // Seed offline import: <app_cache_dir>/metadata holds the
                 // imported metadata JSONs (read disk-first by the pipeline).
                 crate::seed::init_metadata_root(cache_dir.join("metadata"));
+            } else {
+                eprintln!(
+                    "[drplay] app_cache_dir unavailable - cover cache, thumbnail GC and seed metadata will not be initialized"
+                );
             }
 
             setup_tray(app)?;
