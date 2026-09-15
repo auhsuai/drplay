@@ -33,7 +33,10 @@ vi.mock("lucide-react", () => {
     "SquareCheckBig",
     "Ellipsis",
   ];
-  const Stub = () => null;
+  // Render the className so tests can detect icon swaps (spinner vs idle).
+  const Stub = (props: { className?: string }) => (
+    <span className={props.className} />
+  );
   return Object.fromEntries(icons.map((n) => [n, Stub]));
 });
 
@@ -343,6 +346,86 @@ describe("TrashScreen bulk operations", () => {
       .map((call) => call[0].message)
       .join("\n");
     expect(loggedMessages).toContain("empty-trash-item-failed");
+  });
+});
+
+describe("TrashScreen per-row restore state (P2-05-7)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  function rowFor(name: string): HTMLElement {
+    const el = screen.getByText(name).closest("div[role='button']");
+    if (el === null) throw new Error(`row for ${name} not found`);
+    return el as HTMLElement;
+  }
+
+  it("keeps row B disabled with its spinner until its own restore settles", async () => {
+    render(<TrashScreen token="test-token" onClose={vi.fn()} />);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      const call = deferredCalls[0];
+      if (call === undefined) throw new Error("expected deferred call");
+      call.resolve([
+        { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+        { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+      ]);
+      await Promise.resolve();
+    });
+    await screen.findByText("Track 1");
+
+    const pendingRestores = new Map<string, () => void>();
+    mocks.driveApi.restoreFile.mockImplementation(
+      (_token: string, id: string) =>
+        new Promise((resolve) => {
+          pendingRestores.set(id, () => {
+            resolve({ id });
+          });
+        }),
+    );
+
+    const restoreButtons = screen.getAllByRole("button", {
+      name: "settings.restore",
+    });
+    expect(restoreButtons).toHaveLength(2);
+    fireEvent.click(restoreButtons[0] as HTMLElement);
+    fireEvent.click(restoreButtons[1] as HTMLElement);
+
+    expect(
+      rowFor("Track 1").querySelector("button")?.hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      rowFor("Track 2").querySelector("button")?.hasAttribute("disabled"),
+    ).toBe(true);
+    expect(rowFor("Track 2").querySelector(".animate-spin")).not.toBeNull();
+
+    // Row A finishes while row B is still in flight: B keeps its own
+    // spinner/disabled state instead of being reset by A's completion.
+    await act(async () => {
+      pendingRestores.get("f1")?.();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("Track 1")).toBeNull();
+    expect(
+      rowFor("Track 2").querySelector("button")?.hasAttribute("disabled"),
+    ).toBe(true);
+    expect(rowFor("Track 2").querySelector(".animate-spin")).not.toBeNull();
+
+    await act(async () => {
+      pendingRestores.get("f2")?.();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("Track 2")).toBeNull();
   });
 });
 

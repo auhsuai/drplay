@@ -1,16 +1,26 @@
 import { captureError } from "../../utils/errorLog";
+import { createSemaphore } from "../../utils/asyncLimit";
 
 export const TRASH_MODULE = "TrashScreen";
+
+// Trash lists paginate without a cap (1000 items per page), so fanning out one
+// request per item would burst the Drive rate limiter. 5 in-flight requests
+// keeps large selections from taking minutes while staying polite to the rate
+// limiter (parity with useDriveBulkOps BULK_CONCURRENCY).
+const BULK_CONCURRENCY = 5;
 
 // The three bulk handlers (empty trash / bulk restore / bulk delete) share
 // the same shape: run an async op per id, keep the succeeded set, count
 // failures, log each failure with a per-op message prefix.
 export async function runBulkOperation(
-  ops: Promise<unknown>[],
+  tasks: Array<() => Promise<unknown>>,
   ids: string[],
   messagePrefix: string,
 ): Promise<{ succeededIds: Set<string>; failedCount: number }> {
-  const results = await Promise.allSettled(ops);
+  const semaphore = createSemaphore(BULK_CONCURRENCY);
+  const results = await Promise.allSettled(
+    tasks.map((task) => semaphore.run(task)),
+  );
   const succeededIds = new Set<string>();
   let failedCount = 0;
   results.forEach((result, index) => {
@@ -23,7 +33,7 @@ export async function runBulkOperation(
       void captureError({
         level: "error",
         source: TRASH_MODULE,
-        message: `${messagePrefix}: ${id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+        message: `${messagePrefix} for fileId=${id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
       });
     }
   });

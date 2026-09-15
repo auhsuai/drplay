@@ -283,6 +283,33 @@ describe("SettingsTab import seed button", () => {
     );
   });
 
+  it("ignores a second click while the file dialog is still open", async () => {
+    let resolveOpen: (value: string | null) => void = () => {};
+    vi.mocked(open).mockImplementation(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveOpen = resolve;
+        }),
+    );
+    render(<SettingsTab {...baseProps} />);
+    const button = screen.getByRole("button", {
+      name: "Import metadata backup (seed.zip)",
+    });
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await act(async () => {});
+    expect(vi.mocked(open)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveOpen(null);
+      await Promise.resolve();
+    });
+    expect(vi.mocked(open)).toHaveBeenCalledTimes(1);
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+
   it("logs when the file dialog itself fails (no invoke)", async () => {
     vi.mocked(open).mockRejectedValue(new Error("dialog exploded"));
     render(<SettingsTab {...baseProps} />);

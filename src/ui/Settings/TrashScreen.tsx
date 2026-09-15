@@ -33,7 +33,17 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   const { t } = useTranslation();
   const { items, setItems, isLoading, setIsLoading } = useTrashedFiles(token);
   const [isEmptying, setIsEmptying] = useState(false);
-  const [restoringId, setRestoringId] = useState<string | null>(null);
+  // A Set, not a single slot: two restores can be in flight at once, and one
+  // completing must not clear the other's spinner/disabled state.
+  const [restoringIds, setRestoringIds] = useState<Set<string>>(new Set());
+  const markRestoring = (id: string, on: boolean) => {
+    setRestoringIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
 
   // Selection states
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -83,7 +93,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   }, [setIsLoading]);
 
   const handleRestore = async (id: string) => {
-    setRestoringId(id);
+    markRestoring(id, true);
     try {
       await restoreFile(token, id);
       setItems((prev) => prev.filter((item) => item.id !== id));
@@ -96,7 +106,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
       });
       showErrorToast(t("settings.restore_error"));
     } finally {
-      setRestoringId(null);
+      markRestoring(id, false);
     }
   };
 
@@ -108,7 +118,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     try {
       const ids = items.map((item) => item.id);
       const { succeededIds, failedCount } = await runBulkOperation(
-        items.map((item) => permanentlyDeleteFile(token, item.id)),
+        items.map((item) => () => permanentlyDeleteFile(token, item.id)),
         ids,
         "empty-trash-item-failed",
       );
@@ -140,7 +150,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     try {
       const ids = Array.from(selectedIds);
       const { succeededIds, failedCount } = await runBulkOperation(
-        ids.map((id) => restoreFile(token, id)),
+        ids.map((id) => () => restoreFile(token, id)),
         ids,
         "bulk-restore-item-failed",
       );
@@ -173,7 +183,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     try {
       const ids = Array.from(selectedIds);
       const { succeededIds, failedCount } = await runBulkOperation(
-        ids.map((id) => permanentlyDeleteFile(token, id)),
+        ids.map((id) => () => permanentlyDeleteFile(token, id)),
         ids,
         "bulk-delete-item-failed",
       );
@@ -328,7 +338,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   item={item}
                   isSelected={selectedIds.has(item.id)}
                   isSelectionMode={isSelectionMode}
-                  isRestoring={restoringId === item.id}
+                  isRestoring={restoringIds.has(item.id)}
                   onToggle={toggleItem}
                   onRestore={handleRestore}
                 />
