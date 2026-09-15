@@ -27,24 +27,12 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
   const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    loadFavorites().catch(
-      (err: unknown) =>
-        void captureError({
-          level: "error",
-          source: LIKED_SONGS_MODULE,
-          message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
-        }),
-    );
+    // loadFavorites swallows + logs its own failures (single error source) —
+    // a .catch here was dead code and a second captureError path.
+    void loadFavorites();
 
     const handleUpdate = () => {
-      void loadFavorites().catch(
-        (err: unknown) =>
-          void captureError({
-            level: "error",
-            source: LIKED_SONGS_MODULE,
-            message: `failed-to-load-favorites: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-      );
+      void loadFavorites();
     };
     window.addEventListener(FAVORITES_UPDATED_EVENT, handleUpdate);
     window.addEventListener("user-changed", handleUpdate);

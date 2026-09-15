@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { HardDrive, LoaderCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
@@ -30,6 +30,11 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
+  // The Rust side has no cancel command (cancel is cosmetic), so "Cancel"
+  // works by invalidating the current attempt: its late resolve/reject must
+  // not pivot into a ghost login or a stale error toast. New attempts bump
+  // the counter, which also makes older attempts stale.
+  const attemptRef = useRef(0);
 
   // The cancel prompt resets the moment loading stops — adjusted during
   // render (React "adjusting state during render" pattern) instead of
@@ -47,6 +52,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   }, [isLoading]);
 
   const handleCancel = () => {
+    attemptRef.current += 1;
     setIsLoading(false);
     setShowCancel(false);
     showErrorToast(t("login.cancelled_by_user"));
@@ -54,17 +60,20 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
   const handleLoginClick = async () => {
     if (isLoading) return;
+    const attempt = ++attemptRef.current;
 
     try {
       setIsLoading(true);
       // Call Rust backend directly
       const token = await invoke<LoginResult>("login_google_native");
+      if (attempt !== attemptRef.current) return;
       setIsLoading(false);
       // Forward the full token payload — dropping refresh_token here starves
       // the refresh machinery (apiClient.getValidToken), which later triggers
       // an 'auth-logout' ~50 min after login (regression from 80c2984).
       onLogin(token);
     } catch (error) {
+      if (attempt !== attemptRef.current) return;
       setIsLoading(false);
       const errStr = String(error);
       if (errStr.includes("cancel")) {

@@ -33,6 +33,7 @@ export function PlaylistView({
 }: PlaylistViewProps) {
   const { t } = useTranslation();
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
+  const [isLoadSettled, setIsLoadSettled] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isCropperOpen, setIsCropperOpen] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -49,6 +50,10 @@ export function PlaylistView({
         message: `failed-to-load-playlist: ${e instanceof Error ? e.message : String(e)}`,
       });
       showErrorToast(t("playlist.load_error"));
+    } finally {
+      // Distinguishes "still loading" (render nothing) from "settled without a
+      // playlist" (playlist missing/deleted or load failed → message).
+      setIsLoadSettled(true);
     }
   }, [playlistId, t]);
 
@@ -113,7 +118,19 @@ export function PlaylistView({
     overscan: 3,
   });
 
-  if (!playlist) return null;
+  if (!playlist) {
+    if (!isLoadSettled) return null;
+    return (
+      <main className="flex-1 bg-white dark:bg-[#121212] flex items-center justify-center transition-colors duration-300">
+        <div className="text-center text-gray-500 dark:text-gray-400">
+          <Music className="w-16 h-16 mx-auto mb-4 opacity-20" />
+          <h3 className="text-xl font-medium text-gray-700 dark:text-gray-300">
+            {t("playlist.load_error")}
+          </h3>
+        </div>
+      </main>
+    );
+  }
 
   const handleRemove = async (e: React.MouseEvent, trackId: string) => {
     e.stopPropagation();
@@ -276,7 +293,7 @@ export function PlaylistView({
             onClick={() => {
               const first = tracks[0];
               if (first === undefined) return;
-              onPlay(first);
+              onPlay(first, tracks);
             }}
             className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg mb-8 flex-shrink-0"
           >
@@ -377,7 +394,7 @@ export function PlaylistView({
                         {track.title}
                       </h4>
                       <p className="text-[13px] text-gray-500 truncate leading-tight">
-                        {t("unknown_artist")}
+                        {track.artist || t("unknown_artist")}
                       </p>
                     </div>
 

@@ -204,3 +204,91 @@ describe("LoginScreen invoke login error handling", () => {
     }
   });
 });
+
+describe("LoginScreen cancel invalidates the in-flight attempt (P2-13a-5)", () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="content-area"></div>';
+    invokeMock.mockReset();
+    captureErrorMock.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("cancel rồi invoke cũ resolve muộn → KHÔNG ghost login (onLogin không được gọi)", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInvoke: (value: unknown) => void = () => {};
+      invokeMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInvoke = resolve;
+          }),
+      );
+      const { onLogin } = renderLogin();
+      const connectButton = screen.getByRole("button");
+      fireEvent.click(connectButton);
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(toastRootText()).toContain("Connection cancelled.");
+
+      await act(async () => {
+        resolveInvoke({ access_token: "stale-token" });
+        await Promise.resolve();
+      });
+
+      expect(onLogin).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("attempt cũ resolve muộn sau khi user thử lại → onLogin chỉ nhận token mới nhất, đúng 1 lần", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirst: (value: unknown) => void = () => {};
+      let resolveSecond: (value: unknown) => void = () => {};
+      invokeMock
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveFirst = resolve;
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveSecond = resolve;
+            }),
+        );
+      const { onLogin } = renderLogin();
+      const connectButton = screen.getByRole("button");
+      fireEvent.click(connectButton);
+
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(connectButton);
+
+      await act(async () => {
+        resolveFirst({ access_token: "stale-token" });
+        await Promise.resolve();
+      });
+      expect(onLogin).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveSecond({ access_token: "fresh-token" });
+        await Promise.resolve();
+      });
+      expect(onLogin).toHaveBeenCalledTimes(1);
+      expect(onLogin).toHaveBeenCalledWith({ access_token: "fresh-token" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

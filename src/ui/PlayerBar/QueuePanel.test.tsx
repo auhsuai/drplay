@@ -578,6 +578,23 @@ describe("QueueList grid semantics + keyboard model (QL-1)", () => {
       "true",
     );
   });
+
+  it("click row → sync aria-activedescendant về row vừa click; Enter sau đó activate đúng row (P2-13b-1)", () => {
+    const { props } = renderPanel();
+
+    const grid = screen.getByRole("grid");
+    expect(grid.getAttribute("aria-activedescendant")).toBeNull();
+
+    fireEvent.click(rowFor("Song t3").firstElementChild as HTMLElement);
+    expect(props.onSelectTrack).toHaveBeenCalledWith(T3);
+
+    // Click đồng bộ anchor: ring/activedescendant trỏ row vừa click, nên
+    // Enter kế tiếp activate chính row đó (không phải row đang-phát cũ).
+    expect(grid.getAttribute("aria-activedescendant")).toBe("queue-option-2");
+    fireEvent.keyDown(grid, { key: "Enter" });
+    expect(props.onSelectTrack).toHaveBeenCalledTimes(2);
+    expect(props.onSelectTrack).toHaveBeenLastCalledWith(T3);
+  });
 });
 
 describe("QueuePanel card rows (SongCard clone) + 1 nút close", () => {

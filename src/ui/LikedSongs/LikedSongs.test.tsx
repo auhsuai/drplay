@@ -142,3 +142,30 @@ describe("LikedSongs debug empty trigger", () => {
     }).not.toThrow();
   });
 });
+
+// Guard sau khi xoá catch chết ở caller (P2-13a-10): loadFavorites tự nuốt lỗi
+// và là nguồn captureError DUY NHẤT — reject không được log 2 lần.
+describe("LikedSongs load error handling (P2-13a-10)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("getFavorites reject → captureError gọi đúng 1 lần với ngữ cảnh load-favorites", async () => {
+    mocks.getFavorites.mockRejectedValue(new Error("db-down"));
+    renderView();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.captureError).toHaveBeenCalledTimes(1);
+    expect(mocks.captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "LikedSongs",
+        message: "failed-to-load-favorites: db-down",
+      }),
+    );
+  });
+});

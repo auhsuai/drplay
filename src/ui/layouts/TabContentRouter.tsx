@@ -169,6 +169,9 @@ export function TabContentRouter({
           />
         ) : activeTab.startsWith("playlist_") ? (
           <PlaylistView
+            // Remount per playlist: playlist A → B must not keep A's header/
+            // tracks on screen (or let A's late load overwrite B's state).
+            key={activeTab}
             playlistId={activeTab.replace("playlist_", "")}
             onPlay={(t: Track, c?: Track[]) => {
               onPlayTrack(t, c);

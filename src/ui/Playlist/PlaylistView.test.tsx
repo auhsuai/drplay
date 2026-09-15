@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlaylistView } from "./PlaylistView";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
@@ -156,5 +162,63 @@ describe("PlaylistView debug empty trigger", () => {
     expect(() => {
       dispatchPlaylistEmpty();
     }).not.toThrow();
+  });
+});
+
+describe("PlaylistView header + row semantics (P2-13a-3/-4/-9)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("row hiển thị artist thật của track thay vì unknown_artist hardcode (P2-13a-3)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    renderView();
+
+    expect(await screen.findByText("Artist 1")).not.toBeNull();
+    expect(screen.queryByText("Unknown Artist")).toBeNull();
+  });
+
+  it("artist rỗng → fallback unknown_artist (P2-13a-3)", async () => {
+    mocks.getPlaylistById.mockResolvedValue({
+      ...FULL_PLAYLIST,
+      tracks: [{ ...TRACK, artist: "" }],
+    });
+    renderView();
+
+    expect(await screen.findByText("Unknown Artist")).not.toBeNull();
+  });
+
+  it("nút Play header truyền cả playlist làm context queue (P2-13a-4)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    const onPlay = vi.fn();
+    render(
+      <PlaylistView playlistId="pl-1" onPlay={onPlay} onDelete={vi.fn()} />,
+    );
+    await screen.findByText("Track 1");
+
+    // The header play button is the only <button> carrying bg-brand-primary
+    // (the cover is a div[role=button], the row remove button is opacity-0).
+    const playButton = document.querySelector("button.bg-brand-primary");
+    expect(playButton).not.toBeNull();
+    fireEvent.click(playButton as HTMLButtonElement);
+
+    expect(onPlay).toHaveBeenCalledWith(TRACK, [TRACK]);
+  });
+
+  it("playlist null sau khi load settle → hiện thông điệp load_error thay vì trắng (P2-13a-9)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(null);
+    renderView("pl-missing");
+
+    expect(
+      await screen.findByText("Couldn't load playlist. Try again."),
+    ).not.toBeNull();
+  });
+
+  it("đang load (chưa settle) → KHÔNG hiện thông điệp (không flash) (P2-13a-9)", () => {
+    mocks.getPlaylistById.mockImplementation(() => new Promise(() => {}));
+    renderView("pl-pending");
+
+    expect(screen.queryByText("Couldn't load playlist. Try again.")).toBeNull();
   });
 });

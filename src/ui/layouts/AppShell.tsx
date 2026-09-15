@@ -66,8 +66,17 @@ export function AppShell({
 }: AppShellProps) {
   const { t } = useTranslation();
 
+  // Shell lock: a full-screen modal covers the shell in these states —
+  // LoginScreen (!isLoggedIn) or FolderSelectionGate
+  // (isLoggedIn && (!appRootFolder || showFolderSelection), see the gate).
+  // inert/aria-hidden keep keyboard/AT (and pointer) out of the blurred
+  // shell behind the modal, mirroring the QueuePanel drawer pattern.
+  const isShellLocked = !isLoggedIn || !appRootFolder || showFolderSelection;
+
   return (
     <div
+      aria-hidden={isShellLocked}
+      inert={isShellLocked}
       className={`flex flex-1 overflow-hidden transition-all duration-700 ease-in-out ${!isLoggedIn || (!appRootFolder && !showFolderSelection) ? "blur-xl scale-[0.97] opacity-40 pointer-events-none" : "blur-0 scale-100 opacity-100"}`}
     >
       <Sidebar

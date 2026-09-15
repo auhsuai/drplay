@@ -228,6 +228,9 @@ export function QueueList({
                     containsCurrent={item.containsCurrent}
                     selectionMode={selectionMode}
                     onOpen={() => {
+                      // The clicked row becomes the anchor: keyboard navigation
+                      // after a click continues from here (not the old active).
+                      setActiveIndex(virtualRow.index);
                       onOpenFolder(item.folderId);
                     }}
                     onRemoveFolder={() => {
@@ -269,6 +272,11 @@ export function QueueList({
                   isChecked={selected.has(key)}
                   selectionMode={selectionMode}
                   onActivate={() => {
+                    // Click syncs the keyboard anchor (the natural mousedown
+                    // → grid.focus() → onFocus path would otherwise pin the
+                    // anchor to the previously-playing row): Enter/Arrow after
+                    // a click continue from the row the user just clicked.
+                    setActiveIndex(virtualRow.index);
                     if (selectionMode) onToggleSelected(key);
                     else onSelectTrack(track);
                   }}

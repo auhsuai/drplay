@@ -144,3 +144,41 @@ describe("AppShell PlayerBar a11y khi NowPlaying mở (P2-13a-1)", () => {
     expect(wrapper.hasAttribute("inert")).toBe(false);
   });
 });
+
+describe("AppShell shell inert khi modal phủ (P2-13a-2)", () => {
+  function shellRoot(): HTMLElement {
+    return screen.getByTestId("sidebar-stub").parentElement as HTMLElement;
+  }
+
+  it("chưa login (LoginScreen phủ toàn màn hình) → shell aria-hidden + inert", () => {
+    render(<AppShell {...baseProps()} isLoggedIn={false} />);
+
+    const shell = shellRoot();
+    expect(shell.getAttribute("aria-hidden")).toBe("true");
+    expect(shell.hasAttribute("inert")).toBe(true);
+  });
+
+  it("chưa có appRootFolder (FolderSelectionGate phủ) → shell aria-hidden + inert", () => {
+    render(<AppShell {...baseProps()} appRootFolder={null} />);
+
+    const shell = shellRoot();
+    expect(shell.getAttribute("aria-hidden")).toBe("true");
+    expect(shell.hasAttribute("inert")).toBe(true);
+  });
+
+  it("đang mở folder picker (showFolderSelection=true, đã có root folder) → shell aria-hidden + inert", () => {
+    render(<AppShell {...baseProps()} showFolderSelection />);
+
+    const shell = shellRoot();
+    expect(shell.getAttribute("aria-hidden")).toBe("true");
+    expect(shell.hasAttribute("inert")).toBe(true);
+  });
+
+  it("logged-in + có root folder + không mở picker → shell tương tác bình thường", () => {
+    render(<AppShell {...baseProps()} />);
+
+    const shell = shellRoot();
+    expect(shell.getAttribute("aria-hidden")).toBe("false");
+    expect(shell.hasAttribute("inert")).toBe(false);
+  });
+});
