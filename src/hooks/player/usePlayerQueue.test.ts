@@ -724,3 +724,108 @@ describe("handleNextTrack broken-track guard (Task D — repeat-all loop)", () =
     expect(usePlayerStore.getState().brokenTrackIds).toContain("t2");
   });
 });
+
+describe("handlePrevTrack broken-track guard (B16-5)", () => {
+  const setup = (
+    currentTrack: Track | null,
+    playbackQueue: Track[],
+    playMode: PlayMode,
+  ) => {
+    const setPlaybackQueue = vi.fn();
+    const setOriginalQueue = vi.fn();
+    const setPlayMode = vi.fn();
+    const handlePlayTrack = vi.fn();
+
+    const { result } = renderHook(() =>
+      usePlayerQueue(
+        currentTrack,
+        playbackQueue,
+        playbackQueue,
+        playMode,
+        setPlaybackQueue,
+        setOriginalQueue,
+        setPlayMode,
+        handlePlayTrack,
+      ),
+    );
+    return { result, handlePlayTrack };
+  };
+
+  beforeEach(() => {
+    usePlayerStore.setState({ brokenTrackIds: [], isPlaying: false });
+  });
+
+  it("B16-5: bài liền trước hỏng → scan lùi skip sang bài trước đó (isNavigation=true)", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[2];
+    if (current === undefined) throw new Error("expected track at index 2");
+    usePlayerStore.setState({ brokenTrackIds: ["t2"] });
+    const { result, handlePlayTrack } = setup(current, queue, "normal");
+
+    act(() => {
+      result.current.handlePrevTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t1" });
+    expect(handlePlayTrack.mock.calls[0]?.[2]).toBe(true);
+  });
+
+  it("B16-5: index 0 + repeat-all + bài cuối hỏng → wrap về bài kế cuối hợp lệ", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    usePlayerStore.setState({ brokenTrackIds: ["t3"] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handlePrevTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t2" });
+  });
+
+  it("B16-5 parity: prev thường (không broken) → play đúng bài liền trước như cũ", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[1];
+    if (current === undefined) throw new Error("expected track at index 1");
+    usePlayerStore.setState({ brokenTrackIds: [] });
+    const { result, handlePlayTrack } = setup(current, queue, "normal");
+
+    act(() => {
+      result.current.handlePrevTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t1" });
+  });
+
+  it("B16-5 parity: index 0 + normal (không wrap) → no-op như cũ", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    usePlayerStore.setState({ brokenTrackIds: ["t2"] });
+    const { result, handlePlayTrack } = setup(current, queue, "normal");
+
+    act(() => {
+      result.current.handlePrevTrack();
+    });
+
+    expect(handlePlayTrack).not.toHaveBeenCalled();
+  });
+
+  it("B16-5: toàn bộ queue hỏng + repeat-all → no-op, không crash, không gọi handlePlayTrack", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
+    const current = queue[2];
+    if (current === undefined) throw new Error("expected track at index 2");
+    usePlayerStore.setState({ brokenTrackIds: ["t1", "t2", "t3"] });
+    const { result, handlePlayTrack } = setup(current, queue, "repeat-all");
+
+    act(() => {
+      result.current.handlePrevTrack();
+    });
+
+    expect(handlePlayTrack).not.toHaveBeenCalled();
+  });
+});

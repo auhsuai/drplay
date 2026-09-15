@@ -118,15 +118,24 @@ export function usePlayerQueue(
       return;
     }
 
-    if (currentIndex > 0) {
-      const prev = playbackQueue[currentIndex - 1];
-      if (prev === undefined) return;
-      handlePlayTrack(prev, undefined, true);
-    } else {
-      if (playMode === "repeat-all" || playMode === "shuffle") {
-        const last = playbackQueue[playbackQueue.length - 1];
-        if (last === undefined) return;
-        handlePlayTrack(last, undefined, true);
+    // B16-5: mirror handleNextTrack's Task D guard — a broken track must not
+    // be re-selected by prev either, or a manual prev onto a known-broken
+    // track feeds the error storm window and blocks auto-advance. Scan
+    // backward for the first track NOT marked broken (wrapping once for
+    // repeat-all/shuffle, bounded by the queue length). No candidate → silent
+    // no-op, preserving the old end-of-queue parity.
+    const wraps = playMode === "repeat-all" || playMode === "shuffle";
+    const { brokenTrackIds } = usePlayerStore.getState();
+    for (let step = 1; step <= playbackQueue.length; step++) {
+      let index = currentIndex - step;
+      if (index < 0) {
+        if (!wraps) break;
+        index += playbackQueue.length;
+      }
+      const candidate = playbackQueue[index];
+      if (candidate !== undefined && !brokenTrackIds.includes(candidate.id)) {
+        handlePlayTrack(candidate, undefined, true);
+        return;
       }
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
