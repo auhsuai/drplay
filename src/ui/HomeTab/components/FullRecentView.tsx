@@ -129,6 +129,23 @@ export function FullRecentView({
     { id: "size", label: t("sort.size") },
   ];
 
+  // Latest-ref pattern (mirrors MainContent's handlePlay, P2-03-1): SongCard's
+  // memo comparator deliberately ignores callback props, so a mounted card
+  // keeps the callback from its last render. Keeping the handler identity
+  // stable (deps []) and reading filteredItems/onPlay through a ref updated on
+  // every commit means the queue is built from the CURRENT list at click time
+  // instead of a stale closure snapshot (search/sort/delete churn re-creates
+  // filteredItems without re-rendering the already-mounted cards).
+  const playContextRef = useRef({ filteredItems, onPlay });
+  useEffect(() => {
+    playContextRef.current = { filteredItems, onPlay };
+  });
+  const handleCardPlay = useCallback((track: Track) => {
+    const { filteredItems: currentItems, onPlay: play } =
+      playContextRef.current;
+    play(track, currentItems);
+  }, []);
+
   // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
   const rowVirtualizer = useVirtualizer({
     count: filteredItems.length,
@@ -147,6 +164,7 @@ export function FullRecentView({
           <div className="flex items-center gap-2 text-sm font-medium">
             <button
               onClick={onBack}
+              aria-label={t("common.back")}
               className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors mr-2 shrink-0"
             >
               <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
@@ -183,6 +201,7 @@ export function FullRecentView({
                   onClick={() => {
                     setSearchQuery("");
                   }}
+                  aria-label={t("common.clear_search")}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -205,51 +224,57 @@ export function FullRecentView({
         ref={parentRef}
         className="flex-1 overflow-y-auto px-8 pt-4 pb-24 min-h-0 custom-scrollbar"
       >
-        <div
-          className="flex flex-col relative w-full"
-          style={{ height: `${String(rowVirtualizer.getTotalSize())}px` }}
-        >
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const track = filteredItems[virtualRow.index];
-            if (track === undefined) return null;
-            const driveItem: DriveItem = {
-              id: track.id,
-              title: track.title,
-              isFolder: false,
-              size: track.size,
-              trackInfo: track,
-            };
-            return (
-              <div
-                key={virtualRow.key}
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  width: "100%",
-                  height: `${String(virtualRow.size)}px`,
-                  transform: `translateY(${String(virtualRow.start)}px)`,
-                }}
-                className="pb-2"
-              >
-                <SongCard
-                  item={driveItem}
-                  onPlay={(t) => {
-                    onPlay(t, filteredItems);
+        {filteredItems.length === 0 ? (
+          <div className="text-gray-500 py-10 text-center">
+            {searchQuery.trim() !== ""
+              ? t("drive.no_search_results")
+              : t("drive.no_audio")}
+          </div>
+        ) : (
+          <div
+            className="flex flex-col relative w-full"
+            style={{ height: `${String(rowVirtualizer.getTotalSize())}px` }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const track = filteredItems[virtualRow.index];
+              if (track === undefined) return null;
+              const driveItem: DriveItem = {
+                id: track.id,
+                title: track.title,
+                isFolder: false,
+                size: track.size,
+                trackInfo: track,
+              };
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    width: "100%",
+                    height: `${String(virtualRow.size)}px`,
+                    transform: `translateY(${String(virtualRow.start)}px)`,
                   }}
-                  onOpenFolder={() => {}}
-                  token={token}
-                  currentFolderId="recent"
-                  currentFolderName="Recent"
-                  folderHistory={[]}
-                  onRefresh={() => {}}
-                  onRemoveItem={handleRemoveTrack}
-                  menuVariant="recent"
-                  isPlaying={!!currentTrack && track.id === currentTrack.id}
-                />
-              </div>
-            );
-          })}
-        </div>
+                  className="pb-2"
+                >
+                  <SongCard
+                    item={driveItem}
+                    onPlay={handleCardPlay}
+                    onOpenFolder={() => {}}
+                    token={token}
+                    currentFolderId="recent"
+                    currentFolderName="Recent"
+                    folderHistory={[]}
+                    onRefresh={() => {}}
+                    onRemoveItem={handleRemoveTrack}
+                    menuVariant="recent"
+                    isPlaying={!!currentTrack && track.id === currentTrack.id}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </main>
   );

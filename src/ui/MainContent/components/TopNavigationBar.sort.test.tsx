@@ -152,3 +152,26 @@ describe("TopNavigationBar sort dropdown (contract guard)", () => {
     expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
   });
 });
+
+describe("TopNavigationBar accessible names (P2-03-3 + P2-11 twins)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("clear search button has an accessible name and clears the query", () => {
+    const onSearchChange = vi.fn();
+    render(
+      <TopNavigationBar
+        {...makeProps({ searchQuery: "alpha", onSearchChange })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(onSearchChange).toHaveBeenCalledWith("");
+  });
+
+  it("back button has an accessible name", () => {
+    render(<TopNavigationBar {...makeProps({ hasHistory: true })} />);
+    expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+  });
+});

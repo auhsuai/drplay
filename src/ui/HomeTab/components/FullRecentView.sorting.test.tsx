@@ -349,3 +349,45 @@ describe("FullRecentView sort UI", () => {
     expect(menu.querySelectorAll("button").length).toBe(3);
   });
 });
+
+describe("FullRecentView search clear + empty states (P2-11-1 / P2-11-4)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderRecent(tracks: Track[]) {
+    render(
+      <FullRecentView
+        recent={tracks}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="token"
+      />,
+    );
+  }
+
+  it("clear search button has an accessible name and resets the query", async () => {
+    renderRecent([makeTrack("a", "Alpha")]);
+    const user = userEvent.setup();
+    const input = screen.getByPlaceholderText("Search...");
+    await user.type(input, "alp");
+    expect((input as HTMLInputElement).value).toBe("alp");
+
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    expect((input as HTMLInputElement).value).toBe("");
+  });
+
+  it("shows the no-results message when a search matches nothing", async () => {
+    renderRecent([makeTrack("a", "Alpha")]);
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText("Search..."), "zzz");
+
+    expect(screen.getByText("No matching songs found.")).toBeTruthy();
+    expect(screen.queryAllByTestId("song-card").length).toBe(0);
+  });
+
+  it("shows the empty-list message when there are no tracks and no search", () => {
+    renderRecent([]);
+    expect(screen.getByText("No audio files here.")).toBeTruthy();
+  });
+});

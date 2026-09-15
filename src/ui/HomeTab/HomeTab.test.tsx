@@ -1429,3 +1429,75 @@ describe("HomeTab Ctrl+F guard (browser find dialog must not open on Home)", () 
     }
   });
 });
+
+describe("HomeTab first-load failure + blocked storage (P2-11-5 / P2-11-6)", () => {
+  beforeEach(() => {
+    mocks.getRecentlyPlayed.mockReset();
+    mocks.getHeavyRotation.mockReset();
+    mocks.getRandomDiscoveries.mockReset();
+    mocks.getMostVisitedFolders.mockReset();
+    mocks.dbFilesToArray.mockReset();
+    mocks.captureError.mockReset();
+    mocks.prefetchVisibleTracks.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("a failed first recently-added load clears the skeleton instead of hanging forever", async () => {
+    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getHeavyRotation.mockResolvedValue([]);
+    mocks.getRandomDiscoveries.mockResolvedValue([]);
+    mocks.getMostVisitedFolders.mockResolvedValue([]);
+    mocks.dbFilesToArray.mockRejectedValue(new Error("network down"));
+
+    render(<HomeTab {...baseProps()} />);
+
+    await waitFor(() => {
+      expect(mocks.captureError).toHaveBeenCalledTimes(1);
+    });
+    const errArg = mocks.captureError.mock.calls[0]?.[0] as {
+      message: string;
+    };
+    expect(errArg.message).toContain("failed-to-load-recently-added");
+
+    // null is the only skeleton trigger: after the failed first load there
+    // must be no section left in its skeleton state.
+    await waitFor(() => {
+      expect(screen.queryAllByTestId("home-skeleton-section")).toHaveLength(0);
+    });
+  });
+
+  it("renders the greeting when sessionStorage access throws (blocked storage)", async () => {
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new DOMException("blocked", "SecurityError");
+      });
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("blocked", "SecurityError");
+      });
+    try {
+      mocks.getRecentlyPlayed.mockResolvedValue([]);
+      mocks.getHeavyRotation.mockResolvedValue([]);
+      mocks.getRandomDiscoveries.mockResolvedValue([]);
+      mocks.getMostVisitedFolders.mockResolvedValue([]);
+      mocks.dbFilesToArray.mockResolvedValue([]);
+
+      render(<HomeTab {...baseProps()} />);
+
+      // The lazy initializer must survive the blocked read; a stable default
+      // visit count keeps the greeting cycle working.
+      expect(
+        await screen.findByText(/Good (morning|afternoon|evening)/),
+      ).toBeTruthy();
+    } finally {
+      getItemSpy.mockRestore();
+      setItemSpy.mockRestore();
+    }
+  });
+});

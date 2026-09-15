@@ -227,6 +227,88 @@ describe("FullRecentView menu delete flow", () => {
   });
 });
 
+describe("FullRecentView accessible names (P2-11-2)", () => {
+  it("back button has an accessible name and calls onBack", () => {
+    const onBack = vi.fn();
+    render(
+      <FullRecentView
+        recent={[makeTrack("t1", "Alpha")]}
+        onBack={onBack}
+        onPlay={vi.fn()}
+        token="tok"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FullRecentView play context (P2-11-3)", () => {
+  const findCard = (title: string): HTMLElement => {
+    const card = Array.from(
+      document.querySelectorAll<HTMLElement>(".cursor-pointer"),
+    ).find((el) => el.textContent?.includes(title));
+    if (!card) throw new Error(`card not found: ${title}`);
+    return card;
+  };
+
+  it("builds the queue from the CURRENT filtered list after a search narrows it", () => {
+    const onPlay = vi.fn();
+    render(
+      <FullRecentView
+        recent={[
+          makeTrack("t1", "Alpha"),
+          makeTrack("t2", "Bravo"),
+          makeTrack("t3", "Charlie"),
+        ]}
+        onBack={vi.fn()}
+        onPlay={onPlay}
+        token="tok"
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search..." }), {
+      target: { value: "Alpha" },
+    });
+
+    fireEvent.click(findCard("Alpha"));
+
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    const [played, queue] = onPlay.mock.calls[0] as [Track, Track[]];
+    expect(played.id).toBe("t1");
+    expect(queue.map((track) => track.id)).toEqual(["t1"]);
+  });
+
+  it("builds the queue from the CURRENT filtered list after the list grows (memo churn)", () => {
+    const onPlay = vi.fn();
+    const alpha = makeTrack("t1", "Alpha");
+    const { rerender } = render(
+      <FullRecentView
+        recent={[alpha]}
+        onBack={vi.fn()}
+        onPlay={onPlay}
+        token="tok"
+      />,
+    );
+
+    rerender(
+      <FullRecentView
+        recent={[alpha, makeTrack("t2", "Bravo")]}
+        onBack={vi.fn()}
+        onPlay={onPlay}
+        token="tok"
+      />,
+    );
+
+    fireEvent.click(findCard("Alpha"));
+
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    const [, queue] = onPlay.mock.calls[0] as [Track, Track[]];
+    expect(queue.map((track) => track.id)).toEqual(["t1", "t2"]);
+  });
+});
+
 describe("FullRecentView now-playing highlight (currentTrack prop)", () => {
   afterEach(() => {
     cleanup();

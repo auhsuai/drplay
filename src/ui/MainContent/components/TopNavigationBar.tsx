@@ -161,6 +161,7 @@ export function TopNavigationBar({
           <button
             onClick={onBack}
             disabled={!hasHistory}
+            aria-label={t("common.back")}
             className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors shrink-0"
           >
             <ArrowLeft className="w-5 h-5 text-gray-700 dark:text-gray-300" />
@@ -220,6 +221,7 @@ export function TopNavigationBar({
                 onClick={() => {
                   onSearchChange("");
                 }}
+                aria-label={t("common.clear_search")}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
               >
                 <X className="w-3.5 h-3.5" />

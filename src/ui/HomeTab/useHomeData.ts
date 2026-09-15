@@ -25,6 +25,44 @@ interface GreetingsEntry {
 const greetingsData = rawGreetingsData;
 
 const HOME_TAB_MODULE = "HomeTab";
+
+// sessionStorage access is blocked (SecurityError) in some hardened/private
+// webview contexts. Raw access on the render path (the lazy initializer below)
+// or in the visit effect would crash HomeTab, so both go through these guards
+// — mirroring the safeLocalStorage* helpers in utils/storageKeys.ts (same
+// `<label>-failed:<err.name|unknown>` message contract, level warn).
+const SESSION_VISIT_KEY = "drplay_home_visit";
+
+function sessionVisitFailureMessage(label: string, err: unknown): string {
+  return `${label}-failed:${
+    err instanceof Error || err instanceof DOMException ? err.name : "unknown"
+  }`;
+}
+
+function readSessionVisitCount(): number {
+  try {
+    return parseInt(sessionStorage.getItem(SESSION_VISIT_KEY) || "0", 10);
+  } catch (err) {
+    void captureError({
+      level: "warn",
+      source: HOME_TAB_MODULE,
+      message: sessionVisitFailureMessage("session-visit-read", err),
+    });
+    return 0;
+  }
+}
+
+function writeSessionVisitCount(nextCount: number): void {
+  try {
+    sessionStorage.setItem(SESSION_VISIT_KEY, nextCount.toString());
+  } catch (err) {
+    void captureError({
+      level: "warn",
+      source: HOME_TAB_MODULE,
+      message: sessionVisitFailureMessage("session-visit-write", err),
+    });
+  }
+}
 // Trailing-edge debounce window for the delta refresh (lodash
 // `_.debounce(func, wait)` default semantics — fire once, `wait` ms after
 // the LAST call of a burst; lodash/debounce.js 4.17.21: leading=false,
@@ -79,10 +117,7 @@ export function useHomeData(token: string | null) {
   // (the compiler treats initializers as an allowed escape hatch) while still
   // running only once.
   const [randomGreeting] = useState<{ randomObj: GreetingsEntry }>(() => {
-    const visitCount = parseInt(
-      sessionStorage.getItem("drplay_home_visit") || "0",
-      10,
-    );
+    const visitCount = readSessionVisitCount();
     // Cycle: Time-specific -> General -> General -> Time-specific ...
     const isTimeSpecific = visitCount % 3 === 0;
     const hour = new Date().getHours();
@@ -125,11 +160,8 @@ export function useHomeData(token: string | null) {
     const loadGenRef = recentlyAddedLoadGenRef;
     const loadDataRef = loadDataGenRef;
     const deltaTimerRef = deltaRefreshTimerRef;
-    const visitCount = parseInt(
-      sessionStorage.getItem("drplay_home_visit") || "0",
-      10,
-    );
-    sessionStorage.setItem("drplay_home_visit", (visitCount + 1).toString());
+    const visitCount = readSessionVisitCount();
+    writeSessionVisitCount(visitCount + 1);
 
     // Reads the local IDB mirror (db.files) instead of the Drive API: the
     // mirror is maintained by fullSync/deltaSync and updated incrementally as
@@ -172,6 +204,11 @@ export function useHomeData(token: string | null) {
         })
         .catch((err: unknown) => {
           if (generation !== loadGenRef.current) return;
+          // A failed FIRST load must not leave recentlyAdded null (= skeleton)
+          // forever: fall back to [] so the section hides like a genuinely
+          // empty list. A failed refetch keeps the previous data — `prev ?? []`
+          // only applies while the state is still null.
+          setRecentlyAdded((prev) => prev ?? []);
           void captureError({
             level: "warn",
             source: HOME_TAB_MODULE,

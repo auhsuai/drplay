@@ -19,7 +19,9 @@
     "profile_alt": "Hồ sơ",
     "cover_alt": "Ảnh bìa",
     "more_actions": "Thao tác khác",
-    "close": "Đóng"
+    "close": "Đóng",
+    "clear_search": "Xóa tìm kiếm",
+    "back": "Quay lại"
   },
   "sidebar": {
     "home": "Trang chủ",

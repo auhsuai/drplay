@@ -19,7 +19,9 @@
     "profile_alt": "Profile",
     "cover_alt": "Cover",
     "more_actions": "More actions",
-    "close": "Close"
+    "close": "Close",
+    "clear_search": "Clear search",
+    "back": "Back"
   },
   "sidebar": {
     "home": "Home",
