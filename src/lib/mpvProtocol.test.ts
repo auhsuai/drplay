@@ -9,6 +9,8 @@ import {
   BUFFERING_TIMEOUT_MS,
   WATCHDOG_INTERVAL_MS,
   WATCHDOG_STALE_MS,
+  classifyEndFileError,
+  dispatchMpvEvent,
   dispatchPropertyEvent,
   resetWarnThrottleForTest,
   TimePosWatchdog,
@@ -24,6 +26,7 @@ function makeCb(): MpvEventCallbacks {
     onCacheState: vi.fn(),
     onFileLoaded: vi.fn(),
     onEndFile: vi.fn(),
+    onEngineClosed: vi.fn(),
     onMalformed: vi.fn(),
   };
 }
@@ -424,5 +427,82 @@ describe("watchdog constants", () => {
   it("keeps the locked v3 tuning", () => {
     expect(WATCHDOG_INTERVAL_MS).toBe(1000);
     expect(WATCHDOG_STALE_MS).toBe(1200);
+  });
+});
+
+describe("dispatchMpvEvent routing (R02-1 / R02-2)", () => {
+  it("end-file error carries mpv's error string to onEndFile", () => {
+    const cb = makeCb();
+    dispatchMpvEvent(
+      { event: "end-file", reason: "error", error: "Connection reset by peer" },
+      cb,
+    );
+    expect(cb.onEndFile).toHaveBeenCalledWith(
+      "error",
+      "Connection reset by peer",
+    );
+  });
+
+  it("end-file error without an error field passes null", () => {
+    const cb = makeCb();
+    dispatchMpvEvent({ event: "end-file", reason: "error" }, cb);
+    expect(cb.onEndFile).toHaveBeenCalledWith("error", null);
+  });
+
+  it("end-file eof stays a single-argument outcome", () => {
+    const cb = makeCb();
+    dispatchMpvEvent({ event: "end-file", reason: "eof" }, cb);
+    expect(cb.onEndFile).toHaveBeenCalledWith("eof");
+  });
+
+  it("ipc-closed routes the engine-closed cause to onEngineClosed", () => {
+    const cb = makeCb();
+    dispatchMpvEvent({ event: "ipc-closed", reason: "eof", error: null }, cb);
+    expect(cb.onEngineClosed).toHaveBeenCalledWith("eof");
+    expect(cb.onEndFile).not.toHaveBeenCalled();
+  });
+
+  it("ipc-closed without a reason still notifies with a cause string", () => {
+    const cb = makeCb();
+    dispatchMpvEvent({ event: "ipc-closed" }, cb);
+    expect(cb.onEngineClosed).toHaveBeenCalledWith(expect.any(String));
+  });
+});
+
+describe("classifyEndFileError (R02-1 rules)", () => {
+  it("null/empty input keeps the legacy format path (payload parity)", () => {
+    expect(classifyEndFileError(null)).toBe("format");
+    expect(classifyEndFileError(undefined)).toBe("format");
+    expect(classifyEndFileError("")).toBe("format");
+    expect(classifyEndFileError("   ")).toBe("format");
+  });
+
+  it("HTTP 4xx / forbidden / not found stay format (Drive locked/quota storm guard)", () => {
+    expect(classifyEndFileError("HTTP error 403 Forbidden")).toBe("format");
+    expect(classifyEndFileError("HTTP error 404 Not Found")).toBe("format");
+    expect(classifyEndFileError("Forbidden")).toBe("format");
+    expect(classifyEndFileError("file not found")).toBe("format");
+  });
+
+  it("transport failures classify as network (retryable, never broken)", () => {
+    for (const raw of [
+      "Connection reset by peer",
+      "Connection refused",
+      "connection timed out",
+      "timeout",
+      "network unreachable",
+      "No route to host",
+      "broken pipe",
+      "I/O error",
+    ]) {
+      expect(classifyEndFileError(raw), raw).toBe("network");
+    }
+  });
+
+  it("unknown error strings fall back to format (safe default)", () => {
+    expect(classifyEndFileError("Could not open codec.")).toBe("format");
+    expect(classifyEndFileError("Failed to recognize file format.")).toBe(
+      "format",
+    );
   });
 });

@@ -4,7 +4,8 @@
  * engine class stays in mpvAudio.ts). The string values are the Rust
  * contract fixed by Tasks 1+2 (src-tauri/src/mpv/mod.rs, stream_proxy/mod.rs):
  * commands `mpv_spawn` / `mpv_command` / `mpv_shutdown` / `stream_proxy_start`,
- * events `mpv-property` {name,data} + `mpv-event` {event,reason}.
+ * events `mpv-property` {name,data} + `mpv-event` {event,reason,error}
+ * (`error`/`file_error` from mpv; `ipc-closed` when the pipe ends).
  */
 
 import { captureError } from "../utils/errorLog";
@@ -33,6 +34,7 @@ export const MPV_PROPERTIES = {
 export const MPV_EVENTS = {
   fileLoaded: "file-loaded",
   endFile: "end-file",
+  ipcClosed: "ipc-closed",
 } as const;
 
 export const MPV_END_FILE_REASONS = {
@@ -394,6 +396,32 @@ export function toTimeRanges(ranges: MpvRange[]): TimeRanges {
   };
 }
 
+export type EndFileErrorKind = "format" | "network";
+
+/**
+ * Classify mpv's end-file error string (R02-1), explicitly documented:
+ * - null/empty → "format" (100% parity with the pre-existing behavior);
+ * - HTTP 4xx / forbidden / not found → "format" (Drive locked/quota keep the
+ *   storm-guard semantics: broken mark + capped retry loop);
+ * - transport failures (connection/reset/timeout/network/broken pipe/...) →
+ *   "network" (retryable, never marks the track broken);
+ * - anything else → "format" (safe default).
+ */
+export function classifyEndFileError(
+  raw: string | null | undefined,
+): EndFileErrorKind {
+  if (raw === null || raw === undefined || raw.trim() === "") return "format";
+  if (/(http error 4\d\d|forbidden|not found)/i.test(raw)) return "format";
+  if (
+    /(connection|refus|reset|timed? ?out|timeout|network|unreachable|no route|broken pipe|i\/o error)/i.test(
+      raw,
+    )
+  ) {
+    return "network";
+  }
+  return "format";
+}
+
 /**
  * State/effect callbacks the engine class implements for each decoded event.
  * mpvProtocol owns PARSING + dispatch decisions; the class owns state
@@ -406,7 +434,8 @@ export type MpvEventCallbacks = {
   onBuffering: (isBuffering: boolean) => void;
   onCacheState: (ranges: MpvRange[]) => void;
   onFileLoaded: () => void;
-  onEndFile: (outcome: "eof" | "error") => void;
+  onEndFile: (outcome: "eof" | "error", mpvError?: string | null) => void;
+  onEngineClosed: (cause: string) => void;
   onMalformed: (detail: string) => void;
 };
 
@@ -469,6 +498,10 @@ export function dispatchMpvEvent(
     cb.onFileLoaded();
     return;
   }
+  if (event === MPV_EVENTS.ipcClosed) {
+    cb.onEngineClosed(asString(payload["reason"]) ?? "unknown");
+    return;
+  }
   if (event !== MPV_EVENTS.endFile) return;
   const reason = asString(payload["reason"]);
   if (reason === MPV_END_FILE_REASONS.eof) {
@@ -476,6 +509,6 @@ export function dispatchMpvEvent(
     return;
   }
   if (reason === MPV_END_FILE_REASONS.error) {
-    cb.onEndFile("error");
+    cb.onEndFile("error", asString(payload["error"]));
   }
 }

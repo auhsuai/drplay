@@ -2,7 +2,8 @@
 //!
 //! Events emitted to the frontend:
 //! - `mpv-property` → `{ name: String, data: Value }` (mpv `property-change`)
-//! - `mpv-event`    → `{ event: String, reason: Option<String> }` (`end-file`, `shutdown`, ...)
+//! - `mpv-event`    → `{ event: String, reason: Option<String>, error: Option<String> }`
+//!   (`end-file`, `shutdown`, ...) plus `ipc-closed` when the pipe ends
 
 mod ipc;
 mod job;
@@ -62,8 +63,15 @@ fn event_sink(app: tauri::AppHandle) -> EventSink {
         IpcMessage::PropertyChange { name, data } => {
             let _ = app.emit("mpv-property", json!({ "name": name, "data": data }));
         }
-        IpcMessage::MpvEvent { event, reason } => {
-            let _ = app.emit("mpv-event", json!({ "event": event, "reason": reason }));
+        IpcMessage::MpvEvent { event, reason, error } => {
+            let _ =
+                app.emit("mpv-event", json!({ "event": event, "reason": reason, "error": error }));
+        }
+        IpcMessage::ConnectionClosed { cause } => {
+            let _ = app.emit(
+                "mpv-event",
+                json!({ "event": "ipc-closed", "reason": cause, "error": null }),
+            );
         }
     })
 }
@@ -95,10 +103,19 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<(), String> {
     let client = match process::connect_pipe(&pipe_name).await {
         Ok(client) => client,
         Err(connect_error) => {
+            // A dead child is the difference between "slow start" and "failed
+            // to start" — surface its exit status instead of a blind timeout.
+            let early_exit = child.try_wait().ok().flatten();
+            if let Some(status) = &early_exit {
+                log::error!("[mpv] sidecar exited early: {status}");
+            }
             if let Err(kill_error) = child.start_kill() {
                 log::error!("[mpv] failed to kill sidecar after pipe connect failure: {kill_error}");
             }
-            return Err(connect_error);
+            return Err(match &early_exit {
+                Some(status) => format!("{connect_error} (mpv exited early: {status})"),
+                None => connect_error,
+            });
         }
     };
 

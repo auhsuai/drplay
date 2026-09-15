@@ -65,8 +65,12 @@ function fireProperty(name: string, data: unknown): void {
   fireTauri("mpv-property", { name, data });
 }
 
-function fireMpvEvent(event: string, reason: string | null = null): void {
-  fireTauri("mpv-event", { event, reason });
+function fireMpvEvent(
+  event: string,
+  reason: string | null = null,
+  error: string | null = null,
+): void {
+  fireTauri("mpv-event", { event, reason, error });
 }
 
 function commandNames(): string[] {
@@ -430,6 +434,95 @@ describe("MpvAudioController — mpv-event mapping", () => {
     fireMpvEvent("playback-restart");
     expect(ended).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-2)", () => {
+  let ctrl: MpvAudioController;
+  let events: { name: string; payload: unknown }[];
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000);
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    storeMocks.setIsPlaying.mockClear();
+    vi.mocked(captureError).mockClear();
+    attachMocks();
+    ctrl = new MpvAudioController();
+    events = [];
+    for (const name of ["ended", "error", "timeupdate"] as const) {
+      ctrl.on(name, (payload) => {
+        events.push({ name, payload });
+      });
+    }
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function emitted(name: string): unknown[] {
+    return events.filter((e) => e.name === name).map((e) => e.payload);
+  }
+
+  it("end-file error with a transport cause -> network_interrupted, no auto-advance", () => {
+    fireMpvEvent("end-file", "error", "Connection reset by peer");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "network_interrupted" }),
+    ]);
+    expect(emitted("ended")).toEqual([]);
+    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
+  });
+
+  it("end-file error with a 4xx (Drive locked/quota) keeps format_error + ended (storm guard)", () => {
+    fireMpvEvent("end-file", "error", "HTTP error 403 Forbidden");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "format_error" }),
+    ]);
+    expect(emitted("ended")).toEqual([undefined]);
+  });
+
+  it("end-file error without the error field stays format_error (payload parity)", () => {
+    fireMpvEvent("end-file", "error");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "format_error" }),
+    ]);
+    expect(emitted("ended")).toEqual([undefined]);
+  });
+
+  it("ipc-closed: network_interrupted, engine reset, no ended, listeners detached", () => {
+    fireMpvEvent("ipc-closed", "eof");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "network_interrupted" }),
+    ]);
+    expect(emitted("ended")).toEqual([]);
+    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
+
+    fireProperty("time-pos", 5);
+    expect(emitted("timeupdate")).toEqual([]);
+  });
+
+  it("ipc-closed: retry via playTrack respawns mpv and reloads the track", async () => {
+    fireMpvEvent("ipc-closed", "eof");
+    tauriMocks.invoke.mockClear();
+
+    await ctrl.playTrack(trackA);
+
+    expect(commandNames()).toContain("mpv_spawn");
+    expect(mpvCommands()).toContainEqual([
+      "loadfile",
+      `${PROXY_URL_PREFIX}A`,
+      "replace",
+    ]);
   });
 });
 

@@ -113,10 +113,14 @@ mod tests {
 
     /// OS guarantee: closing the job must terminate the child even when the
     /// parent never issues an explicit kill (taskkill /F, crash, MSI restart).
+    /// The child runs far longer than the reap budget on purpose: the only way
+    /// this test can pass is the job close actually killing it (a natural exit
+    /// would time out, and the strict elapsed bound would catch a near-budget
+    /// flake).
     #[tokio::test]
     async fn job_close_terminates_child_without_explicit_kill() {
         let mut child = tokio::process::Command::new("cmd")
-            .args(["/C", "ping -n 6 127.0.0.1 >NUL"])
+            .args(["/C", "ping -n 30 127.0.0.1 >NUL"]) // ~30s natural runtime
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -125,12 +129,20 @@ mod tests {
         let job =
             JobHandle::create_with_kill_on_close().expect("job object must be created");
         job.assign(&child).expect("child must join the job");
+        let started = std::time::Instant::now();
         drop(job); // closing the last job handle must kill the child
-        let exit =
-            tokio::time::timeout(std::time::Duration::from_secs(JOB_REAP_TIMEOUT_SECS), child.wait())
-                .await
-                .expect("child must exit within the reap budget of the job closing");
-        assert!(exit.map(|status| status.code()).is_ok());
+        tokio::time::timeout(
+            std::time::Duration::from_secs(JOB_REAP_TIMEOUT_SECS),
+            child.wait(),
+        )
+        .await
+        .expect("child must exit within the reap budget of the job closing")
+        .expect("child wait must not fail");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "child must be killed promptly by the job close (took {:?})",
+            started.elapsed()
+        );
     }
 
     /// Fail-loud guarantee: assigning a child that already exited must return

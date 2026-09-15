@@ -7,6 +7,7 @@ import type { BufferedSource } from "../utils/bufferedRange";
 import type { AudioEventMap, AudioEventHandler } from "./audioNativeEvents";
 import {
   BufferingTracker,
+  classifyEndFileError,
   describeError,
   dispatchMpvEvent,
   dispatchPropertyEvent,
@@ -144,7 +145,7 @@ export class MpvAudioController {
     onFileLoaded: () => {
       this.applyPendingSeek();
     },
-    onEndFile: (outcome) => {
+    onEndFile: (outcome, mpvError) => {
       this.playbackFinished = true;
       this.interpolator.reset();
       // Why (S4): the track is terminal — no more ticks can confirm progress,
@@ -155,7 +156,26 @@ export class MpvAudioController {
         this.emit("ended", undefined);
         return;
       }
+      if (classifyEndFileError(mpvError) === "network") {
+        // Why (R02-1): a transport failure is retryable — do NOT mark the
+        // track broken and do NOT auto-advance (same surface as a failed
+        // command), unlike the terminal format_error path below.
+        this.playbackFailure("end-file-network-error", mpvError);
+        return;
+      }
       this.emitEndFileError();
+    },
+    onEngineClosed: (cause) => {
+      // Why (R02-2): mpv died without an end-file — nothing else tells the
+      // engine; reset lifecycle so the next playTrack respawns via mpv_spawn.
+      this.logError(`mpv engine closed: ${cause}`);
+      this.started = false;
+      this.detachListeners(this.unlistenFns);
+      this.unlistenFns = [];
+      this.playbackFinished = true;
+      this.watchdog.stop();
+      this.interpolator.reset();
+      this.playbackFailure("mpv-engine-closed", cause);
     },
     onMalformed: (detail) => {
       this.logWarn(detail);

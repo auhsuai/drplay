@@ -31,6 +31,12 @@ pub(crate) fn mpv_flags(pipe_name: &str) -> Vec<String> {
     vec![
         "--no-video".to_string(),
         "--no-terminal".to_string(),
+        // Never read the user's %APPDATA%\mpv\mpv.conf / watch-later state:
+        // e.g. a stray `pause=yes` would freeze every track drplay loads.
+        "--no-config".to_string(),
+        // User scripts in %APPDATA%\mpv\scripts run arbitrary code inside the
+        // engine process — the sidecar must stay a pure, isolated engine.
+        "--load-scripts=no".to_string(),
         "--idle=yes".to_string(),
         format!("--input-ipc-server={pipe_name}"),
         "--gapless-audio=yes".to_string(),
@@ -192,6 +198,8 @@ mod tests {
         let expected_static = [
             "--no-video",
             "--no-terminal",
+            "--no-config",
+            "--load-scripts=no",
             "--idle=yes",
             "--gapless-audio=yes",
             "--prefetch-playlist=no",

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::net::windows::named_pipe::NamedPipeClient;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
@@ -36,7 +36,11 @@ pub(crate) enum IpcMessage {
     /// mpv `property-change` event.
     PropertyChange { name: String, data: Value },
     /// Any other mpv event (`end-file`, `shutdown`, ...), `reason` if present.
-    MpvEvent { event: String, reason: Option<String> },
+    /// `error` carries mpv's failure string when the event has one.
+    MpvEvent { event: String, reason: Option<String>, error: Option<String> },
+    /// The pipe ended (mpv exited or the read failed). `cause` is `"eof"` or
+    /// the read error; the frontend resets its engine state on this signal.
+    ConnectionClosed { cause: String },
 }
 
 /// Callback invoked for every mpv event the reader task receives.
@@ -74,6 +78,13 @@ fn parse_line(line: &str) -> Option<Incoming> {
             _ => IpcMessage::MpvEvent {
                 event: event.to_string(),
                 reason: value.get("reason").and_then(Value::as_str).map(str::to_string),
+                // `file_error` first: mpv docs state the generic `error` field
+                // will be unset for end-file in the future.
+                error: value
+                    .get("file_error")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.get("error").and_then(Value::as_str))
+                    .map(str::to_string),
             },
         }));
     }
@@ -205,15 +216,16 @@ impl MpvIpc {
 }
 
 /// Pull bytes from the pipe forever, split them into `\n` lines and route
-/// each line through the core. Ends (clearing all pending requests) when the
-/// pipe closes or errors.
-async fn read_loop(mut reader: ReadHalf<NamedPipeClient>, core: Arc<IpcCore>) {
+/// each line through the core. Ends (notifying the sink + clearing all pending
+/// requests) when the pipe closes or errors.
+async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<IpcCore>) {
     let mut buffer: Vec<u8> = Vec::with_capacity(IPC_READ_CHUNK_SIZE);
     let mut chunk = [0u8; IPC_READ_CHUNK_SIZE];
     loop {
         match reader.read(&mut chunk).await {
             Ok(0) => {
                 log::warn!("[mpv-ipc] pipe closed by mpv");
+                (core.event_sink)(IpcMessage::ConnectionClosed { cause: "eof".to_string() });
                 core.fail_all_pending();
                 return;
             }
@@ -227,6 +239,9 @@ async fn read_loop(mut reader: ReadHalf<NamedPipeClient>, core: Arc<IpcCore>) {
             }
             Err(read_error) => {
                 log::error!("[mpv-ipc] pipe read failed: {read_error}");
+                (core.event_sink)(IpcMessage::ConnectionClosed {
+                    cause: format!("read error: {read_error}"),
+                });
                 core.fail_all_pending();
                 return;
             }
@@ -308,7 +323,78 @@ mod tests {
             [IpcMessage::MpvEvent {
                 event: "end-file".to_string(),
                 reason: Some("eof".to_string()),
+                error: None,
             }]
+        );
+    }
+
+    #[test]
+    fn end_file_event_prefers_file_error_over_error() {
+        let (core, collected) = core_with_collector();
+        core.dispatch(
+            r#"{"event":"end-file","reason":"error","error":"generic failure","file_error":"connection timed out"}"#,
+        );
+        let collected = collected.lock().unwrap();
+        assert_eq!(
+            collected.as_slice(),
+            [IpcMessage::MpvEvent {
+                event: "end-file".to_string(),
+                reason: Some("error".to_string()),
+                error: Some("connection timed out".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn end_file_event_falls_back_to_error_field() {
+        let (core, collected) = core_with_collector();
+        core.dispatch(r#"{"event":"end-file","reason":"error","error":"Connection reset by peer"}"#);
+        let collected = collected.lock().unwrap();
+        assert_eq!(
+            collected.as_slice(),
+            [IpcMessage::MpvEvent {
+                event: "end-file".to_string(),
+                reason: Some("error".to_string()),
+                error: Some("Connection reset by peer".to_string()),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn reader_eof_notifies_sink_that_the_connection_closed() {
+        let (core, collected) = core_with_collector();
+        let empty: &[u8] = &[];
+        read_loop(empty, Arc::new(core)).await;
+        let collected = collected.lock().unwrap();
+        assert_eq!(
+            collected.as_slice(),
+            [IpcMessage::ConnectionClosed { cause: "eof".to_string() }]
+        );
+    }
+
+    struct FailingReader;
+
+    impl tokio::io::AsyncRead for FailingReader {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+            _buffer: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "pipe gone",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn reader_error_notifies_sink_with_the_read_error_as_cause() {
+        let (core, collected) = core_with_collector();
+        read_loop(FailingReader, Arc::new(core)).await;
+        let collected = collected.lock().unwrap();
+        assert_eq!(
+            collected.as_slice(),
+            [IpcMessage::ConnectionClosed { cause: "read error: pipe gone".to_string() }]
         );
     }
 
