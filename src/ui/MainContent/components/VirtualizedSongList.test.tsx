@@ -306,3 +306,54 @@ describe("VirtualizedSongList grid semantics (P2-03-2)", () => {
     );
   });
 });
+
+describe("VirtualizedSongList focus ring theo modality (Slice B)", () => {
+  it("B1: focus nguồn chuột (pointerdown trên grid) → KHÔNG ring, active vẫn được set", () => {
+    renderList();
+
+    const grid = screen.getByRole("grid");
+    fireEvent.pointerDown(grid);
+    fireEvent.focus(grid);
+
+    expect(grid.getAttribute("aria-activedescendant")).toBe("song-row-0");
+    expect(rowAt(0).className).not.toContain("ring-2");
+  });
+
+  it("B2: focus nguồn bàn phím (không pointerdown) → ring trên active row", () => {
+    renderList();
+
+    fireEvent.focus(screen.getByRole("grid"));
+
+    expect(rowAt(0).className).toContain("ring-2");
+  });
+
+  it("B3: blur → ring biến mất", () => {
+    renderList();
+
+    const grid = screen.getByRole("grid");
+    fireEvent.focus(grid);
+    expect(rowAt(0).className).toContain("ring-2");
+
+    fireEvent.blur(grid);
+    expect(rowAt(0).className).not.toContain("ring-2");
+  });
+
+  it("B4: sau pointer interaction, focus bàn phím kế tiếp vẫn ring (không stale flag)", async () => {
+    renderList();
+
+    const grid = screen.getByRole("grid");
+    fireEvent.pointerDown(grid);
+    fireEvent.focus(grid);
+    expect(rowAt(0).className).not.toContain("ring-2");
+
+    fireEvent.blur(grid);
+    // The pointer flag only lives for the pointerdown macrotask; flush it so
+    // the next focus is a clean keyboard focus (the stale-flag regression).
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
+
+    fireEvent.focus(grid);
+    expect(rowAt(0).className).toContain("ring-2");
+  });
+});

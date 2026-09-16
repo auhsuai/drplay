@@ -89,6 +89,20 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   const [activeIndex, setActiveIndex] = React.useState(-1);
   const [containerFocused, setContainerFocused] = React.useState(false);
 
+  // The ring is the keyboard-navigation indicator only (App.css removes the
+  // native outline). A click on the non-focusable padding gap between rows
+  // focuses this container as the nearest focusable ancestor — no keyboard
+  // involved. The flag covers exactly the focus event the browser fires
+  // synchronously during the mousedown task; the timeout drops it before any
+  // later focus, so a subsequent keyboard focus still rings (no stale flag).
+  const pointerFocusRef = React.useRef(false);
+  const markPointerFocus = () => {
+    pointerFocusRef.current = true;
+    window.setTimeout(() => {
+      pointerFocusRef.current = false;
+    }, 0);
+  };
+
   const playingIndex = isPlaying
     ? items.findIndex((item) => item.trackInfo?.id === isPlaying)
     : -1;
@@ -225,9 +239,10 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
         effectiveActiveIndex >= 0 ? rowId(effectiveActiveIndex) : undefined
       }
       onKeyDown={onListKeyDown}
+      onPointerDownCapture={markPointerFocus}
       onFocus={(e) => {
         if (e.target !== e.currentTarget) return;
-        setContainerFocused(true);
+        if (!pointerFocusRef.current) setContainerFocused(true);
         // First focus lands on the playing row (or the top); focus returning
         // mid-navigation keeps the existing active row.
         setActiveIndex((prev) =>

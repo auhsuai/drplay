@@ -54,6 +54,20 @@ export function QueueList({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [containerFocused, setContainerFocused] = useState(false);
 
+  // The ring is the keyboard-navigation indicator only (App.css removes the
+  // native outline). A click on the non-focusable padding gap between rows
+  // focuses this container as the nearest focusable ancestor — no keyboard
+  // involved. The flag covers exactly the focus event the browser fires
+  // synchronously during the mousedown task; the timeout drops it before any
+  // later focus, so a subsequent keyboard focus still rings (no stale flag).
+  const pointerFocusRef = useRef(false);
+  const markPointerFocus = () => {
+    pointerFocusRef.current = true;
+    window.setTimeout(() => {
+      pointerFocusRef.current = false;
+    }, 0);
+  };
+
   // eslint-disable-next-line react-hooks/incompatible-library -- useVirtualizer is interior-mutable; React Compiler intentionally skips memoizing this component, so no stale cache can occur (TanStack/virtual#736).
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -163,9 +177,10 @@ export function QueueList({
         effectiveActiveIndex >= 0 ? optionId(effectiveActiveIndex) : undefined
       }
       onKeyDown={onListKeyDown}
+      onPointerDownCapture={markPointerFocus}
       onFocus={(e) => {
         if (e.target !== e.currentTarget) return;
-        setContainerFocused(true);
+        if (!pointerFocusRef.current) setContainerFocused(true);
         // First focus lands on the playing row (or the top); focus returning
         // mid-navigation keeps the existing active option.
         setActiveIndex((prev) =>
