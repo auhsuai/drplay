@@ -270,8 +270,8 @@ describe("PlayerBar buffer bar", () => {
     // bare rail); the right end keeps only a small 2px corner (rounded-r-sm)
     // — a big round "dot" on a mid-track buffer end would float on the rail
     // instead of reading as a continuous buffer run. When the range starts at
-    // 0 the container's overflow-hidden rounded-full clip rounds the flat
-    // left edge to match the rail.
+    // 0 the flat left edge sits flush with the flat edge-to-edge rail of the
+    // top variant (slice C: the container's clipper is square, no rounding).
     expect(seg.className).toContain("rounded-r-sm");
     expect(seg.className).not.toContain("rounded-l-full");
     expect(seg.className).not.toContain("rounded-full");
@@ -1643,7 +1643,7 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     expect(preview.className).not.toContain("rounded-full");
   });
 
-  it("BUG regression: buffer preview sits inside an overflow-hidden rounded-full clip container (no square left corner on the rounded rail)", () => {
+  it("BUG regression: buffer preview sits inside an overflow-hidden clip container (square clip — flat top rail)", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 10, duration: 100 });
@@ -1653,14 +1653,14 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     hoverAt(bar, 150); // 75% of the bar
 
     const preview = screen.getByTestId("buffer-preview");
-    // The preview's flat head is only safe inside a rounded-full
-    // overflow-hidden container (same clip pattern as the segments inside
-    // buffer-fill) — otherwise the edge renders as a sharp square corner on
-    // the rounded rail. The clip must NOT wrap the thumb: the thumb pokes
-    // out of the track (translate-x-1/2) and would be cut by the clip.
+    // The clip still cuts the preview to the rail bounds, but slice C made the
+    // top rail SQUARE (edge-flush with the bar/window): a rounded-full clip
+    // here would re-round the rail's left end. The clip must NOT wrap the
+    // thumb: the thumb pokes out of the track (translate-x-1/2) and would be
+    // cut by the clip.
     const clip = preview.parentElement as HTMLElement;
     expect(clip.className).toContain("overflow-hidden");
-    expect(clip.className).toContain("rounded-full");
+    expect(clip.className).not.toContain("rounded-full");
     expect(clip.contains(screen.getByTestId("seek-thumb"))).toBe(false);
   });
 
@@ -1722,7 +1722,7 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
     vi.restoreAllMocks();
   });
 
-  it("BUG regression: fill is fully rounded (rounded-full) at mid-track widths", () => {
+  it("BUG regression: fill is square (no rounded-full) at mid-track widths on the flat top rail", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
@@ -1730,15 +1730,16 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
 
     const fill = screen.getByTestId("progress-fill");
     expect(fill.style.width).toBe("50%");
-    // Original behavior restored: the fill keeps a full round cap on BOTH
-    // ends at every width — no small 2px right corner and no conditional
-    // toggle when the fill reaches the rail end.
-    expect(fill.className).toContain("rounded-full");
+    // Slice C: the top rail is edge-flush with the bar/window, so the fill
+    // (and its clipper) must stay square at every width — a round cap would
+    // float inside the flat bar. No small 2px right corner and no conditional
+    // toggle when the fill reaches the rail end either.
+    expect(fill.className).not.toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
   });
 
-  it("BUG regression: fill stays fully rounded (rounded-full) at the rail end (100%)", () => {
+  it("BUG regression: fill stays square at the rail end (100%) on the flat top rail", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 100, duration: 100 });
@@ -1746,12 +1747,12 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
 
     const fill = screen.getByTestId("progress-fill");
     expect(fill.style.width).toBe("100%");
-    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
   });
 
-  it("BUG regression: dragging the fill keeps it fully rounded (rounded-full) (drag path)", () => {
+  it("BUG regression: dragging the fill keeps it square (no rounded-full) (drag path)", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
@@ -1761,7 +1762,7 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
     act(() => {
       fireEvent.pointerDown(bar, { clientX: BAR_WIDTH, pointerId: 1 });
     });
-    expect(screen.getByTestId("progress-fill").className).toContain(
+    expect(screen.getByTestId("progress-fill").className).not.toContain(
       "rounded-full",
     );
     expect(screen.getByTestId("progress-fill").className).not.toContain(
@@ -1774,13 +1775,13 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
   });
 
-  it("BUG regression: restored session near 100% keeps the fill fully rounded (restore path)", () => {
+  it("BUG regression: restored session near 100% keeps the fill square (restore path)", () => {
     renderPlayer({
       currentTrack: makeTrack({ restoreTime: 99.95, restoreDuration: 100 }),
     });
 
     const fill = screen.getByTestId("progress-fill");
-    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
   });

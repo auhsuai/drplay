@@ -1549,3 +1549,66 @@ describe("SeekBar thumb clamp inside the edge-to-edge rail (slice A2)", () => {
     expect(screen.getByTestId("seek-thumb").style.left).toBe("50%");
   });
 });
+
+describe('SeekBar flat corners in variant "top" (slice C, square edge-flush rail)', () => {
+  function renderTopWithHover() {
+    renderSeekBar({ variant: "top" });
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    act(() => {
+      fireEvent.pointerEnter(rail, { pointerId: 1 });
+    });
+    const fill = screen.getByTestId("progress-fill");
+    return {
+      rail,
+      bufferClip: screen.getByTestId("buffer-fill"),
+      fill,
+      fillClip: fill.parentElement as HTMLElement,
+      previewClip: screen.getByTestId("buffer-preview")
+        .parentElement as HTMLElement,
+    };
+  }
+
+  it("top variant: rail, buffer clip, fill and both clippers are square (no rounded-full)", () => {
+    const { rail, bufferClip, fill, fillClip, previewClip } =
+      renderTopWithHover();
+
+    // The rail is flush with the flat bar/window edges, so a rounded contour
+    // on any layer would leave a curved cap floating inside the flat bar.
+    for (const el of [rail, bufferClip, fill, fillClip, previewClip]) {
+      expect(el.className).not.toContain("rounded-full");
+    }
+    // The clips must still cut their children to the rail bounds.
+    expect(fillClip.className).toContain("overflow-hidden");
+    expect(previewClip.className).toContain("overflow-hidden");
+  });
+
+  it("default variant keeps rounded-full on rail, clips and fill (pinned old behavior)", () => {
+    renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    act(() => {
+      fireEvent.pointerEnter(rail, { pointerId: 1 });
+    });
+
+    expect(rail.className).toContain("rounded-full");
+    expect(screen.getByTestId("buffer-fill").className).toContain(
+      "rounded-full",
+    );
+    expect(screen.getByTestId("progress-fill").className).toContain(
+      "rounded-full",
+    );
+    expect(
+      (screen.getByTestId("progress-fill").parentElement as HTMLElement)
+        .className,
+    ).toContain("rounded-full");
+    expect(
+      (screen.getByTestId("buffer-preview").parentElement as HTMLElement)
+        .className,
+    ).toContain("rounded-full");
+  });
+});

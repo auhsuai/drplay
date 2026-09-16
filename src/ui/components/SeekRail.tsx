@@ -51,6 +51,12 @@ export function SeekRail({
         }`
       : "h-1.5 before:-inset-y-[9px]";
 
+  // Slice C: the "top" rail is edge-to-edge and flush with the flat bar/window
+  // edges, so its contour must be square — a rounded cap on the rail, the
+  // fill or either clipper would float visibly inside the flat bar. The
+  // default (NowPlaying) rail keeps its pill look (rounded-full everywhere).
+  const corner = variant === "top" ? "" : " rounded-full";
+
   return (
     <div
       ref={progressBarRef}
@@ -60,7 +66,7 @@ export function SeekRail({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className={`flex-1 bg-gray-300 dark:bg-[#2A2A2A] rounded-full group relative flex items-center before:absolute before:inset-x-0 before:content-[''] ${
+      className={`flex-1 bg-gray-300 dark:bg-[#2A2A2A]${corner} group relative flex items-center before:absolute before:inset-x-0 before:content-[''] ${
         seekable ? "cursor-pointer" : "cursor-default"
       } ${variantClasses}`}
       onPointerDown={onPointerDown}
@@ -71,16 +77,19 @@ export function SeekRail({
       <div
         ref={bufferFillRef}
         data-testid="buffer-fill"
-        className="absolute inset-0 overflow-hidden rounded-full pointer-events-none"
+        className={`absolute inset-0 overflow-hidden${corner} pointer-events-none`}
       ></div>
       {isHovering && (
         // Clip wrapper for the hover preview — mirrors buffer-fill's
-        // `overflow-hidden rounded-full` so the preview's flat head is rounded
-        // to the rail when its negative-head pad clamps to 0 (otherwise the
-        // head renders as a square corner on the rounded track). The wrapper
-        // is a SIBLING of progress-fill on purpose: clipping the track itself
-        // would cut the thumb's deliberate translate-x-1/2 overhang.
-        <div className="absolute inset-0 overflow-hidden rounded-full pointer-events-none">
+        // overflow-hidden clipper (rounded-full only on the default rail) so
+        // the preview's flat head follows the rail contour when its
+        // negative-head pad clamps to 0. On the square top rail the flat head
+        // is already the target shape. The wrapper is a SIBLING of
+        // progress-fill on purpose: clipping the track itself would cut the
+        // thumb's deliberate translate-x-1/2 overhang.
+        <div
+          className={`absolute inset-0 overflow-hidden${corner} pointer-events-none`}
+        >
           <div
             ref={bufferPreviewRef}
             data-testid="buffer-preview"
@@ -89,21 +98,24 @@ export function SeekRail({
           ></div>
         </div>
       )}
-      {/* The fill sits inside an overflow-hidden rounded-full clipper: the
-          clipper cuts the fill to the track's rounded contour at ANY width,
-          so the fill keeps its true percent width with no min-width clamp
-          (the old 6px clamp jumped the fill 0→6px the moment progress > 0,
-          reading as a notch while seeking).
+      {/* The fill sits inside an overflow-hidden clipper (rounded-full only on
+          the default rail): the clipper cuts the fill to the track's contour
+          at ANY width, so the fill keeps its true percent width with no
+          min-width clamp (the old 6px clamp jumped the fill 0→6px the moment
+          progress > 0, reading as a notch while seeking). On the square top
+          rail the fill edge stays a plain straight cut.
           https://iifx.dev/en/articles/460222310 (rounded CSS progress bar —
           track overflow-hidden clips the fill to the rounded contour)
           https://stackoverflow.com/questions/77801099 (rounded corner
           overlap — radius scaling breaks on narrow children, fix via
           clipping the parent). */}
-      <div className="absolute inset-0 overflow-hidden rounded-full pointer-events-none">
+      <div
+        className={`absolute inset-0 overflow-hidden${corner} pointer-events-none`}
+      >
         <div
           ref={progressFillRef}
           data-testid="progress-fill"
-          className="absolute left-0 h-full bg-brand-primary rounded-full transform-gpu will-change-[width]"
+          className={`absolute left-0 h-full bg-brand-primary${corner} transform-gpu will-change-[width]`}
         ></div>
       </div>
       {/* Rail-anchored thumb (NOT inside the clipper): positioned from the
