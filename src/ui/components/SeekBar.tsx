@@ -21,6 +21,11 @@ export interface SeekBarProps {
    *  keeps them (default true); the NowPlaying instance passes false so two
    *  mounted SeekBars never double the seek step. */
   keyboardSeek?: boolean;
+  /** "top" pins the bar to the nearest positioned ancestor's top edge
+   *  (PlayerBar root is `relative`) and hides both clocks — the hover
+   *  tooltip is the timestamp read-out. Default keeps the in-flow layout
+   *  with both clocks visible (NowPlaying). */
+  variant?: "default" | "top";
 }
 
 export function SeekBar({
@@ -28,6 +33,7 @@ export function SeekBar({
   audio,
   active = true,
   keyboardSeek = true,
+  variant = "default",
 }: SeekBarProps) {
   // Refs for high-performance DOM updates (owned locally: seek drag / restore
   // session touch the DOM per event, never through React state).
@@ -272,8 +278,12 @@ export function SeekBar({
   });
 
   return (
-    <div className="w-full flex items-center gap-3">
-      <SeekClock timeTextRef={currentTimeTextRef} />
+    <div
+      className={`w-full flex items-center gap-3${
+        variant === "top" ? " absolute inset-x-0 top-0" : ""
+      }`}
+    >
+      <SeekClock timeTextRef={currentTimeTextRef} variant={variant} />
       <SeekRail
         progressBarRef={progressBarRef}
         bufferFillRef={bufferFillRef}
@@ -288,8 +298,13 @@ export function SeekBar({
         onPointerEnter={handlePointerEnter}
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}
+        variant={variant}
       />
-      <span className="text-xs text-gray-500 min-w-[52px] tabular-nums">
+      <span
+        className={`text-xs text-gray-500 min-w-[52px] tabular-nums${
+          variant === "top" ? " hidden" : ""
+        }`}
+      >
         {formatTime(duration)}
       </span>
     </div>

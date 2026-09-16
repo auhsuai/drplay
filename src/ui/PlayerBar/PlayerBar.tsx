@@ -195,7 +195,7 @@ function PlayerBarImpl({
           onNextTrack={handleManualNext}
           onTogglePlayMode={onTogglePlayMode}
         />
-        <SeekBar currentTrack={currentTrack} audio={audio} />
+        <SeekBar currentTrack={currentTrack} audio={audio} variant="top" />
       </div>
 
       {/* Right: Volume Controls (queue button leads the volume icon) */}

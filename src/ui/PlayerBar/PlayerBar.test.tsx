@@ -2345,3 +2345,32 @@ describe("TransportControls accessible names (P2-01-7 + P2-12-1 parity)", () => 
     expect(screen.getByRole("button", { name: en.player.pause })).toBeTruthy();
   });
 });
+
+describe("PlayerBar seek rail is the top variant (edge-to-edge at the bar's top edge)", () => {
+  it("T7: renders an absolute full-width root, a downward-only hit area and hidden clocks", () => {
+    renderPlayer();
+
+    const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
+    const root = rail.parentElement as HTMLElement;
+    const railClasses = rail.className.split(" ");
+    const rootClasses = root.className.split(" ");
+
+    expect(rootClasses).toContain("absolute");
+    expect(rootClasses).toContain("inset-x-0");
+    expect(rootClasses).toContain("top-0");
+
+    expect(railClasses).toContain("h-1");
+    expect(railClasses).toContain("hover:h-1.5");
+    expect(railClasses).toContain("transition-[height]");
+    expect(railClasses).toContain("before:top-0");
+    expect(railClasses).toContain("before:h-3");
+    expect(railClasses).not.toContain("-inset-y-[9px]");
+
+    const startClock = rail.previousElementSibling as HTMLElement;
+    const endClock = rail.nextElementSibling as HTMLElement;
+    expect(startClock.tagName).toBe("SPAN");
+    expect(endClock.tagName).toBe("SPAN");
+    expect(startClock.className.split(" ")).toContain("hidden");
+    expect(endClock.className.split(" ")).toContain("hidden");
+  });
+});

@@ -15,6 +15,10 @@ export interface SeekRailProps {
   onPointerEnter: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerLeave: () => void;
+  /** "top" (PlayerBar) renders a thinner line whose hit area grows only
+   *  DOWNWARD — the default 9px overhang would steal clicks from the content
+   *  above the bar. */
+  variant?: "default" | "top";
 }
 
 export function SeekRail({
@@ -31,8 +35,14 @@ export function SeekRail({
   onPointerEnter,
   onPointerMove,
   onPointerLeave,
+  variant = "default",
 }: SeekRailProps) {
   const { t } = useTranslation();
+
+  const variantClasses =
+    variant === "top"
+      ? "h-1 hover:h-1.5 transition-[height] before:top-0 before:h-3"
+      : "h-1.5 before:-inset-y-[9px]";
 
   return (
     <div
@@ -43,7 +53,7 @@ export function SeekRail({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className="flex-1 h-1.5 bg-gray-300 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center before:absolute before:inset-x-0 before:-inset-y-[9px] before:content-['']"
+      className={`flex-1 bg-gray-300 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center before:absolute before:inset-x-0 before:content-[''] ${variantClasses}`}
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerMove={onPointerMove}

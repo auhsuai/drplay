@@ -98,6 +98,7 @@ interface RenderSeekBarOverrides {
   audio?: AudioController;
   active?: boolean;
   keyboardSeek?: boolean;
+  variant?: "default" | "top";
 }
 
 function renderSeekBar(overrides: RenderSeekBarOverrides = {}) {
@@ -1321,5 +1322,103 @@ describe("BUG regression: fill survives currentTrack reference change while play
     );
 
     expect(screen.getByTestId("progress-fill").style.width).toBe("50%");
+  });
+});
+
+describe('SeekBar variant "top" (PlayerBar edge-to-edge rail)', () => {
+  it("T1: hides both clocks but keeps them rendered (DOM-direct time writes stay valid)", () => {
+    const { container } = renderSeekBar({ variant: "top" });
+    const rail = screen.getByRole("slider");
+    const startClock = rail.previousElementSibling as HTMLElement;
+    const endClock = rail.nextElementSibling as HTMLElement;
+
+    expect(startClock.tagName).toBe("SPAN");
+    expect(endClock.tagName).toBe("SPAN");
+    // Both clocks stay mounted (3 children) — only their visibility is cut.
+    expect(container.firstElementChild?.children).toHaveLength(3);
+    expect(startClock.className.split(" ")).toContain("hidden");
+    expect(endClock.className.split(" ")).toContain("hidden");
+  });
+
+  it("T1b: default variant keeps both clocks visible (no hidden class)", () => {
+    renderSeekBar();
+    const rail = screen.getByRole("slider");
+    expect(
+      (rail.previousElementSibling as HTMLElement).className,
+    ).not.toContain("hidden");
+    expect((rail.nextElementSibling as HTMLElement).className).not.toContain(
+      "hidden",
+    );
+  });
+
+  it("T2: anchors the root to the bar's top edge (absolute inset-x-0 top-0)", () => {
+    const { container } = renderSeekBar({ variant: "top" });
+    const root = container.firstElementChild as HTMLElement;
+    const classes = root.className.split(" ");
+
+    expect(classes).toContain("absolute");
+    expect(classes).toContain("inset-x-0");
+    expect(classes).toContain("top-0");
+    expect(classes).toContain("flex");
+  });
+
+  it("T3: rail is a thin top line whose hit area only extends downward (no upward click theft)", () => {
+    renderSeekBar({ variant: "top" });
+    const rail = screen.getByRole("slider");
+    const classes = rail.className.split(" ");
+
+    expect(classes).toContain("h-1");
+    expect(classes).toContain("hover:h-1.5");
+    expect(classes).toContain("transition-[height]");
+    expect(classes).toContain("before:top-0");
+    expect(classes).toContain("before:h-3");
+    expect(classes).not.toContain("h-1.5");
+    expect(classes).not.toContain("-inset-y-[9px]");
+  });
+
+  it("T4: hover still shows the timestamp tooltip at the pointer position", () => {
+    renderSeekBar({ variant: "top" });
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerEnter(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerMove(bar, { clientX: 100, pointerId: 1 });
+    });
+
+    const tooltip = screen.getByTestId("seek-tooltip");
+    expect(tooltip.textContent).toBe("2:00");
+    expect(tooltip.style.left).toBe("100px");
+  });
+
+  it("T5: drag-to-seek on the top rail commits the same seek", () => {
+    renderSeekBar({ variant: "top" });
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const bar = mockBarRect();
+
+    act(() => {
+      fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerUp(window, { clientX: 100, pointerId: 1 });
+    });
+
+    expect(fakeController.seek).toHaveBeenCalledTimes(1);
+    expect(fakeController.seek).toHaveBeenCalledWith(120);
+  });
+
+  it("T6: the buffer clipper and thumb stay direct children of the rail (structure contract)", () => {
+    renderSeekBar({ variant: "top" });
+    const rail = screen.getByRole("slider");
+    const bufferFill = screen.getByTestId("buffer-fill");
+
+    expect(bufferFill.parentElement).toBe(rail);
+    expect(screen.getByTestId("seek-thumb").parentElement).toBe(rail);
   });
 });
