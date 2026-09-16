@@ -13,8 +13,14 @@ import {
   dispatchMpvEvent,
   dispatchPropertyEvent,
   resetWarnThrottleForTest,
+  StallReconciler,
+  STALL_POLL_INTERVAL_MS,
+  STALL_RECONCILE_MS,
+  STALL_RECOVER_MS,
+  STALL_RECOVERY_MAX_ATTEMPTS,
   TimePosWatchdog,
   type MpvEventCallbacks,
+  type StallTruth,
 } from "./mpvProtocol";
 
 function makeCb(): MpvEventCallbacks {
@@ -212,6 +218,296 @@ describe("TimePosWatchdog (mpv issue #13695 backfill)", () => {
     expect(getTimePos).toHaveBeenCalledTimes(1);
 
     wd.stop();
+  });
+});
+
+describe("StallReconciler (pinned-playhead self-heal)", () => {
+  let active: boolean;
+  let busy: boolean;
+  let truth: StallTruth;
+  let queryError: Error | null;
+  let queryTruth: Mock<() => Promise<StallTruth>>;
+  let onReconcileBuffering: Mock<(buffering: boolean) => void>;
+  let onStallRecover: Mock<(pinnedTime: number, attempt: number) => void>;
+  let onStallExhausted: Mock<() => void>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000); // Date.now() off the 0 sentinel
+    resetWarnThrottleForTest();
+    vi.mocked(captureError).mockClear();
+    active = true;
+    busy = false;
+    truth = { timePos: 42, buffering: true, cacheEnd: 100 };
+    queryError = null;
+    queryTruth = vi.fn(() =>
+      queryError === null ? Promise.resolve(truth) : Promise.reject(queryError),
+    );
+    onReconcileBuffering = vi.fn();
+    onStallRecover = vi.fn();
+    onStallExhausted = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function makeReconciler(): StallReconciler {
+    return new StallReconciler({
+      isActive: () => active,
+      isBusy: () => busy,
+      queryTruth: () => queryTruth(),
+      onReconcileBuffering: (buffering) => {
+        onReconcileBuffering(buffering);
+      },
+      onStallRecover: (pinnedTime, attempt) => {
+        onStallRecover(pinnedTime, attempt);
+      },
+      onStallExhausted: () => {
+        onStallExhausted();
+      },
+    });
+  }
+
+  it("pinned playhead: recover #1 at 75s, #2 at +75s, exhausted once at +75s, then silent", async () => {
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(STALL_RECOVER_MS);
+    expect(onStallRecover).toHaveBeenCalledTimes(1);
+    expect(onStallRecover).toHaveBeenLastCalledWith(42, 1);
+    expect(onStallExhausted).not.toHaveBeenCalled();
+    expect(onReconcileBuffering).not.toHaveBeenCalled(); // truth says buffering
+
+    await vi.advanceTimersByTimeAsync(STALL_RECOVER_MS);
+    expect(onStallRecover).toHaveBeenCalledTimes(2);
+    expect(onStallRecover).toHaveBeenLastCalledWith(42, 2);
+    expect(onStallExhausted).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(STALL_RECOVER_MS);
+    expect(onStallExhausted).toHaveBeenCalledTimes(1);
+    expect(onStallRecover).toHaveBeenCalledTimes(2);
+
+    const rounds = queryTruth.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10 * STALL_RECOVER_MS);
+    expect(queryTruth).toHaveBeenCalledTimes(rounds); // poller stopped for good
+    expect(onStallExhausted).toHaveBeenCalledTimes(1);
+    expect(onStallRecover).toHaveBeenCalledTimes(2);
+  });
+
+  it("progressing time-pos: never recovers, even after 10 minutes of polling", async () => {
+    let timePos = 42;
+    queryTruth.mockImplementation(() => {
+      timePos += 0.4; // every poll lands on a moved playhead
+      return Promise.resolve({ timePos, buffering: false, cacheEnd: 100 });
+    });
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(onStallRecover).not.toHaveBeenCalled();
+    expect(onStallExhausted).not.toHaveBeenCalled();
+    expect(onReconcileBuffering).toHaveBeenCalled(); // spinner reconcile still runs
+    sc.stop();
+  });
+
+  it("cacheEnd growing while time-pos is pinned: never recovers", async () => {
+    let cacheEnd = 100;
+    queryTruth.mockImplementation(() => {
+      cacheEnd += 10; // download still progressing — not a dead stall
+      return Promise.resolve({ timePos: 42, buffering: true, cacheEnd });
+    });
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(onStallRecover).not.toHaveBeenCalled();
+    expect(onStallExhausted).not.toHaveBeenCalled();
+    sc.stop();
+  });
+
+  it("truth buffering=false reconciles the spinner every round (settle signal was lost)", async () => {
+    truth = { timePos: 42, buffering: false, cacheEnd: 100 };
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(
+      STALL_RECONCILE_MS + STALL_POLL_INTERVAL_MS,
+    );
+
+    // Rounds that passed the reconcile gate: t=10s and t=15s.
+    expect(onReconcileBuffering).toHaveBeenCalledTimes(2);
+    expect(onReconcileBuffering).toHaveBeenNthCalledWith(1, false);
+    expect(onReconcileBuffering).toHaveBeenNthCalledWith(2, false);
+    sc.stop();
+  });
+
+  it("truth buffering=true never reconciles the spinner", async () => {
+    truth = { timePos: 42, buffering: true, cacheEnd: 100 };
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(
+      STALL_RECONCILE_MS + 2 * STALL_POLL_INTERVAL_MS,
+    );
+
+    expect(onReconcileBuffering).not.toHaveBeenCalled();
+    sc.stop();
+  });
+
+  it("isBusy (seek-ack) skips rounds: no query, no recovery while seeking", async () => {
+    busy = true;
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(queryTruth).not.toHaveBeenCalled();
+    expect(onStallRecover).not.toHaveBeenCalled();
+    expect(onStallExhausted).not.toHaveBeenCalled();
+    sc.stop();
+  });
+
+  it("isActive=false: start() arms nothing; deactivating mid-run silences the rounds", async () => {
+    active = false;
+    const sc = makeReconciler();
+    sc.start();
+    expect(vi.getTimerCount()).toBe(0);
+
+    active = true;
+    sc.start();
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(STALL_RECONCILE_MS);
+    expect(queryTruth).toHaveBeenCalledTimes(1);
+
+    active = false; // paused/ended mid-watch
+    const rounds = queryTruth.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(queryTruth).toHaveBeenCalledTimes(rounds);
+    sc.stop();
+  });
+
+  it("stop(): no further query or callback (idempotent)", async () => {
+    const sc = makeReconciler();
+    sc.start();
+    await vi.advanceTimersByTimeAsync(STALL_RECONCILE_MS);
+    expect(queryTruth).toHaveBeenCalledTimes(1);
+
+    sc.stop();
+    sc.stop();
+    const rounds = queryTruth.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(queryTruth).toHaveBeenCalledTimes(rounds);
+    expect(onStallRecover).not.toHaveBeenCalled();
+    expect(onStallExhausted).not.toHaveBeenCalled();
+  });
+
+  it("stop() during an in-flight query drops the late truth (generation guard)", async () => {
+    let resolveQuery: (value: StallTruth) => void = () => {};
+    queryTruth.mockReturnValue(
+      new Promise<StallTruth>((resolve) => {
+        resolveQuery = resolve;
+      }),
+    );
+    const sc = makeReconciler();
+    sc.start();
+    await vi.advanceTimersByTimeAsync(STALL_RECONCILE_MS);
+    expect(queryTruth).toHaveBeenCalledTimes(1); // query awaiting the IPC reply
+
+    sc.stop();
+    resolveQuery({ timePos: 42, buffering: false, cacheEnd: 100 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onReconcileBuffering).not.toHaveBeenCalled();
+    expect(onStallRecover).not.toHaveBeenCalled();
+  });
+
+  it("reset(): re-anchors the window and clears the attempt budget (new track)", async () => {
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(
+      STALL_RECOVER_MS - STALL_POLL_INTERVAL_MS,
+    );
+    expect(onStallRecover).not.toHaveBeenCalled(); // 70s: window not spent
+
+    sc.reset(); // beginTrack: fresh track starts a fresh window
+    await vi.advanceTimersByTimeAsync(
+      STALL_RECOVER_MS - STALL_POLL_INTERVAL_MS,
+    );
+    expect(onStallRecover).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(STALL_POLL_INTERVAL_MS);
+    expect(onStallRecover).toHaveBeenCalledTimes(1);
+    expect(onStallRecover).toHaveBeenLastCalledWith(42, 1);
+    sc.stop();
+  });
+
+  it("noteTick: a frozen re-push never extends the window; a changed value re-anchors it", async () => {
+    const sc = makeReconciler();
+    sc.start();
+    sc.noteTick(42); // baseline only
+
+    for (let i = 0; i < 15; i++) {
+      await vi.advanceTimersByTimeAsync(STALL_POLL_INTERVAL_MS);
+      sc.noteTick(42); // frozen backfill re-push — must not mask the pin
+    }
+    expect(onStallRecover).toHaveBeenCalledTimes(1); // pinned despite the re-pushes
+
+    onStallRecover.mockClear();
+    truth = { timePos: 60, buffering: true, cacheEnd: 100 };
+    sc.noteTick(60); // real progress — the window re-anchors
+    await vi.advanceTimersByTimeAsync(
+      STALL_RECOVER_MS - STALL_POLL_INTERVAL_MS,
+    );
+    expect(onStallRecover).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(STALL_POLL_INTERVAL_MS);
+    expect(onStallRecover).toHaveBeenCalledTimes(1);
+    sc.stop();
+  });
+
+  it("query rejection: warn with context, round counted as progress-less, poller survives", async () => {
+    queryError = new Error("mpv is not running (call mpv_spawn first)");
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(STALL_RECOVER_MS);
+
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "warn", source: "mpvProtocol" }),
+    );
+    const message = vi.mocked(captureError).mock.calls[0]?.[0]?.message ?? "";
+    expect(message).toContain("stall-reconcile");
+    // Never observed progress → the pin window is spent → one recovery, with
+    // the last known position (none) as the resume target.
+    expect(onStallRecover).toHaveBeenCalledTimes(1);
+    expect(onStallRecover).toHaveBeenLastCalledWith(0, 1);
+    expect(onReconcileBuffering).not.toHaveBeenCalled();
+    sc.stop();
+  });
+
+  it("start() while running does not stack a second interval", () => {
+    const sc = makeReconciler();
+    sc.start();
+    sc.start();
+
+    expect(vi.getTimerCount()).toBe(1);
+    sc.stop();
+  });
+});
+
+describe("stall reconciler constants (locked tuning)", () => {
+  it("keeps the bounded self-heal budget", () => {
+    expect(STALL_POLL_INTERVAL_MS).toBe(5000);
+    expect(STALL_RECONCILE_MS).toBe(10_000);
+    // > mpv's --network-timeout (60s) so mpv's own error path wins first.
+    expect(STALL_RECOVER_MS).toBe(75_000);
+    expect(STALL_RECOVERY_MAX_ATTEMPTS).toBe(2);
   });
 });
 

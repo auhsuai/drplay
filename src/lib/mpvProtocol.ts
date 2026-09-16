@@ -83,6 +83,31 @@ export const SEEK_ACK_TIMEOUT_MS = 4000;
 export const WATCHDOG_INTERVAL_MS = 1000;
 export const WATCHDOG_STALE_MS = 1200;
 
+/**
+ * Stall reconciler tuning (pinned-playhead self-heal).
+ * - POLL: cadence of the truth query once the playhead looks pinned.
+ * - RECONCILE: no playhead progress for this long → start polling; a healthy
+ *   stream that is merely quiet never pays a query.
+ * - RECOVER: pinned playhead (time-pos frozen AND cacheEnd not growing) held
+ *   for this long → one recovery reload. Why 75s: it sits ABOVE mpv's
+ *   `--network-timeout` (60s) so mpv's own error path gets the first chance
+ *   to fail the stream on its own before the app intervenes.
+ * - MAX_ATTEMPTS: recovery reloads per track before the error surfaces.
+ */
+export const STALL_POLL_INTERVAL_MS = 5_000;
+export const STALL_RECONCILE_MS = 10_000;
+export const STALL_RECOVER_MS = 75_000;
+export const STALL_RECOVERY_MAX_ATTEMPTS = 2;
+/** Two observed positions within this delta are the same frozen playhead. */
+export const STALL_EPSILON_SECS = 0.05;
+/** Below this pinned position a recovery reload restarts from the top — a
+ *  near-zero position carries no meaningful resume target. */
+export const STALL_MIN_RESUME_SECS = 1;
+/** Bound for one property query inside a reconcile round. Why: Tauri invokes
+ *  have no AbortSignal (tauri-apps/tauri#8351) — without a bound, a hung IPC
+ *  reply would wedge the round (and keep the in-flight guard locked) forever. */
+export const STALL_QUERY_TIMEOUT_MS = 2_000;
+
 export type MpvRange = { start: number; end: number };
 
 /** Shared throttle-clock shape for the engine (one literal, no drift). */
@@ -339,6 +364,210 @@ export class TimePosWatchdog {
       this.polling = false;
     }
   }
+}
+
+/** One polled snapshot of mpv's own state (null = property unknown). */
+export type StallTruth = {
+  timePos: number | null;
+  buffering: boolean | null;
+  cacheEnd: number | null;
+};
+
+export type StallReconcilerCallbacks = {
+  /** Actually playing: not paused, not finished, not torn down. */
+  isActive: () => boolean;
+  /** Mid-seek-ack — a reconcile round must not run while seeking. */
+  isBusy: () => boolean;
+  queryTruth: () => Promise<StallTruth>;
+  /** Truth says mpv is NOT buffering — settle a spinner whose event was lost. */
+  onReconcileBuffering: (buffering: boolean) => void;
+  /** The playhead is pinned: reload the stream (attempt counts from 1). */
+  onStallRecover: (pinnedTime: number, attempt: number) => void;
+  /** Every recovery attempt failed to unpin the playhead — surface an error. */
+  onStallExhausted: () => void;
+};
+
+/**
+ * Stall reconciler — self-heal for a pinned playhead. mpv can wedge with the
+ * playhead frozen and NO end-file/error ever reaching the app (ffmpeg reports
+ * nothing to mpv in this class of network stalls, and a failed restart after a
+ * seek silently disables cache-pause): the clock stops, the spinner can ride a
+ * lost paused-for-cache=false forever, and the only cure used to be restarting
+ * the app. This poller turns "pinned forever" into "self-recovered within a
+ * bounded time, or a clear bounded error":
+ * - once no playhead progress was observed for STALL_RECONCILE_MS, it queries
+ *   the truth every STALL_POLL_INTERVAL_MS;
+ * - progress (time-pos moved or cacheEnd grew past STALL_EPSILON_SECS)
+ *   re-anchors the window — a long-but-healthy buffer never recovers;
+ * - a playhead pinned for STALL_RECOVER_MS → onStallRecover (attempt 1..N),
+ *   each attempt owning its own window;
+ * - attempts exhausted → onStallExhausted exactly once, then it stops;
+ * - a polled buffering=false → onReconcileBuffering(false) every round (a lost
+ *   settle event must not leave the spinner stuck).
+ * Rounds are skipped while !isActive() (pause/end/closed) or isBusy()
+ * (seek-ack), so user actions never count as stall time; a query failure is a
+ * progress-less round (logged, never a crash).
+ */
+export class StallReconciler {
+  private timer: ReturnType<typeof setInterval> | null = null;
+  /** Bumped by stop()/reset(): an in-flight round compares it after its await. */
+  private generation = 0;
+  private polling = false;
+  /** Date.now() of the last observed progress (or the current window anchor). */
+  private lastProgressAt = 0;
+  private lastTimePos: number | null = null;
+  private lastCacheEnd: number | null = null;
+  private attempts = 0;
+  private exhausted = false;
+  private readonly cb: StallReconcilerCallbacks;
+
+  constructor(cb: StallReconcilerCallbacks) {
+    this.cb = cb;
+  }
+
+  /** Start watching (idempotent). Why it re-anchors even when already
+   *  running: wall time spent paused or loading is not pin time — each
+   *  (re)start (pause=false, file-loaded) begins a fresh window. */
+  start(): void {
+    if (!this.cb.isActive()) return;
+    this.lastProgressAt = Date.now();
+    if (this.timer !== null) return;
+    this.timer = setInterval(() => void this.round(), STALL_POLL_INTERVAL_MS);
+  }
+
+  /** Stop watching (idempotent): no callback can fire after this returns. */
+  stop(): void {
+    this.generation += 1;
+    if (this.timer !== null) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  /** New track / fresh lifecycle: drop baselines and the attempt budget. */
+  reset(): void {
+    this.generation += 1;
+    this.lastProgressAt = Date.now();
+    this.lastTimePos = null;
+    this.lastCacheEnd = null;
+    this.attempts = 0;
+    this.exhausted = false;
+  }
+
+  /** A real time-pos push (property push or watchdog backfill). Only a CHANGED
+   *  value is progress: a frozen value re-pushed while the playhead is pinned
+   *  (exactly what the watchdog backfills) must not mask the stall it is
+   *  evidence of. */
+  noteTick(time: number): void {
+    if (this.lastTimePos === null) {
+      this.lastTimePos = time;
+      return;
+    }
+    if (Math.abs(time - this.lastTimePos) <= STALL_EPSILON_SECS) return;
+    this.lastTimePos = time;
+    this.lastProgressAt = Date.now();
+  }
+
+  private async round(): Promise<void> {
+    if (this.polling || this.exhausted) return;
+    if (!this.cb.isActive()) return;
+    if (Date.now() - this.lastProgressAt < STALL_RECONCILE_MS) return;
+    if (this.cb.isBusy()) return;
+    const gen = this.generation;
+    this.polling = true;
+    let truth: StallTruth | null = null;
+    try {
+      truth = await this.cb.queryTruth();
+    } catch (e: unknown) {
+      // Why: an unreadable truth is a progress-less round, not a crash — if
+      // nothing can be observed, the pin window keeps counting.
+      warnThrottled(`stall-reconcile query failed: ${describeError(e)}`);
+    } finally {
+      this.polling = false;
+    }
+    if (gen !== this.generation) return; // stopped/reset while the query flew
+    // Why: an unreadable truth (null) counts as no progress — with nothing
+    // observable, the pin window keeps counting.
+    if (truth !== null) {
+      if (truth.buffering === false) this.cb.onReconcileBuffering(false);
+      if (this.noteTruthProgress(truth)) {
+        this.lastProgressAt = Date.now();
+        return;
+      }
+    }
+    if (Date.now() - this.lastProgressAt < STALL_RECOVER_MS) return;
+    if (this.attempts >= STALL_RECOVERY_MAX_ATTEMPTS) {
+      this.exhausted = true;
+      this.stop();
+      this.cb.onStallExhausted();
+      return;
+    }
+    this.attempts += 1;
+    // Why: every attempt owns its own STALL_RECOVER_MS window, so a reload
+    // that does not unpin the playhead cannot fire the next one instantly.
+    this.lastProgressAt = Date.now();
+    this.cb.onStallRecover(this.lastTimePos ?? 0, this.attempts);
+  }
+
+  /** Truth observations: time-pos moved (either direction — a backward seek
+   *  is movement, not a pin) OR cacheEnd grew = progress. A first observation
+   *  only anchors its baseline. */
+  private noteTruthProgress(truth: StallTruth): boolean {
+    let progressed = false;
+    if (truth.timePos !== null) {
+      if (
+        this.lastTimePos !== null &&
+        Math.abs(truth.timePos - this.lastTimePos) > STALL_EPSILON_SECS
+      ) {
+        progressed = true;
+      }
+      this.lastTimePos = truth.timePos;
+    }
+    if (truth.cacheEnd !== null) {
+      if (
+        this.lastCacheEnd !== null &&
+        truth.cacheEnd - this.lastCacheEnd > STALL_EPSILON_SECS
+      ) {
+        progressed = true;
+      }
+      this.lastCacheEnd = truth.cacheEnd;
+    }
+    return progressed;
+  }
+}
+
+/** Highest end among cache ranges; null when no range is known. */
+export function maxRangeEnd(ranges: MpvRange[]): number | null {
+  let max: number | null = null;
+  for (const range of ranges) {
+    if (max === null || range.end > max) max = range.end;
+  }
+  return max;
+}
+
+/** Bound one promisified mpv IPC query to STALL_QUERY_TIMEOUT_MS. The wrapped
+ *  promise always gets a handler attached, so a late reply/rejection after the
+ *  timeout fired is never an unhandled rejection. */
+export function withStallQueryTimeout<T>(promise: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(
+          `mpv query timeout (no reply within ${String(STALL_QUERY_TIMEOUT_MS)}ms)`,
+        ),
+      );
+    }, STALL_QUERY_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
 }
 
 export function describeError(e: unknown): string {

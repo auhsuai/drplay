@@ -40,6 +40,14 @@ const UPSTREAM_HEADERS_TIMEOUT: std::time::Duration = std::time::Duration::from_
 /// headers timeout instead of ~30s + headers timeout. Still above Drive's
 /// normal short chunk stalls, so healthy streams are not cut.
 const UPSTREAM_BODY_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// Deadline for one OS-vault call (reading the persisted refresh token, or
+/// persisting a rotated one). The vault is local (Windows Credential Manager)
+/// and answers in milliseconds, so a call still blocked after this means it
+/// is wedged. Without this deadline a hung vault keeps `refresh_lock` held:
+/// every proxy request then starves with no headers, no error, and no log —
+/// mpv can only be recovered by restarting the app. Bounded here so `refresh`
+/// fails fast and the proxy answers mpv with a proper 502.
+const VAULT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Source of Drive access tokens, injected so tests can run without real
 /// credentials while production reuses the exact auth.rs/token_store.rs logic.
@@ -71,6 +79,9 @@ struct DriveTokenSource {
     /// Deadline for one token-endpoint call; defaults to
     /// `UPSTREAM_HEADERS_TIMEOUT` and is shrunk by tests.
     refresh_timeout: std::time::Duration,
+    /// Deadline for one OS-vault call; defaults to `VAULT_CALL_TIMEOUT` and
+    /// is shrunk by tests.
+    vault_read_timeout: std::time::Duration,
     /// Test seams (production: `None`): replace the OS-vault read and the
     /// token-endpoint call so tests run without the keyring or the network.
     vault_read: Option<VaultRead>,
@@ -91,6 +102,7 @@ impl Default for DriveTokenSource {
             refresh_lock: AsyncMutex::new(()),
             generation: AtomicU64::new(0),
             refresh_timeout: UPSTREAM_HEADERS_TIMEOUT,
+            vault_read_timeout: VAULT_CALL_TIMEOUT,
             vault_read: None,
             mint: None,
         }
@@ -133,16 +145,24 @@ impl TokenSource for DriveTokenSource {
             }
             // The OS credential vault is blocking (Windows Credential
             // Manager), so it runs on a blocking thread like auth.rs does: a
-            // stalled vault must not occupy an executor thread. The refresh
-            // task still awaits this JoinHandle while holding `refresh_lock`,
-            // so a hung vault does serialize the other refresh callers.
-            let stored = match &self.vault_read {
-                Some(read) => {
-                    let read = Arc::clone(read);
-                    tauri::async_runtime::spawn_blocking(move || read()).await
+            // stalled vault must not occupy an executor thread. It also runs
+            // under `vault_read_timeout`: this task awaits the vault while
+            // holding `refresh_lock`, so an unbounded read would serialize
+            // every later refresh caller behind a wedged vault — no headers,
+            // no error, no log reaches mpv (incident hardening).
+            let stored = tokio::time::timeout(self.vault_read_timeout, async {
+                match &self.vault_read {
+                    Some(read) => {
+                        let read = Arc::clone(read);
+                        tauri::async_runtime::spawn_blocking(move || read()).await
+                    }
+                    None => tauri::async_runtime::spawn_blocking(crate::token_store::get_refresh_token).await,
                 }
-                None => tauri::async_runtime::spawn_blocking(crate::token_store::get_refresh_token).await,
-            };
+            })
+            .await
+            .map_err(|_elapsed| {
+                format!("token vault read timed out after {:?}", self.vault_read_timeout)
+            })?;
             let refresh_token = match stored {
                 Ok(Ok(Some(token))) => token,
                 Ok(Ok(None)) => return Err("not signed in: no refresh token stored".to_string()),
@@ -172,17 +192,30 @@ impl TokenSource for DriveTokenSource {
             // blocking too, so it also runs on a blocking thread.
             if let Some(rotated) = payload["refresh_token"].as_str() {
                 let rotated = rotated.to_string();
-                let stored = tauri::async_runtime::spawn_blocking(move || {
-                    crate::token_store::set_refresh_token(rotated)
-                })
+                // Same deadline as the read: this blocking vault write runs
+                // while `refresh_lock` is held too, so a wedged vault must not
+                // hold the lock past the deadline. Persisting stays
+                // best-effort — a timeout is logged and the mint still returns.
+                let stored = tokio::time::timeout(
+                    self.vault_read_timeout,
+                    tauri::async_runtime::spawn_blocking(move || {
+                        crate::token_store::set_refresh_token(rotated)
+                    }),
+                )
                 .await;
                 match stored {
-                    Ok(Ok(())) => {}
-                    Ok(Err(store_error)) => {
+                    Ok(Ok(Ok(()))) => {}
+                    Ok(Ok(Err(store_error))) => {
                         log::warn!("[stream-proxy] failed to persist rotated refresh token: {store_error}");
                     }
-                    Err(join_error) => {
+                    Ok(Err(join_error)) => {
                         log::warn!("[stream-proxy] persisting the rotated refresh token failed: {join_error}");
+                    }
+                    Err(_elapsed) => {
+                        log::warn!(
+                            "[stream-proxy] persisting the rotated refresh token timed out after {:?}",
+                            self.vault_read_timeout
+                        );
                     }
                 }
             }
@@ -723,6 +756,17 @@ mod tests {
         refresh_timeout: Duration,
         mint_delay: Duration,
     ) -> (Arc<DriveTokenSource>, Arc<AtomicUsize>) {
+        let vault_read: VaultRead = Arc::new(|| Ok(Some("stub-refresh-token".to_string())));
+        stub_source_with_vault(refresh_timeout, VAULT_CALL_TIMEOUT, mint_delay, vault_read)
+    }
+
+    /// `stub_source` with the vault read and its deadline injected.
+    fn stub_source_with_vault(
+        refresh_timeout: Duration,
+        vault_read_timeout: Duration,
+        mint_delay: Duration,
+        vault_read: VaultRead,
+    ) -> (Arc<DriveTokenSource>, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
         let minted = Arc::clone(&calls);
         let mint: MintFn = Arc::new(move |_refresh_token: String| {
@@ -732,16 +776,62 @@ mod tests {
                 Ok(serde_json::json!({ "access_token": format!("fresh-{call}") }))
             })
         });
-        let vault_read: VaultRead = Arc::new(|| Ok(Some("stub-refresh-token".to_string())));
         let source = Arc::new(DriveTokenSource {
             cached: Mutex::new(None),
             refresh_lock: AsyncMutex::new(()),
             generation: AtomicU64::new(0),
             refresh_timeout,
+            vault_read_timeout,
             vault_read: Some(vault_read),
             mint: Some(mint),
         });
         (source, calls)
+    }
+
+    /// A vault read that stalls far past the (shrunk) deadline: simulates a
+    /// wedged Windows Credential Manager. The sleep runs on a blocking thread
+    /// exactly like the real vault read, and stays short so runtime teardown
+    /// does not wait long for it.
+    fn stalled_vault_read() -> VaultRead {
+        Arc::new(|| {
+            std::thread::sleep(Duration::from_millis(250));
+            Ok(Some("stub-refresh-token".to_string()))
+        })
+    }
+
+    /// R04-8: a vault read that outlives `vault_read_timeout` must fail the
+    /// refresh within the deadline and free the lock for the next caller.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vault_read_times_out_and_releases_the_lock() {
+        /// Wide bound so a regression to an unbounded vault read fails this
+        /// test instead of hanging it.
+        const GUARD: Duration = Duration::from_secs(2);
+        let (source, _calls) = stub_source_with_vault(
+            Duration::from_secs(5),
+            Duration::from_millis(50),
+            Duration::ZERO,
+            stalled_vault_read(),
+        );
+        let started = Instant::now();
+
+        let first = tokio::time::timeout(GUARD, Arc::clone(&source).refresh(true))
+            .await
+            .expect("refresh must return at the vault-read deadline (unbounded read -> this guard fired)");
+        let error = first.expect_err("a stalled vault read must fail the refresh");
+        assert!(error.contains("timed out"), "the error must name the timeout, got: {error}");
+
+        // The lock must be free again: the next caller reaches its own
+        // deadline promptly instead of queueing behind the stalled read.
+        let second = tokio::time::timeout(GUARD, Arc::clone(&source).refresh(true))
+            .await
+            .expect("the refresh lock must be released after the timeout");
+        let error = second.expect_err("the second caller must fail at the deadline too");
+        assert!(error.contains("timed out"), "the second caller must reach the vault deadline, got: {error}");
+        assert!(
+            started.elapsed() < GUARD,
+            "both callers must return at the deadline, took {:?}",
+            started.elapsed()
+        );
     }
 
     /// R04-7: a token endpoint that outlives `refresh_timeout` must end the

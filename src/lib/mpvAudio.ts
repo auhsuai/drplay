@@ -6,6 +6,7 @@ import { usePlayerStore } from "../store/playerStore";
 import type { BufferedSource } from "../utils/bufferedRange";
 import type { AudioEventMap, AudioEventHandler } from "./audioNativeEvents";
 import {
+  asBoolean,
   asNumber,
   asString,
   BufferingTracker,
@@ -13,8 +14,10 @@ import {
   describeError,
   dispatchMpvEvent,
   dispatchPropertyEvent,
+  extractCacheRanges,
   freshThrottleClocks,
   isRecord,
+  maxRangeEnd,
   MPV_BOOL,
   MPV_COMMANDS,
   MPV_PROPERTY_ARGS,
@@ -22,6 +25,8 @@ import {
   PROXY_ORIGIN,
   SEEK_ACK_TIMEOUT_MS,
   SEEK_ACK_TOLERANCE_SECS,
+  StallReconciler,
+  STALL_MIN_RESUME_SECS,
   STREAM_PATH,
   TAURI_COMMANDS,
   TAURI_EVENTS,
@@ -29,8 +34,10 @@ import {
   TimePosWatchdog,
   toTimeRanges,
   VOLUME_SCALE,
+  withStallQueryTimeout,
   type MpvEventCallbacks,
   type MpvRange,
+  type StallTruth,
 } from "./mpvProtocol";
 import { TimeInterpolator } from "./timeInterpolator";
 
@@ -96,6 +103,30 @@ export class MpvAudioController {
     // clock on the spinner so fill/clock freeze instead of running blind.
     () => this.buffering.isShown(),
   );
+  /**
+   * Pinned-playhead self-heal (mpv can freeze time-pos with no end-file/error
+   * ever arriving — the clock stops with zero logs and only an app restart
+   * used to cure it): poll the truth while progress is silent, settle a
+   * spinner whose paused-for-cache=false was lost, reload the stream after a
+   * bounded pin, then surface a bounded error the user can retry.
+   */
+  private reconciler = new StallReconciler({
+    isActive: () =>
+      usePlayerStore.getState().isPlaying &&
+      !this.paused &&
+      !this.playbackFinished,
+    isBusy: () => this.seekTarget !== null,
+    queryTruth: () => this.queryStallTruth(),
+    onReconcileBuffering: (buffering) => {
+      this.buffering.reportMpvBuffering(buffering);
+    },
+    onStallRecover: (pinnedTime, attempt) => {
+      this.recoverFromStall(pinnedTime, attempt);
+    },
+    onStallExhausted: () => {
+      this.handleStallExhausted();
+    },
+  });
 
   private readonly events: MpvEventCallbacks = {
     onTimeUpdate: (time) => {
@@ -110,6 +141,7 @@ export class MpvAudioController {
       this.currentTime = time;
       this.interpolator.noteRealTime(time);
       this.watchdog.noteEmit();
+      this.reconciler.noteTick(time);
       this.buffering.onTimeTick(time);
       // Why: only the REAL mpv push path proves audio bytes flow — the
       // interpolator calls emitTimeupdate directly and never lands here.
@@ -130,6 +162,7 @@ export class MpvAudioController {
         // into the interpolation when playback resumes.
         this.interpolator.reset();
         this.watchdog.stop();
+        this.reconciler.stop();
         this.emit("pause", undefined);
         usePlayerStore.getState().setIsPlaying(false);
       } else {
@@ -139,6 +172,7 @@ export class MpvAudioController {
         this.emit("play", undefined);
         usePlayerStore.getState().setIsPlaying(true);
         this.watchdog.start();
+        this.reconciler.start();
         this.interpolator.start();
       }
     },
@@ -151,6 +185,11 @@ export class MpvAudioController {
     },
     onFileLoaded: () => {
       this.applyPendingSeek();
+      // Why: mpv's pause flag does not change across a loadfile replace, so
+      // track N>1 never gets a pause=false event — file-loaded is the moment
+      // the backfill watchdog and the stall reconciler must be (re)armed.
+      this.watchdog.start();
+      this.reconciler.start();
     },
     onEndFile: (outcome, mpvError) => {
       this.playbackFinished = true;
@@ -159,6 +198,7 @@ export class MpvAudioController {
       // so the spinner must not ride the 8s safety net (eof and error alike).
       this.buffering.settle();
       this.watchdog.stop();
+      this.reconciler.stop();
       if (outcome === "eof") {
         this.emit("ended", undefined);
         return;
@@ -182,6 +222,7 @@ export class MpvAudioController {
       this.unlistenFns = [];
       this.playbackFinished = true;
       this.watchdog.stop();
+      this.reconciler.stop();
       this.interpolator.reset();
       this.playbackFailure("mpv-engine-closed", cause);
     },
@@ -400,6 +441,9 @@ export class MpvAudioController {
     // the first real time-pos push of THIS track (never drift from the old).
     this.interpolator.reset();
     this.interpolator.start();
+    // Fresh track, fresh stall window: drop the previous track's baselines
+    // and its (possibly spent) recovery budget.
+    this.reconciler.reset();
     if (this.paused) {
       // mpv's pause flag is process-global: a loadfile while paused would
       // start the new track frozen. Clear it so the new track actually plays.
@@ -448,7 +492,7 @@ export class MpvAudioController {
       if (this.isStale(epoch)) return;
       await this.sendCommand([
         MPV_COMMANDS.loadfile,
-        `${PROXY_ORIGIN}:${String(port)}${STREAM_PATH}${track.id}`,
+        this.streamUrl(track.id, port),
         MPV_COMMANDS.replace,
       ]);
       if (this.isStale(epoch)) return;
@@ -560,6 +604,9 @@ export class MpvAudioController {
     this.firstAudioEmitted = false;
     this.buffering.cancel();
     this.watchdog.stop();
+    // Stop first (kills the interval), then a clean slate for the next engine.
+    this.reconciler.stop();
+    this.reconciler.reset();
     this.interpolator.reset();
     this.throttle = freshThrottleClocks();
     void invoke(TAURI_COMMANDS.mpvShutdown).catch((e: unknown) => {
@@ -615,5 +662,78 @@ export class MpvAudioController {
     const target = this.pendingSeek;
     this.pendingSeek = null;
     this.sendSeek(target);
+  }
+
+  /** Single source of truth for a track's local stream-proxy URL. */
+  private streamUrl(trackId: string, port: number): string {
+    return `${PROXY_ORIGIN}:${String(port)}${STREAM_PATH}${trackId}`;
+  }
+
+  /** Polled mpv truth for one reconcile round (each query bounded). */
+  private async queryStallTruth(): Promise<StallTruth> {
+    const [timePosRaw, bufferingRaw, cacheRaw] = await Promise.all([
+      withStallQueryTimeout(
+        invoke(TAURI_COMMANDS.mpvGetProperty, { prop: MPV_PROPERTIES.timePos }),
+      ),
+      withStallQueryTimeout(
+        invoke(TAURI_COMMANDS.mpvGetProperty, {
+          prop: MPV_PROPERTIES.pausedForCache,
+        }),
+      ),
+      withStallQueryTimeout(
+        invoke(TAURI_COMMANDS.mpvGetProperty, {
+          prop: MPV_PROPERTIES.cacheState,
+        }),
+      ),
+    ]);
+    return {
+      timePos: asNumber(timePosRaw),
+      buffering: asBoolean(bufferingRaw),
+      cacheEnd: maxRangeEnd(extractCacheRanges(cacheRaw)),
+    };
+  }
+
+  /** Stall self-heal step 1: reload the stream at the pinned position. */
+  private recoverFromStall(pinnedTime: number, attempt: number): void {
+    const trackId = this.currentTrackId;
+    const port = this.proxyPort;
+    if (trackId === null || port === null) {
+      this.logWarn(
+        `stall-recovery attempt=${String(attempt)} skipped: no active stream`,
+      );
+      return;
+    }
+    this.logWarn(
+      `stall-recovery attempt=${String(attempt)} pinned=${pinnedTime.toFixed(1)}s`,
+    );
+    // Why: resume at the pinned position once the reloaded file reports ready
+    // — the existing file-loaded -> applyPendingSeek path does the seek.
+    this.pendingSeek = pinnedTime > STALL_MIN_RESUME_SECS ? pinnedTime : null;
+    void this.sendCommand([
+      MPV_COMMANDS.loadfile,
+      this.streamUrl(trackId, port),
+      MPV_COMMANDS.replace,
+    ]).catch((e: unknown) => {
+      // Why: a failed reload consumes this attempt only — the next reconcile
+      // window still runs and the exhausted path is the single error surface.
+      this.logWarn(`stall-recovery-reload-failed: ${describeError(e)}`);
+    });
+    // Keep the spinner up across the reload window.
+    this.buffering.request(true);
+  }
+
+  /** Stall self-heal step 2: budget spent — bounded error, replayable track. */
+  private handleStallExhausted(): void {
+    // Why these flags: playbackFailure surfaces `network_interrupted` and
+    // flips isPlaying off; playbackFinished=true is what routes a later
+    // playTrack(same track) through the full reload path (mpvAudio guard).
+    this.playbackFinished = true;
+    this.interpolator.reset();
+    this.watchdog.stop();
+    this.reconciler.stop();
+    this.playbackFailure(
+      "stall-recovery-exhausted",
+      "playhead pinned; reload failed",
+    );
   }
 }

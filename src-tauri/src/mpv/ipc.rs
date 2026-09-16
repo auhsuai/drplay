@@ -20,6 +20,12 @@ use tokio::sync::Mutex as AsyncMutex;
 /// Upper bound for awaiting a command reply (mpv replies fast locally; this
 /// only protects against a hung or silent pipe).
 const IPC_COMMAND_TIMEOUT_SECS: u64 = 10;
+/// Upper bound for the write phase of one command. A frame is a few hundred
+/// bytes that mpv drains instantly, so a write still blocked after this means
+/// mpv stopped reading the pipe. Failing the command here (instead of parking
+/// on the writer mutex) keeps every later command — including the recovery
+/// reads — from queueing forever behind a wedged pipe.
+const IPC_WRITE_TIMEOUT_SECS: u64 = 5;
 /// Byte chunk the IPC reader pulls from the pipe per read.
 const IPC_READ_CHUNK_SIZE: usize = 4096;
 
@@ -175,18 +181,11 @@ impl MpvIpc {
         let (sender, receiver) = oneshot::channel();
         self.core.register(request_id, sender);
 
-        let write_result: Result<(), String> = async {
-            let mut writer = self.writer.lock().await;
-            writer
-                .write_all(frame.as_bytes())
-                .await
-                .map_err(|write_error| format!("mpv IPC: failed to write command to pipe: {write_error}"))?;
-            writer
-                .flush()
-                .await
-                .map_err(|flush_error| format!("mpv IPC: failed to flush command to pipe: {flush_error}"))?;
-            Ok(())
-        }
+        let write_result = write_frame_bounded(
+            &self.writer,
+            frame.as_bytes(),
+            Duration::from_secs(IPC_WRITE_TIMEOUT_SECS),
+        )
         .await;
 
         if let Err(write_error) = write_result {
@@ -213,6 +212,36 @@ impl MpvIpc {
             Err(format!("mpv error: {}", reply.error))
         }
     }
+}
+
+/// Write one framed command, bounded by `timeout`. A frame is a few hundred
+/// bytes, so mpv drains it instantly; a stall past the deadline means mpv
+/// stopped reading the pipe. The command must fail instead of holding the
+/// writer mutex forever — a wedged mutex queues every later command
+/// (pause/seek/loadfile/recovery get_property) behind it indefinitely.
+async fn write_frame_bounded<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &AsyncMutex<W>,
+    frame: &[u8],
+    timeout: Duration,
+) -> Result<(), String> {
+    // On expiry `timeout` drops the inner future, and the `AsyncMutex` guard
+    // acquired inside goes with it: the writer is never held past the deadline.
+    tokio::time::timeout(timeout, async {
+        let mut writer = writer.lock().await;
+        writer
+            .write_all(frame)
+            .await
+            .map_err(|write_error| format!("mpv IPC: failed to write command to pipe: {write_error}"))?;
+        writer
+            .flush()
+            .await
+            .map_err(|flush_error| format!("mpv IPC: failed to flush command to pipe: {flush_error}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|_elapsed| {
+        format!("mpv IPC: write timed out after {timeout:?} (mpv not draining the pipe)")
+    })?
 }
 
 /// Pull bytes from the pipe forever, split them into `\n` lines and route
@@ -411,6 +440,103 @@ mod tests {
         assert_eq!(
             collected.as_slice(),
             [IpcMessage::PropertyChange { name: "pause".to_string(), data: json!(true) }]
+        );
+    }
+
+    /// Guard around helper calls in tests: the helper must return at its own
+    /// millisecond deadline, so a regression to an unbounded write fails the
+    /// test instead of hanging it.
+    const TEST_OUTER_GUARD: Duration = Duration::from_secs(2);
+
+    #[tokio::test]
+    async fn write_frame_bounded_times_out_when_the_peer_never_drains() {
+        // 1-byte pipe with the read half kept alive: `write_all` fills the
+        // buffer and then parks forever waiting for the peer to consume.
+        let (client, _server) = tokio::io::duplex(1);
+        let writer = AsyncMutex::new(client);
+        let started = std::time::Instant::now();
+
+        let write = tokio::time::timeout(
+            TEST_OUTER_GUARD,
+            write_frame_bounded(&writer, b"a frame the peer never reads\n", Duration::from_millis(50)),
+        )
+        .await
+        .expect("write_frame_bounded must return at its own deadline (unbounded write -> this guard fired)");
+
+        let error = write.expect_err("a write the peer never drains must fail, not block forever");
+        assert!(
+            error.starts_with("mpv IPC: write timed out"),
+            "the timeout must be distinguishable from other write errors, got: {error}"
+        );
+        assert!(
+            started.elapsed() < TEST_OUTER_GUARD,
+            "the deadline must come from the helper, not the outer guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn writer_is_reusable_after_a_write_timeout() {
+        // 16-byte pipe: the first frame (24 bytes) cannot fit and blocks; the
+        // second one fits once the buffered prefix has been drained.
+        let (client, mut server) = tokio::io::duplex(16);
+        let writer = AsyncMutex::new(client);
+
+        let first = tokio::time::timeout(
+            TEST_OUTER_GUARD,
+            write_frame_bounded(&writer, b"a frame the peer never reads\n", Duration::from_millis(50)),
+        )
+        .await
+        .expect("the first write must return at its own deadline");
+        assert!(first.is_err(), "the first write must time out exactly as asserted above");
+
+        // Free the pipe, then send the next command: if the timed-out write
+        // still held the mutex, this second call would park on the lock and
+        // only the outer guard could stop it.
+        let mut drain = [0u8; 32];
+        let drained = server.read(&mut drain).await.expect("draining the buffered prefix must work");
+        assert!(drained > 0, "the blocked write must have buffered a prefix");
+
+        let second = tokio::time::timeout(
+            TEST_OUTER_GUARD,
+            write_frame_bounded(&writer, b"second\n", Duration::from_millis(500)),
+        )
+        .await
+        .expect("the writer lock must be released when the timed-out write is dropped");
+        assert!(second.is_ok(), "the next command must write normally, got: {second:?}");
+    }
+
+    /// End-to-end guard: when the write phase fails, `send_command` must
+    /// return the error and leave no pending entry behind (the timeout is one
+    /// such write-phase error — see `write_frame_bounded` tests for the
+    /// deadline itself, which a local pipe fixture cannot wedge: Windows
+    /// absorbs large writes into a growing buffer when nobody reads, so the
+    /// write never parks).
+    #[tokio::test]
+    async fn send_command_clears_the_pending_entry_when_the_write_fails() {
+        let pipe_name = format!(r"\\.\pipe\drplay-ipc-closed-{}", std::process::id());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&pipe_name)
+            .expect("test pipe server must be created");
+        let client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .expect("test pipe client must connect");
+        let sink: EventSink = Arc::new(|_| {});
+        let ipc = MpvIpc::new(client, sink);
+
+        // Kill the peer: the next write must fail instead of reaching mpv.
+        drop(server);
+
+        let error = ipc
+            .send_command(vec![json!("pause")])
+            .await
+            .expect_err("a write to a dead pipe must fail the command");
+        assert!(
+            error.starts_with("mpv IPC: failed to write command to pipe"),
+            "the failure must name the write phase, got: {error}"
+        );
+        assert!(
+            ipc.core.lock_pending().is_empty(),
+            "a failed write must not leave a pending entry behind"
         );
     }
 }
