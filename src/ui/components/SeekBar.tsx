@@ -280,7 +280,12 @@ export function SeekBar({
   return (
     <div
       className={`w-full flex items-center gap-3${
-        variant === "top" ? " absolute inset-x-0 top-0" : ""
+        // The top rail spans the full content width edge-to-edge (absolute
+        // inset-x-0), so at 0%/100% the centered thumb overhangs half its
+        // width past the bar and gets clipped by the shell's overflow-hidden.
+        // px-1.5 = half the 12px thumb, insetting the track so the thumb's
+        // 0%/100% extremes stay inside the shell.
+        variant === "top" ? " absolute inset-x-0 top-0 px-1.5" : ""
       }`}
     >
       <SeekClock timeTextRef={currentTimeTextRef} variant={variant} />

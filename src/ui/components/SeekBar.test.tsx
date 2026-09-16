@@ -865,6 +865,10 @@ describe("SeekBar progress fill clipper + rail-anchored thumb (needle fix v2)", 
 
   it("desktop hover reveals the thumb (opacity-100 + scale-100)", () => {
     renderSeekBar();
+    // Slice A: the thumb only shows for a seekable track (duration > 0).
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
     const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
 
     act(() => {
@@ -1364,6 +1368,11 @@ describe('SeekBar variant "top" (PlayerBar edge-to-edge rail)', () => {
 
   it("T3: rail is a thin top line whose hit area only extends downward (no upward click theft)", () => {
     renderSeekBar({ variant: "top" });
+    // Slice A: hover grow + pointer cursor are gated on a seekable track, so
+    // the hover class only exists once a duration is known.
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
     const rail = screen.getByRole("slider");
     const classes = rail.className.split(" ");
 
@@ -1420,5 +1429,69 @@ describe('SeekBar variant "top" (PlayerBar edge-to-edge rail)', () => {
 
     expect(bufferFill.parentElement).toBe(rail);
     expect(screen.getByTestId("seek-thumb").parentElement).toBe(rail);
+  });
+});
+
+describe("SeekBar no-track guards (slice A: hover without a loaded track)", () => {
+  it("T-A1: hover with no duration keeps the thumb hidden, cursor default and no hover grow (both variants)", () => {
+    for (const variant of ["default", "top"] as const) {
+      const { unmount } = renderSeekBar({ variant });
+      const rail = screen.getByTestId("buffer-fill")
+        .parentElement as HTMLElement;
+
+      act(() => {
+        fireEvent.pointerEnter(rail, { pointerId: 1 });
+      });
+
+      const thumb = screen.getByTestId("seek-thumb");
+      expect(thumb.className).not.toContain("opacity-100");
+      expect(thumb.className).toContain("opacity-0");
+
+      const classes = rail.className.split(" ");
+      expect(classes).toContain("cursor-default");
+      expect(classes).not.toContain("cursor-pointer");
+      expect(classes).not.toContain("hover:h-1.5");
+      unmount();
+    }
+  });
+
+  it("T-A2: with duration, hover reveals the thumb and keeps the rail interactive (both variants)", () => {
+    for (const variant of ["default", "top"] as const) {
+      const { unmount } = renderSeekBar({ variant });
+      act(() => {
+        fakeController._emit("durationchange", { duration: 240 });
+      });
+      const rail = screen.getByTestId("buffer-fill")
+        .parentElement as HTMLElement;
+
+      act(() => {
+        fireEvent.pointerEnter(rail, { pointerId: 1 });
+      });
+
+      const thumb = screen.getByTestId("seek-thumb");
+      expect(thumb.className).toContain("opacity-100");
+      expect(thumb.className).toContain("scale-100");
+
+      const classes = rail.className.split(" ");
+      expect(classes).toContain("cursor-pointer");
+      expect(classes).not.toContain("cursor-default");
+      if (variant === "top") expect(classes).toContain("hover:h-1.5");
+      unmount();
+    }
+  });
+
+  it("T-A3: only the top variant insets its root by half a thumb (px-1.5)", () => {
+    const top = renderSeekBar({ variant: "top" });
+    expect(
+      (top.container.firstElementChild as HTMLElement).className.split(" "),
+    ).toContain("px-1.5");
+    top.unmount();
+
+    const fallback = renderSeekBar();
+    expect(
+      (fallback.container.firstElementChild as HTMLElement).className.split(
+        " ",
+      ),
+    ).not.toContain("px-1.5");
   });
 });

@@ -1479,6 +1479,10 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     renderPlayer();
     expect(screen.getByTestId("seek-thumb").className).toContain("opacity-0");
 
+    // Slice A: the thumb only shows for a seekable track (duration > 0).
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
     const bar = mockBarRect();
     act(() => {
       fireEvent.pointerEnter(bar, { pointerId: 1 });
@@ -2349,6 +2353,11 @@ describe("TransportControls accessible names (P2-01-7 + P2-12-1 parity)", () => 
 describe("PlayerBar seek rail is the top variant (edge-to-edge at the bar's top edge)", () => {
   it("T7: renders an absolute full-width root, a downward-only hit area and hidden clocks", () => {
     renderPlayer();
+    // Slice A: hover grow + pointer cursor are gated on a seekable track, so
+    // the hover class only exists once a duration is known.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
+    });
 
     const rail = screen.getByTestId("buffer-fill").parentElement as HTMLElement;
     const root = rail.parentElement as HTMLElement;

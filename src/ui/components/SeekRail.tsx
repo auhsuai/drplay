@@ -39,9 +39,16 @@ export function SeekRail({
 }: SeekRailProps) {
   const { t } = useTranslation();
 
+  // No known duration = nothing to seek: keep the rail in its idle look
+  // (default cursor, no hover grow, no thumb) instead of advertising an
+  // interaction that cannot resolve to a position. NaN > 0 is false.
+  const seekable = duration > 0;
+
   const variantClasses =
     variant === "top"
-      ? "h-1 hover:h-1.5 transition-[height] before:top-0 before:h-3"
+      ? `h-1 before:top-0 before:h-3 transition-[height]${
+          seekable ? " hover:h-1.5" : ""
+        }`
       : "h-1.5 before:-inset-y-[9px]";
 
   return (
@@ -53,7 +60,9 @@ export function SeekRail({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className={`flex-1 bg-gray-300 dark:bg-[#2A2A2A] rounded-full cursor-pointer group relative flex items-center before:absolute before:inset-x-0 before:content-[''] ${variantClasses}`}
+      className={`flex-1 bg-gray-300 dark:bg-[#2A2A2A] rounded-full group relative flex items-center before:absolute before:inset-x-0 before:content-[''] ${
+        seekable ? "cursor-pointer" : "cursor-default"
+      } ${variantClasses}`}
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerMove={onPointerMove}
@@ -100,19 +109,21 @@ export function SeekRail({
       {/* Rail-anchored thumb (NOT inside the clipper): positioned from the
           rail's left edge via inline `left` % — at the same percent as the
           fill width this renders at the fill's end edge, identical visual
-          position to the old fill-anchored right-0, but it survives 0%/100%
-          where the clipper would cut the half-overhang (YT Music half-dot
-          convention). Hidden by default, visible only while the user
-          interacts (hover or drag). Tailwind v4 emits translate/scale as
-          INDEPENDENT CSS properties, so -translate-* and scale-* compose
-          without conflict and the transition must list translate/scale
-          explicitly for the fade + scale-in to animate. */}
+           position to the old fill-anchored right-0, but it survives 0%/100%
+           where the clipper would cut the half-overhang (YT Music half-dot
+           convention). Hidden by default, visible only while the user
+           interacts (hover or drag) AND the track is actually seekable —
+           hover over a not-yet-loaded track must not reveal it. Tailwind v4
+           emits translate/scale as INDEPENDENT CSS properties, so
+           -translate-* and scale-* compose without conflict and the
+           transition must list translate/scale explicitly for the fade +
+           scale-in to animate. */}
       <div
         ref={thumbRef}
         data-testid="seek-thumb"
         style={{ left: "0%" }}
         className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none transition-[opacity,transform,translate,scale] duration-150 ${
-          isHovering || isDragging
+          isDragging || (isHovering && seekable)
             ? "opacity-100 scale-100"
             : "opacity-0 scale-75"
         }`}
