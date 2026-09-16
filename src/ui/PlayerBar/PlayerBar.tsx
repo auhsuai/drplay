@@ -214,7 +214,7 @@ function PlayerBarImpl({
                 : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"
             }`}
           >
-            <List className="w-5 h-5" />
+            <List className="w-6 h-6" />
           </button>
         }
       />

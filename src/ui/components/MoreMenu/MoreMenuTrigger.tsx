@@ -5,6 +5,7 @@ interface MoreMenuTriggerProps {
   isOpen: boolean;
   isMenuOpen: boolean | undefined;
   isDownloadingFile: boolean;
+  large?: boolean | undefined;
   onToggle: () => void;
   onMeasure: (rect: DOMRect) => void;
   // APG optional: ArrowDown/ArrowUp open the menu and focus first/last item.
@@ -15,11 +16,13 @@ export function MoreMenuTrigger({
   isOpen,
   isMenuOpen,
   isDownloadingFile,
+  large = false,
   onToggle,
   onMeasure,
   onArrowOpen,
 }: MoreMenuTriggerProps) {
   const { t } = useTranslation();
+  const iconSize = large ? "w-6 h-6" : "w-5 h-5";
 
   return (
     <button
@@ -46,9 +49,9 @@ export function MoreMenuTrigger({
       className={`relative p-2 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/40 ${isDownloadingFile ? "cursor-default opacity-50" : "text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#33343a]"}`}
     >
       {isDownloadingFile ? (
-        <LoaderCircle className="w-5 h-5 animate-spin text-brand-text" />
+        <LoaderCircle className={`${iconSize} animate-spin text-brand-text`} />
       ) : (
-        <Ellipsis className="w-5 h-5" />
+        <Ellipsis className={iconSize} />
       )}
     </button>
   );

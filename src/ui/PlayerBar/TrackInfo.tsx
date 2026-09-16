@@ -275,7 +275,7 @@ export function TrackInfo({
             className={`transition-all duration-200 hover:scale-110 p-1 ${isLiked ? "text-brand-text" : "text-gray-400 hover:text-gray-900 dark:hover:text-white"}`}
           >
             <Heart
-              className="w-5 h-5"
+              className="w-6 h-6"
               fill={isLiked ? "currentColor" : "none"}
             />
           </button>

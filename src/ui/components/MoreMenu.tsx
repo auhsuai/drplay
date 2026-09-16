@@ -324,6 +324,7 @@ export function MoreMenu({
         isOpen={isOpen}
         isMenuOpen={isMenuOpen}
         isDownloadingFile={isDownloadingFile}
+        large={isPlayerBarMode}
         onToggle={() => {
           setIsOpen(!isOpen);
         }}
