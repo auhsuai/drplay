@@ -10,6 +10,14 @@ import { useSeekDrag } from "./useSeekDrag";
 import { useSeekHover } from "./useSeekHover";
 import { useSeekKeyboard } from "./useSeekKeyboard";
 
+/** Half the seek thumb's width. The thumb is w-3 (12px) in SeekRail and is
+ *  centered on its `left` position (-translate-x-1/2), so the whole thumb
+ *  stays inside a rail of width W only while its center sits in
+ *  [THUMB_HALF_PX, W - THUMB_HALF_PX] — the same half-thumb padding Android
+ *  SeekBar uses, applied to the thumb position instead of the track so the
+ *  rail itself can stay edge-to-edge. */
+const THUMB_HALF_PX = 6;
+
 export interface SeekBarProps {
   currentTrack: Track | null;
   audio: AudioController;
@@ -79,8 +87,28 @@ export function SeekBar({
     // the bridge push-gap; a VBR durationchange can also shrink under it), so
     // width/thumb/aria-valuenow must never leave the 0..100 range.
     const p = clamp(percent, 0, 100);
+    // Read the rail width BEFORE any style write: a write followed by a read
+    // would force a synchronous reflow (layout thrash). One read per call.
+    const railWidth = progressBarRef.current?.clientWidth ?? 0;
     progressFillRef.current.style.width = `${String(p)}%`;
-    if (thumbRef.current) thumbRef.current.style.left = `${String(p)}%`;
+    if (thumbRef.current) {
+      if (railWidth > 0) {
+        // Rail is edge-to-edge: the centered thumb would overhang half its
+        // width past the bar at 0%/100% and get cut by the shell's
+        // overflow-hidden, so clamp its center into the track (Android
+        // SeekBar half-thumb padding convention, applied to the position).
+        const center = clamp(
+          (p / 100) * railWidth,
+          THUMB_HALF_PX,
+          railWidth - THUMB_HALF_PX,
+        );
+        thumbRef.current.style.left = `${String(center)}px`;
+      } else {
+        // Width 0 = no layout yet (jsdom) — keep the plain % so the thumb
+        // still tracks the fill until a real width is measurable.
+        thumbRef.current.style.left = `${String(p)}%`;
+      }
+    }
     progressBarRef.current?.setAttribute(
       "aria-valuenow",
       String(Math.round(p)),
@@ -281,11 +309,10 @@ export function SeekBar({
     <div
       className={`w-full flex items-center gap-3${
         // The top rail spans the full content width edge-to-edge (absolute
-        // inset-x-0), so at 0%/100% the centered thumb overhangs half its
-        // width past the bar and gets clipped by the shell's overflow-hidden.
-        // px-1.5 = half the 12px thumb, insetting the track so the thumb's
-        // 0%/100% extremes stay inside the shell.
-        variant === "top" ? " absolute inset-x-0 top-0 px-1.5" : ""
+        // inset-x-0) — no side padding: the thumb's 0%/100% overhang is
+        // solved by the position clamp in setFillWidth, not by insetting the
+        // track.
+        variant === "top" ? " absolute inset-x-0 top-0" : ""
       }`}
     >
       <SeekClock timeTextRef={currentTimeTextRef} variant={variant} />

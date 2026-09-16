@@ -1480,11 +1480,18 @@ describe("SeekBar no-track guards (slice A: hover without a loaded track)", () =
     }
   });
 
-  it("T-A3: only the top variant insets its root by half a thumb (px-1.5)", () => {
+  it("T-A3: both variants keep the root edge-to-edge — no px-1.5 inset (slice A inset rejected)", () => {
+    // Slice A2 reverses the slice A `px-1.5` padding: the user requires the
+    // rail to touch both content-area edges, so the thumb overhang is solved
+    // by clamping the thumb position (T-C1) instead of insetting the track.
     const top = renderSeekBar({ variant: "top" });
-    expect(
-      (top.container.firstElementChild as HTMLElement).className.split(" "),
-    ).toContain("px-1.5");
+    const topClasses = (
+      top.container.firstElementChild as HTMLElement
+    ).className.split(" ");
+    expect(topClasses).toContain("absolute");
+    expect(topClasses).toContain("inset-x-0");
+    expect(topClasses).toContain("top-0");
+    expect(topClasses).not.toContain("px-1.5");
     top.unmount();
 
     const fallback = renderSeekBar();
@@ -1493,5 +1500,52 @@ describe("SeekBar no-track guards (slice A: hover without a loaded track)", () =
         " ",
       ),
     ).not.toContain("px-1.5");
+  });
+});
+
+describe("SeekBar thumb clamp inside the edge-to-edge rail (slice A2)", () => {
+  it("T-C1: with a laid-out rail the thumb center is clamped to [halfThumb, width - halfThumb] in px (both variants)", () => {
+    for (const variant of ["default", "top"] as const) {
+      const { unmount } = renderSeekBar({ variant });
+      const rail = screen.getByTestId("buffer-fill")
+        .parentElement as HTMLElement;
+      // jsdom performs no layout (clientWidth is always 0): pin the rail
+      // width so setFillWidth takes the absolute-px clamp path. 200px rail,
+      // 12px thumb → the center is clamped to [6, 194].
+      Object.defineProperty(rail, "clientWidth", {
+        value: 200,
+        configurable: true,
+      });
+
+      // duration 240s → currentTime maps 1:1 onto the percent.
+      const cases: Array<[number, string]> = [
+        [0, "6px"], // 0%: center 0 would overhang → clamp low
+        [60, "50px"], // 25%: center 50, inside the clamp
+        [120, "100px"], // 50%: center 100, inside the clamp
+        [237.6, "194px"], // 99%: center ~198 → clamp high
+        [240, "194px"], // 100%: center 200 → clamp high
+      ];
+      for (const [currentTime, expectedLeft] of cases) {
+        act(() => {
+          fakeController._emit("timeupdate", {
+            currentTime,
+            duration: 240,
+          });
+        });
+        expect(screen.getByTestId("seek-thumb").style.left).toBe(expectedLeft);
+      }
+      unmount();
+    }
+  });
+
+  it("T-C2: without layout (clientWidth 0) the thumb keeps the % fallback", () => {
+    renderSeekBar({ variant: "top" });
+    // No clientWidth mock: jsdom reports 0, so the rail has no measurable
+    // width and the legacy `${p}%` string must be written unchanged.
+    act(() => {
+      fakeController._emit("timeupdate", { currentTime: 120, duration: 240 });
+    });
+
+    expect(screen.getByTestId("seek-thumb").style.left).toBe("50%");
   });
 });
