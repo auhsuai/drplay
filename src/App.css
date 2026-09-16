@@ -38,6 +38,12 @@ body {
   --player-bg-fade: rgba(18, 18, 18, 0.85);
 }
 
+/* Hide focus outline on Tab/mouse — keep focus position and keyboard navigation intact */
+:focus,
+:focus-visible {
+  outline: none;
+}
+
 /* Hide scrollbar for Chrome, Safari and Opera */
 *::-webkit-scrollbar {
   display: none;
