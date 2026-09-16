@@ -145,7 +145,7 @@ export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
       <div
         ref={volumeBarRef}
         data-testid="volume-bar"
-        className="hidden xl:flex w-16 sm:w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center"
+        className="hidden xl:flex w-16 sm:w-28 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center"
         onPointerDown={handleVolumePointerDown}
       >
         <div
