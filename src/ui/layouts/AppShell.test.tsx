@@ -78,7 +78,7 @@ afterEach(() => {
 });
 
 describe("AppShell queue drawer", () => {
-  it("QueuePanel là anh em của tab content trong row (không nằm trong PlayerBar, không co list)", () => {
+  it("QueuePanel là anh em cùng cấp của tab content trong row (không nằm trong PlayerBar; list co lại nhường chỗ)", () => {
     render(<AppShell {...baseProps()} />);
 
     const pane = screen.getByTestId("queue-panel-stub");
@@ -90,6 +90,13 @@ describe("AppShell queue drawer", () => {
     expect(rowEl.className).toContain("overflow-hidden");
     expect(rowEl.contains(screen.getByTestId("tab-content-probe"))).toBe(true);
     expect(rowEl.contains(screen.getByTestId("player-bar-stub"))).toBe(false);
+
+    // The list column is the one that gives up width: flex-1 + min-w-0, so a
+    // docked pane (shrink-0 + width transition) narrows it in flow.
+    const column = pane.previousElementSibling as HTMLElement;
+    expect(column.className).toContain("flex-1");
+    expect(column.className).toContain("min-w-0");
+    expect(column.contains(screen.getByTestId("tab-content-probe"))).toBe(true);
 
     const playerWrapper = screen.getByTestId("player-bar-stub")
       .parentElement as HTMLElement;

@@ -435,11 +435,6 @@ describe("SettingsTab metadata fetch toggle", () => {
       name: "Fetch metadata",
     });
     expect(checkbox.checked).toBe(true);
-    expect(
-      screen.getByText(
-        "Read title, artist and cover art from your music files. Turn off to save Drive data.",
-      ),
-    ).toBeTruthy();
   });
 
   it("persists OFF to localStorage when toggled off", () => {

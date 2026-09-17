@@ -113,6 +113,9 @@ export async function listFolderChildren(
 // (same pagination pattern as fetchAllFolderPages). nextPageToken MUST stay in
 // the fields mask — Drive's partial response drops it otherwise. Keep
 // orderBy=folder,name so folders sort before files in the trash screen.
+// size/modifiedTime/trashedTime feed the trash screen's size and deleted-date
+// columns; trashedTime is only populated for shared-drive items, so My Drive
+// rows approximate the deleted date with modifiedTime (TrashItemRow fallback).
 export async function getTrashedFiles(
   token: string,
   query: string,
@@ -121,7 +124,7 @@ export async function getTrashedFiles(
   return fetchAllPages<DriveFileItem>(
     token,
     query,
-    "nextPageToken,files(id,name,mimeType)",
+    "nextPageToken,files(id,name,mimeType,size,modifiedTime,trashedTime)",
     "fetch trashed files",
     signal,
     "folder,name",

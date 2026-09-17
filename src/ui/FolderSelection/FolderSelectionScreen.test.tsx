@@ -378,7 +378,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
     expect(markers).not.toContain("empty");
   });
 
-  it("grid: the loading skeleton mirrors the real folder grid (3-col, h-full, auto-rows-fr)", async () => {
+  it("grid: the loading skeleton mirrors the real folder grid (3-col, natural row height)", async () => {
     renderScreen();
     await waitFor(() => {
       expect(deferredCalls).toHaveLength(1);
@@ -391,8 +391,10 @@ describe("FolderSelectionScreen skeleton loading", () => {
     const rows = screen.getAllByTestId("skeleton-row");
     expect(rows).toHaveLength(6);
     // The skeleton container mirrors the real list container
-    // (FolderSelectionScreen.tsx:393 grid grid-cols-1 sm:grid-cols-2
-    // lg:grid-cols-3 gap-3) so the shape does not jump when data loads.
+    // (FolderGrid.tsx:66 and FolderGrid.tsx:100 — grid grid-cols-1
+    // sm:grid-cols-2 lg:grid-cols-3 gap-3) so the shape does not jump when
+    // data loads. No h-full/auto-rows-fr: those stretched every row to split
+    // the list height, making each skeleton ~3x taller than a FolderCard.
     const row = rows[0];
     if (row === undefined) throw new Error("expected skeleton row");
     const container = row.parentElement;
@@ -401,8 +403,8 @@ describe("FolderSelectionScreen skeleton loading", () => {
       expect(container.className).toContain(
         "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3",
       );
-      expect(container.className).toContain("auto-rows-fr");
-      expect(container.className).toContain("h-full");
+      expect(container.className).not.toContain("auto-rows-fr");
+      expect(container.className).not.toContain("h-full");
     }
   });
 

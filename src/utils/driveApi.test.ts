@@ -1191,6 +1191,21 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
     expect(urls[0]).toContain("orderBy=folder,name");
   });
 
+  // Behavior contract: the trash screen's "Ngày xóa"/"Dung lượng" columns read
+  // size/modifiedTime/trashedTime, so the fields mask must request them.
+  // trashedTime is only populated for shared-drive items; My Drive falls back
+  // to modifiedTime in TrashItemRow (REST reference, File resource:
+  // developers.google.com/workspace/drive/api/reference/rest/v3/files).
+  it("requests size, modifiedTime and trashedTime in the fields mask", async () => {
+    const urls = captureTrashedUrls([{ files: makeTrashed(1, "m") }]);
+
+    await getTrashedFiles("tok", "trashed=true");
+
+    expect(urls[0]).toContain(
+      "fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,trashedTime)",
+    );
+  });
+
   // Error format is part of the public contract; a 404 must reject with the
   // exact same message the single-loop implementation produced.
   it("throws `Failed to fetch trashed files (status)` on a non-ok response", async () => {

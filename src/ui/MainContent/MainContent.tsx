@@ -218,7 +218,7 @@ export const MainContent = React.memo(function MainContent({
       <div
         data-testid="main-header-chrome"
         data-view-header
-        className="sticky top-0 px-8 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200"
+        className="sticky top-0 pl-8 pr-4 pt-8 pb-4 shrink-0 z-20 bg-white/95 dark:bg-[#121212]/95 shadow-[0_4px_20px_rgba(0,0,0,0.02)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.1)] transition-opacity duration-200"
       >
         <TopNavigationBar
           isSelectionMode={explorer.isSelectionMode}
@@ -262,7 +262,7 @@ export const MainContent = React.memo(function MainContent({
 
       <div
         data-drop-region
-        className="px-8 pb-6 pt-4"
+        className="pl-8 pr-4 pb-6 pt-4"
         style={{
           minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)`,
         }}
@@ -270,20 +270,14 @@ export const MainContent = React.memo(function MainContent({
         {activeTab === TABS.settings ? (
           <div className="text-gray-500">{t("settings.coming_soon")}</div>
         ) : isLoading ? (
-          // [data-drop-region] sizes itself with min-height only, so a
-          // percentage h-full inside it would not resolve. Give the skeleton
-          // wrapper the same min-height formula instead, then let
-          // SkeletonRowList (h-full + flex-1) and its rows (flex-1) share the
-          // space so the skeleton covers the whole loading region.
-          <div
-            role="status"
-            aria-label={t("loading")}
-            className="flex flex-col"
-            style={{
-              minHeight: `calc(100% - ${String(HEADER_CHROME_HEIGHT_PX)}px)`,
-            }}
-          >
-            <SkeletonRowList rows={skeletonRows} stretch className="flex-1" />
+          // Deterministic skeleton: SkeletonRowList keeps its natural row
+          // height (72px) + 12px gap and useSkeletonRows() already returns
+          // enough rows to cover the region. No percentage-derived wrapper
+          // and no flex-1 stretching — that relied on the WebView resolving
+          // min-height:calc(100% - 140px) inside the auto-height
+          // [data-drop-region] container.
+          <div role="status" aria-label={t("loading")}>
+            <SkeletonRowList rows={skeletonRows} />
           </div>
         ) : explorer.filteredItems.length === 0 ? (
           <div className="text-gray-500 py-10 text-center">

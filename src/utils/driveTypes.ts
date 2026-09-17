@@ -10,6 +10,10 @@ export interface DriveFileItem {
   trashed?: boolean;
   createdTime?: string;
   modifiedTime?: string;
+  // Output only, only populated for items in shared drives, so My Drive trash
+  // falls back to modifiedTime (REST reference, File resource:
+  // developers.google.com/workspace/drive/api/reference/rest/v3/files).
+  trashedTime?: string;
   md5Checksum?: string;
   capabilities?: Record<string, boolean>;
 }

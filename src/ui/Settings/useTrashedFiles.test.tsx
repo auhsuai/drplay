@@ -24,7 +24,14 @@ vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 
 import { useTrashedFiles } from "./useTrashedFiles";
 
-type FileItem = { id: string; name: string; mimeType: string };
+type FileItem = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  modifiedTime?: string;
+  trashedTime?: string;
+};
 
 type PendingCall = {
   token: string;
@@ -155,5 +162,52 @@ describe("useTrashedFiles stale-response guard (P2-05-5)", () => {
     expect(calls[0]?.signal?.aborted).toBe(true);
     expect(mocks.captureError).not.toHaveBeenCalled();
     expect(mocks.showErrorToast).not.toHaveBeenCalled();
+  });
+});
+
+// The trash row renders "Ngày xóa"/"Dung lượng" from these fields. Dropping
+// any of them in the mapping silently re-blanks the columns (the row falls
+// back to "—"), so the pass-through is pinned here.
+describe("useTrashedFiles metadata mapping (trash columns)", () => {
+  it("forwards size, modifiedTime and trashedTime from the Drive response", async () => {
+    installMock();
+    const { result } = renderTrashedFiles("token-a");
+
+    await act(async () => {
+      calls[0]?.resolve([
+        {
+          id: "m1",
+          name: "Track 1",
+          mimeType: "audio/mpeg",
+          size: "123456",
+          modifiedTime: "2026-09-01T10:00:00.000Z",
+          trashedTime: "2026-09-02T10:00:00.000Z",
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(result.current.items[0]).toMatchObject({
+      id: "m1",
+      size: "123456",
+      modifiedTime: "2026-09-01T10:00:00.000Z",
+      trashedTime: "2026-09-02T10:00:00.000Z",
+    });
+  });
+
+  it("leaves metadata undefined when Drive omits the fields (row renders —)", async () => {
+    installMock();
+    const { result } = renderTrashedFiles("token-a");
+
+    await act(async () => {
+      calls[0]?.resolve([
+        { id: "m2", name: "Track 2", mimeType: "audio/mpeg" },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(result.current.items[0]?.size).toBeUndefined();
+    expect(result.current.items[0]?.modifiedTime).toBeUndefined();
+    expect(result.current.items[0]?.trashedTime).toBeUndefined();
   });
 });

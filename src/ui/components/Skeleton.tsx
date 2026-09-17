@@ -82,7 +82,7 @@ export function SkeletonCardGrid({
         <div
           key={i}
           data-testid="skeleton-card"
-          className="flex flex-col gap-2"
+          className="flex flex-col gap-4"
         >
           <Skeleton className="aspect-square w-full rounded-2xl" />
           <div className="space-y-1.5">
@@ -124,27 +124,28 @@ export interface SkeletonRowListProps {
 // audio:  SongCard.tsx:321-328                p-3 / gap-4 / bg-[#F8F9FA] dark:bg-[#202124] + rounded-xl
 // folder: FolderSelectionScreen.tsx:44        p-4 / gap-4 / bg-[#F8F9FA] dark:bg-[#202124] + rounded-xl
 //                                              (HomeTab.tsx:269 is p-3.5 rounded-2xl — accepted 2px/2px skew)
-// trash:  TrashScreen.tsx:232-235             p-3 / gap-3 / bg-gray-50 dark:bg-[#202124] + rounded-xl
+// trash:  TrashItemRow.tsx                    h-12 / gap-3 / px-3, flat row + hairline divider (no card)
 const ROW_CLASS: Record<SkeletonRowVariant, string> = {
   audio:
     "flex items-center gap-4 p-3 bg-[#F8F9FA] dark:bg-[#202124] rounded-xl",
   folder:
     "flex items-center gap-4 p-4 bg-[#F8F9FA] dark:bg-[#202124] rounded-xl",
-  trash: "flex items-center gap-3 p-3 bg-gray-50 dark:bg-[#202124] rounded-xl",
+  trash:
+    "flex items-center gap-3 h-12 px-3 border-b border-gray-200 dark:border-[#2A2A2A]",
 };
 
 // Icon boxes: SongCard/FolderCard/JumpBackIn use 48px (w-12 h-12),
-// TrashScreen uses 40px (w-10 h-10); all rounded-lg. The ring mirrors the
+// TrashItemRow uses 32px (w-8 h-8); all rounded-lg. The ring mirrors the
 // real icon box boundary — real icons carry their own bg (audio:
 // bg-gray-200 dark:bg-[#121212] SongCard:339; folder: bg-amber-100
 // dark:bg-amber-900/30 FolderSelectionScreen:46; trash: bg-[#4285F4]/10
-// TrashScreen:256), skeletons have none, so the faint border keeps the
+// TrashItemRow), skeletons have none, so the faint border keeps the
 // icon vs text boundary visible.
 const ROW_ICON_CLASS: Record<SkeletonRowVariant, string> = {
   audio: "w-12 h-12 rounded-lg shrink-0 ring-1 ring-black/5 dark:ring-white/10",
   folder:
     "w-12 h-12 rounded-lg shrink-0 ring-1 ring-black/5 dark:ring-white/10",
-  trash: "w-10 h-10 rounded-lg shrink-0 ring-1 ring-black/5 dark:ring-white/10",
+  trash: "w-8 h-8 rounded-lg shrink-0 ring-1 ring-black/5 dark:ring-white/10",
 };
 
 // Title line maps to the real text size (15px → h-4, 14px → h-3.5); sub line
@@ -187,6 +188,13 @@ export function SkeletonRowList({
               <Skeleton key={j} className={lineClass} />
             ))}
           </div>
+          {variant === "trash" && (
+            <>
+              {/* Mirrors the row's deleted-date + size columns. */}
+              <Skeleton className="hidden sm:block w-24 h-3 rounded shrink-0" />
+              <Skeleton className="w-16 h-3 rounded shrink-0" />
+            </>
+          )}
         </div>
       ))}
     </div>

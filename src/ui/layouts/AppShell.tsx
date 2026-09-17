@@ -93,10 +93,11 @@ export function AppShell({
         id="content-area"
         className="flex-1 relative overflow-hidden flex flex-col"
       >
-        {/* Row: tab content + queue drawer side by side. The drawer is an
-            absolutely-positioned sibling (overlays the right side, the list
-            does NOT shrink); the row's overflow-hidden clips its off-screen
-            translate-x-full resting state. */}
+        {/* Row: tab content + queue pane side by side. The pane is an in-flow
+            sibling (docked): opening it shrinks the list column
+            (flex-1 min-w-0) instead of overlaying it, mirroring the sidebar
+            on the other side; the row's overflow-hidden clips the pane's
+            content while its width transition plays. */}
         <div className="flex-1 min-h-0 relative overflow-hidden flex">
           <div className="flex-1 min-w-0 min-h-0 flex flex-col">
             {/* Lazy tab chunks load on first visit — a compact blue spinner

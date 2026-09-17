@@ -101,49 +101,6 @@ vi.mock("../../utils/playlists", () => ({
   addTrackToPlaylist: vi.fn(() => Promise.resolve()),
 }));
 
-type ResizeCallback = (
-  entries: ResizeObserverEntry[],
-  observer: ResizeObserver,
-) => void;
-
-// jsdom ships no ResizeObserver. The stub captures the callbacks so a test
-// can simulate a layout change after mounting a measurable header.
-let resizeCallbacks: ResizeCallback[] = [];
-
-class ResizeObserverStub {
-  constructor(callback: ResizeCallback) {
-    resizeCallbacks.push(callback);
-  }
-  observe = vi.fn();
-  unobserve = vi.fn();
-  disconnect = vi.fn();
-}
-
-function triggerResize(): void {
-  for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
-}
-
-// jsdom implements no layout: offsetParent is always null and offsetHeight 0.
-// Tests define both explicitly to mimic a rendered sticky header.
-function mountHeader(
-  container: HTMLElement,
-  height: number,
-  visible = true,
-): HTMLElement {
-  const header = document.createElement("div");
-  header.setAttribute("data-view-header", "");
-  Object.defineProperty(header, "offsetHeight", {
-    configurable: true,
-    value: height,
-  });
-  Object.defineProperty(header, "offsetParent", {
-    configurable: true,
-    value: visible ? document.body : null,
-  });
-  container.appendChild(header);
-  return header;
-}
-
 function makeTrack(id: string, over: Partial<Track> = {}): Track {
   return {
     id,
@@ -190,15 +147,12 @@ function rowFor(title: string): HTMLElement {
 }
 
 beforeEach(() => {
-  resizeCallbacks = [];
-  vi.stubGlobal("ResizeObserver", ResizeObserverStub);
   scrollToIndexSpy.mockClear();
   seedQueue();
 });
 
 afterEach(() => {
   cleanup();
-  vi.unstubAllGlobals();
   usePlayerStore.setState({
     playbackQueue: [],
     originalQueue: [],
@@ -207,12 +161,15 @@ afterEach(() => {
   });
 });
 
-describe("QueuePanel drawer shell", () => {
-  it("chưa từng mở → shell nằm ngoài mép phải, aria-hidden + inert, KHÔNG render nội dung", () => {
+describe("QueuePanel docked shell", () => {
+  it("chưa từng mở → pane width 0, aria-hidden + inert, KHÔNG render nội dung", () => {
     renderPanel(false);
 
     const pane = screen.getByTestId("queue-panel");
-    expect(pane.className).toContain("translate-x-full");
+    expect(pane.className).toContain("w-0");
+    expect(pane.className).not.toContain("w-[400px]");
+    // No left border in any state: the pane never draws a seam against the list.
+    expect(pane.className).not.toContain("border-l");
     expect(pane.getAttribute("aria-hidden")).toBe("true");
     expect(pane.hasAttribute("inert")).toBe(true);
     expect(screen.queryByTestId("queue-overlay")).toBeNull();
@@ -220,12 +177,14 @@ describe("QueuePanel drawer shell", () => {
     expect(screen.queryByText(en.queue.title)).toBeNull();
   });
 
-  it("open=true → nội dung render, translate-x-0, bỏ overlay/backdrop", () => {
+  it("open=true → pane 400px không border, nội dung render, bỏ overlay/backdrop", () => {
     renderPanel(true);
 
     const pane = screen.getByTestId("queue-panel");
-    expect(pane.className).toContain("translate-x-0");
-    expect(pane.className).not.toContain("translate-x-full");
+    expect(pane.className).toContain("shrink-0");
+    expect(pane.className).toContain("w-[400px]");
+    expect(pane.className).not.toContain("w-0");
+    expect(pane.className).not.toContain("border-l");
     expect(pane.getAttribute("aria-hidden")).toBe("false");
     expect(pane.hasAttribute("inert")).toBe(false);
     expect(pane.className).not.toContain("backdrop-blur");
@@ -233,88 +192,24 @@ describe("QueuePanel drawer shell", () => {
     expect(screen.getByText(en.queue.title)).toBeTruthy();
   });
 
-  it("đóng sau khi mở → nội dung VẪN mount (exit animation) + trượt ra ngoài", () => {
+  it("đóng sau khi mở → nội dung VẪN mount (exit animation) + pane co về 0, dialog pin 400px", () => {
     const { props, view } = renderPanel(true);
     expect(screen.getByText(en.queue.title)).toBeTruthy();
 
     view.rerender(<QueuePanel {...props} open={false} />);
 
     const pane = screen.getByTestId("queue-panel");
-    expect(pane.className).toContain("translate-x-full");
+    expect(pane.className).toContain("w-0");
+    expect(pane.className).not.toContain("border-l");
     expect(pane.getAttribute("aria-hidden")).toBe("true");
     expect(pane.hasAttribute("inert")).toBe(true);
     expect(screen.getByText(en.queue.title)).toBeTruthy();
-  });
-});
 
-describe("QueuePanel top offset (sticky view header)", () => {
-  it("top = chiều cao header ĐANG HIỂN THỊ (bỏ qua header ẩn của view keep-alive)", () => {
-    const { view } = renderPanel(true);
-
-    mountHeader(view.container, 50, false);
-    mountHeader(view.container, 80, true);
-
-    act(() => {
-      triggerResize();
-    });
-
-    expect(screen.getByTestId("queue-panel").style.top).toBe("80px");
-  });
-
-  it("không có header hiển thị → top = 0px", () => {
-    const { view } = renderPanel(true);
-    expect(screen.getByTestId("queue-panel").style.top).toBe("0px");
-
-    mountHeader(view.container, 50, false);
-    act(() => {
-      triggerResize();
-    });
-
-    expect(screen.getByTestId("queue-panel").style.top).toBe("0px");
-  });
-
-  it("header mount MUỘN (tab content lazy) → MutationObserver đo lại, top = chiều cao header", async () => {
-    const { view } = renderPanel(true);
-    // Home: chưa có header nào (tab lazy chưa mount) → top 0.
-    expect(screen.getByTestId("queue-panel").style.top).toBe("0px");
-
-    // MyDrive header mount SAU khi effect đo đã chạy; scope không đổi size
-    // nên ResizeObserver không fire — chỉ MutationObserver bắt được.
-    mountHeader(view.container, 112, true);
-    await act(async () => {});
-
-    expect(screen.getByTestId("queue-panel").style.top).toBe("112px");
-  });
-
-  it("header mount muộn vẫn được ResizeObserver observe: đổi offsetHeight + resize → top cập nhật", async () => {
-    const { view } = renderPanel(true);
-
-    const header = mountHeader(view.container, 112, true);
-    await act(async () => {});
-    expect(screen.getByTestId("queue-panel").style.top).toBe("112px");
-
-    Object.defineProperty(header, "offsetHeight", {
-      configurable: true,
-      value: 70,
-    });
-    act(() => {
-      triggerResize();
-    });
-
-    expect(screen.getByTestId("queue-panel").style.top).toBe("70px");
-  });
-
-  it("header bị remove (rời tab) → MutationObserver đo lại, top về 0px", async () => {
-    const { view } = renderPanel(true);
-
-    const header = mountHeader(view.container, 112, true);
-    await act(async () => {});
-    expect(screen.getByTestId("queue-panel").style.top).toBe("112px");
-
-    header.remove();
-    await act(async () => {});
-
-    expect(screen.getByTestId("queue-panel").style.top).toBe("0px");
+    // Inner width is pinned: the 0-width pane must clip a 400px dialog, not
+    // squish its content while the width transition plays.
+    const dialog = pane.firstElementChild as HTMLElement;
+    expect(dialog.className).toContain("w-[400px]");
+    expect(dialog.className).toContain("shrink-0");
   });
 });
 

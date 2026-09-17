@@ -40,15 +40,14 @@ export function FolderGrid({
   return (
     <div className="flex-1 overflow-y-auto p-6 bg-white dark:bg-[#121212]">
       {isLoading && !isSearchingApi ? (
-        // The folder list is a definite-height flex child (dialog
-        // h-[75vh] flex-col), so h-full resolves and the stretch
-        // skeleton fills the whole region instead of leaving a blank
-        // band (RC-C).
-        <div role="status" aria-label={t("loading")} className="p-6 h-full">
+        // Skeleton container mirrors the real grid classes (see the two
+        // branches below) — no h-full/auto-rows-fr, which would stretch each
+        // row to split the list height and make items ~3x taller than a card.
+        <div role="status" aria-label={t("loading")} className="h-full">
           <SkeletonRowList
             rows={6}
             variant="folder"
-            containerClassName="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 h-full auto-rows-fr"
+            containerClassName="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"
           />
         </div>
       ) : searchQuery.trim() &&

@@ -6,10 +6,12 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler } from "react";
 import { TrashScreen } from "./TrashScreen";
+import { TrashItemRow } from "./TrashItemRow";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 // react-i18next has no initialized instance in the node test env, so stub
@@ -26,12 +28,10 @@ vi.mock("lucide-react", () => {
     "X",
     "RefreshCw",
     "LoaderCircle",
-    "TriangleAlert",
-    "FileHeadphone",
+    "Music",
     "Folder",
     "Check",
-    "SquareCheckBig",
-    "Ellipsis",
+    "Minus",
   ];
   // Render the className so tests can detect icon swaps (spinner vs idle).
   const Stub = (props: { className?: string }) => (
@@ -63,10 +63,20 @@ vi.mock("../../utils/simpleToast", () => ({
 }));
 vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 
+// Shape the mocked fetch resolves with. size/date stay optional so the
+// "metadata missing" path (today's real getTrashedFiles fields mask) and the
+// "metadata present" path (row formatting) are both testable.
+type TrashItemInput = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  modifiedTime?: string;
+  trashedTime?: string;
+};
+
 type DeferredCall = {
-  resolve: (
-    value: Array<{ id: string; name: string; mimeType: string }>,
-  ) => void;
+  resolve: (value: TrashItemInput[]) => void;
   reject: (err: unknown) => void;
 };
 
@@ -77,11 +87,9 @@ let deferredCalls: DeferredCall[] = [];
 function installGetTrashedFilesMock() {
   mocks.getTrashedFiles.mockImplementation(
     () =>
-      new Promise<Array<{ id: string; name: string; mimeType: string }>>(
-        (resolve, reject) => {
-          deferredCalls.push({ resolve, reject });
-        },
-      ),
+      new Promise<TrashItemInput[]>((resolve, reject) => {
+        deferredCalls.push({ resolve, reject });
+      }),
   );
 }
 
@@ -89,30 +97,22 @@ function renderScreen() {
   return render(<TrashScreen token="test-token" onClose={vi.fn()} />);
 }
 
-// Row container lookup that does NOT rely on the row's role: TrashItemRow only
-// publishes role="button" while in selection mode (P2-05-8), so tests outside
-// selection mode must find the container structurally.
+// Rows are flat divs without a button role: find the container structurally.
 function rowFor(name: string): HTMLElement {
-  const row = screen.getByText(name).closest("div.p-3");
+  const row = screen.getByText(name).closest('[data-testid="trash-row"]');
   if (row === null) throw new Error(`row for ${name} not found`);
   return row as HTMLElement;
 }
 
-function enterSelectionMode() {
-  const menuBtn = screen
-    .getAllByRole("button")
-    .find((b) => b.className.includes("p-1.5"));
-  if (menuBtn === undefined) throw new Error("menu button not found");
-  act(() => {
-    fireEvent.click(menuBtn);
-  });
-  fireEvent.click(screen.getByText("menu.select_multiple"));
+function rowCheckbox(name: string): HTMLInputElement {
+  return screen.getByRole<HTMLInputElement>("checkbox", { name });
 }
 
-async function renderWithItems(
-  items: Array<{ id: string; name: string; mimeType: string }>,
-  onClose = vi.fn(),
-) {
+function selectRow(name: string) {
+  fireEvent.click(rowCheckbox(name));
+}
+
+async function renderWithItems(items: TrashItemInput[], onClose = vi.fn()) {
   const view = render(<TrashScreen token="test-token" onClose={onClose} />);
   await waitFor(() => {
     expect(deferredCalls).toHaveLength(1);
@@ -214,7 +214,7 @@ describe("TrashScreen skeleton loading", () => {
     expect(markers).not.toContain("empty");
   });
 
-  it("stretch: the loading skeleton fills the whole list area (h-full wrapper, flex-1 rows)", async () => {
+  it("keeps the loading skeleton rows at their natural height (h-full wrapper, no flex-1, no h-full container)", async () => {
     renderScreen();
     await waitFor(() => {
       expect(deferredCalls).toHaveLength(1);
@@ -227,15 +227,164 @@ describe("TrashScreen skeleton loading", () => {
     const rows = screen.getAllByTestId("skeleton-row");
     expect(rows).toHaveLength(6);
     for (const row of rows) {
-      expect(row.className).toContain("flex-1");
+      expect(row.className).not.toContain("flex-1");
     }
     const row = rows[0];
     if (row === undefined) throw new Error("expected skeleton row");
     const wrapper = row.parentElement;
     expect(wrapper).not.toBeNull();
     if (wrapper) {
-      expect(wrapper.className).toContain("h-full");
+      // Flat list container (no gap): rows carry their own hairline divider.
+      expect(wrapper.className).toContain("flex flex-col");
+      expect(wrapper.className).not.toContain("gap-");
+      expect(wrapper.className).not.toContain("h-full");
     }
+  });
+});
+
+describe("TrashScreen flat list layout", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders flat rows with a hairline divider instead of per-row cards", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+
+    const row = rowFor("Track 1");
+    expect(row.className).toContain("h-12");
+    expect(row.className).toContain("border-b");
+    expect(row.className).not.toContain("rounded-xl");
+    expect(row.className.split(/\s+/)).not.toContain("p-3");
+  });
+
+  it("shows the 30-day note under the title instead of the warning banner + menu", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+
+    const note = screen.getByText("settings.trash_warning");
+    expect(note.className).toContain("text-xs");
+    expect(note.className).toContain("text-gray-500");
+    expect(document.getElementById("trash-title")?.textContent).toBe(
+      "settings.trash",
+    );
+    expect(screen.queryByText("settings.trash_desc")).toBeNull();
+    expect(screen.queryByText("menu.select_multiple")).toBeNull();
+  });
+
+  it("falls back to — for the deleted-date and size columns when Drive returns no such fields", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+
+    expect(screen.getAllByText("—")).toHaveLength(2);
+  });
+
+  it("keeps the row action cluster revealable by hover and keyboard focus", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+
+    const row = rowFor("Track 1");
+    expect(row.className).toContain("group");
+    const actions = row.querySelector('[class*="group-hover:opacity-100"]');
+    expect(actions).not.toBeNull();
+    const actionsEl = actions as HTMLElement;
+    expect(actionsEl.className).toContain("opacity-0");
+    expect(actionsEl.className).toContain("group-focus-within:opacity-100");
+    expect(
+      within(row).getByRole("button", { name: "settings.restore" }),
+    ).not.toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "settings.trash_delete_item" }),
+    ).not.toBeNull();
+  });
+});
+
+describe("TrashScreen selection + select all", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("hides the bulk toolbar until something is checked", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+
+    expect(screen.queryByText("settings.trash_restore_selected")).toBeNull();
+    expect(screen.queryByText("settings.trash_delete_selected")).toBeNull();
+    expect(screen.getByText("settings.empty_trash")).not.toBeNull();
+  });
+
+  it("row checkbox toggles the selection and reveals the bulk toolbar", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+
+    selectRow("Track 1");
+
+    expect(rowCheckbox("Track 1").checked).toBe(true);
+    expect(rowCheckbox("Track 2").checked).toBe(false);
+    expect(screen.getByText("1 common.selected")).not.toBeNull();
+    expect(screen.getByText("settings.trash_restore_selected")).not.toBeNull();
+    expect(screen.getByText("settings.trash_delete_selected")).not.toBeNull();
+    expect(screen.queryByText("settings.empty_trash")).toBeNull();
+  });
+
+  it("select all checks every row; unselect all clears them", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "settings.trash_select_all" }),
+    );
+
+    expect(rowCheckbox("Track 1").checked).toBe(true);
+    expect(rowCheckbox("Track 2").checked).toBe(true);
+    expect(screen.getByText("2 common.selected")).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "settings.trash_unselect_all" }),
+    );
+
+    expect(rowCheckbox("Track 1").checked).toBe(false);
+    expect(rowCheckbox("Track 2").checked).toBe(false);
+    expect(screen.queryByText("settings.trash_restore_selected")).toBeNull();
+  });
+
+  it("marks the select-all box indeterminate when only some rows are checked", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+
+    const selectAll = screen.getByRole<HTMLInputElement>("checkbox", {
+      name: "settings.trash_select_all",
+    });
+    expect(selectAll.indeterminate).toBe(false);
+
+    selectRow("Track 1");
+
+    expect(selectAll.indeterminate).toBe(true);
+    expect(selectAll.checked).toBe(false);
   });
 });
 
@@ -256,16 +405,15 @@ describe("TrashScreen bulk operations", () => {
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
       { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
     ]);
-    enterSelectionMode();
-    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
-    fireEvent.click(screen.getByRole("button", { name: "Track 2" }));
+    selectRow("Track 1");
+    selectRow("Track 2");
     expect(screen.getByText("2 common.selected")).toBeTruthy();
 
     mocks.driveApi.restoreFile.mockResolvedValueOnce({ id: "f1" });
     mocks.driveApi.restoreFile.mockRejectedValueOnce(new Error("drive 500"));
 
     await act(async () => {
-      fireEvent.click(screen.getByText("settings.restore"));
+      fireEvent.click(screen.getByText("settings.trash_restore_selected"));
       await Promise.resolve();
     });
 
@@ -278,7 +426,7 @@ describe("TrashScreen bulk operations", () => {
       );
     });
     expect(screen.getByText("1 common.selected")).toBeTruthy();
-    expect(screen.getByText("common.delete")).toBeTruthy();
+    expect(screen.getByText("settings.trash_delete_selected")).toBeTruthy();
     const loggedMessages = mocks.captureError.mock.calls
       .map((call) => call[0].message)
       .join("\n");
@@ -290,9 +438,8 @@ describe("TrashScreen bulk operations", () => {
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
       { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
     ]);
-    enterSelectionMode();
-    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
-    fireEvent.click(screen.getByRole("button", { name: "Track 2" }));
+    selectRow("Track 1");
+    selectRow("Track 2");
 
     vi.spyOn(window, "confirm").mockReturnValue(true);
     mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
@@ -301,7 +448,7 @@ describe("TrashScreen bulk operations", () => {
     );
 
     await act(async () => {
-      fireEvent.click(screen.getByText("common.delete"));
+      fireEvent.click(screen.getByText("settings.trash_delete_selected"));
       await Promise.resolve();
     });
 
@@ -314,7 +461,7 @@ describe("TrashScreen bulk operations", () => {
       );
     });
     expect(screen.getByText("1 common.selected")).toBeTruthy();
-    expect(screen.getByText("common.delete")).toBeTruthy();
+    expect(screen.getByText("settings.trash_delete_selected")).toBeTruthy();
     const loggedMessages = mocks.captureError.mock.calls
       .map((call) => call[0].message)
       .join("\n");
@@ -326,12 +473,11 @@ describe("TrashScreen bulk operations", () => {
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
       { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
     ]);
-    enterSelectionMode();
-    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+    selectRow("Track 1");
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
 
     await act(async () => {
-      fireEvent.click(screen.getByText("common.delete"));
+      fireEvent.click(screen.getByText("settings.trash_delete_selected"));
       await Promise.resolve();
     });
 
@@ -425,12 +571,11 @@ describe("TrashScreen per-row restore state (P2-05-7)", () => {
     fireEvent.click(restoreButtons[0] as HTMLElement);
     fireEvent.click(restoreButtons[1] as HTMLElement);
 
-    expect(
-      rowFor("Track 1").querySelector("button")?.hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      rowFor("Track 2").querySelector("button")?.hasAttribute("disabled"),
-    ).toBe(true);
+    const restoreButtonFor = (name: string) =>
+      within(rowFor(name)).getByRole("button", { name: "settings.restore" });
+
+    expect(restoreButtonFor("Track 1").hasAttribute("disabled")).toBe(true);
+    expect(restoreButtonFor("Track 2").hasAttribute("disabled")).toBe(true);
     expect(rowFor("Track 2").querySelector(".animate-spin")).not.toBeNull();
 
     // Row A finishes while row B is still in flight: B keeps its own
@@ -441,9 +586,7 @@ describe("TrashScreen per-row restore state (P2-05-7)", () => {
     });
 
     expect(screen.queryByText("Track 1")).toBeNull();
-    expect(
-      rowFor("Track 2").querySelector("button")?.hasAttribute("disabled"),
-    ).toBe(true);
+    expect(restoreButtonFor("Track 2").hasAttribute("disabled")).toBe(true);
     expect(rowFor("Track 2").querySelector(".animate-spin")).not.toBeNull();
 
     await act(async () => {
@@ -451,6 +594,99 @@ describe("TrashScreen per-row restore state (P2-05-7)", () => {
       await Promise.resolve();
     });
     expect(screen.queryByText("Track 2")).toBeNull();
+  });
+});
+
+describe("TrashScreen per-row permanent delete", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("confirms, permanently deletes the row and prunes it from the selection", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
+    ]);
+    selectRow("Track 1");
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("Track 1")).getByRole("button", {
+          name: "settings.trash_delete_item",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(confirmSpy).toHaveBeenCalledWith("settings.trash_delete_confirm");
+    await waitFor(() => {
+      expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledWith(
+        "test-token",
+        "f1",
+      );
+      expect(screen.queryByText("Track 1")).toBeNull();
+    });
+    expect(screen.getByText("Track 2")).not.toBeNull();
+    expect(screen.queryByText("settings.trash_restore_selected")).toBeNull();
+  });
+
+  it("cancelled confirm -> no delete request and the row stays", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("Track 1")).getByRole("button", {
+          name: "settings.trash_delete_item",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(confirmSpy).toHaveBeenCalledWith("settings.trash_delete_confirm");
+    expect(mocks.driveApi.permanentlyDeleteFile).not.toHaveBeenCalled();
+    expect(screen.getByText("Track 1")).not.toBeNull();
+  });
+
+  it("failure -> captureError + toast and the row stays", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
+      new Error("drive 500"),
+    );
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("Track 1")).getByRole("button", {
+          name: "settings.trash_delete_item",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.showErrorToast).toHaveBeenCalledWith(
+        "settings.trash_delete_error",
+      );
+    });
+    expect(screen.getByText("Track 1")).not.toBeNull();
+    const loggedMessages = mocks.captureError.mock.calls
+      .map((call) => call[0].message)
+      .join("\n");
+    expect(loggedMessages).toContain("delete-item-failed");
   });
 });
 
@@ -649,15 +885,14 @@ describe("TrashScreen dialog a11y (P2-05-6)", () => {
       [{ id: "f1", name: "Track 1", mimeType: "audio/mpeg" }],
       onClose,
     );
-    enterSelectionMode();
-    fireEvent.click(screen.getByRole("button", { name: "Track 1" }));
+    selectRow("Track 1");
     vi.spyOn(window, "confirm").mockReturnValue(true);
     mocks.driveApi.permanentlyDeleteFile.mockImplementation(
       () => new Promise<never>(() => undefined),
     );
 
     await act(async () => {
-      fireEvent.click(screen.getByText("common.delete"));
+      fireEvent.click(screen.getByText("settings.trash_delete_selected"));
       await Promise.resolve();
     });
 
@@ -679,7 +914,7 @@ describe("TrashScreen dialog a11y (P2-05-6)", () => {
   });
 });
 
-describe("TrashItemRow semantics (P2-05-8)", () => {
+describe("TrashItemRow semantics (checkbox replaces the row-as-button toggle)", () => {
   beforeEach(() => {
     deferredCalls = [];
     vi.clearAllMocks();
@@ -690,7 +925,7 @@ describe("TrashItemRow semantics (P2-05-8)", () => {
     cleanup();
   });
 
-  it("outside selection mode the row is neither a button nor a tab stop", async () => {
+  it("rows are neither buttons nor tab stops; the checkbox carries the toggle", async () => {
     await renderWithItems([
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
     ]);
@@ -699,19 +934,72 @@ describe("TrashItemRow semantics (P2-05-8)", () => {
     const row = rowFor("Track 1");
     expect(row.getAttribute("role")).toBeNull();
     expect(row.getAttribute("tabindex")).toBeNull();
+    expect(rowCheckbox("Track 1")).not.toBeNull();
   });
 
-  it("in selection mode the row is a keyboard-reachable toggle again", async () => {
+  it("clicking a row checkbox selects exactly that row", async () => {
     await renderWithItems([
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
       { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
     ]);
-    enterSelectionMode();
 
-    const row = screen.getByRole("button", { name: "Track 1" });
-    expect(row.getAttribute("tabindex")).toBe("0");
+    selectRow("Track 1");
 
-    fireEvent.click(row);
-    expect(screen.getByText("1 common.selected")).toBeTruthy();
+    expect(screen.getByText("1 common.selected")).not.toBeNull();
+    expect(rowCheckbox("Track 1").checked).toBe(true);
+    expect(rowCheckbox("Track 2").checked).toBe(false);
+  });
+});
+
+describe("TrashItemRow metadata columns", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("formats size and modifiedTime when the row receives them", () => {
+    const modifiedTime = "2026-01-02T00:00:00.000Z";
+    render(
+      <TrashItemRow
+        item={{
+          id: "f9",
+          name: "Track 9",
+          mimeType: "audio/mpeg",
+          size: "1048576",
+          modifiedTime,
+        }}
+        isSelected={false}
+        isRestoring={false}
+        isDeleting={false}
+        onToggle={vi.fn()}
+        onRestore={vi.fn(() => Promise.resolve())}
+        onDelete={vi.fn(() => Promise.resolve())}
+      />,
+    );
+
+    expect(screen.getByText("1 MB")).not.toBeNull();
+    expect(
+      screen.getByText(new Date(modifiedTime).toLocaleDateString()),
+    ).not.toBeNull();
+  });
+
+  it("renders — for a folder (no size) and a malformed date", () => {
+    render(
+      <TrashItemRow
+        item={{
+          id: "d1",
+          name: "Folder 1",
+          mimeType: "application/vnd.google-apps.folder",
+          modifiedTime: "not-a-date",
+        }}
+        isSelected={false}
+        isRestoring={false}
+        isDeleting={false}
+        onToggle={vi.fn()}
+        onRestore={vi.fn(() => Promise.resolve())}
+        onDelete={vi.fn(() => Promise.resolve())}
+      />,
+    );
+
+    expect(screen.getAllByText("—")).toHaveLength(2);
   });
 });

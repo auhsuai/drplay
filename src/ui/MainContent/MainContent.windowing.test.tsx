@@ -212,28 +212,29 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
     expect(screen.queryByTestId("song-card")).toBeNull();
   });
 
-  it("stretch: loading skeleton fills the drop region (minHeight formula + h-full container + flex-1 rows) and never shows the empty state", () => {
+  it("skeleton rows keep their natural 72px + 12px pitch (no min-height wrapper, no flex-1 stretch) and never show the empty state", () => {
     render(<MainContent {...baseProps} isLoading={true} />);
     const status = screen.getByRole("status", { name: "loading" });
-    // The wrapper must size itself to the region below the header chrome
-    // (HEADER_CHROME_HEIGHT_PX = 140) — a plain h-full would not resolve
-    // against the auto-height [data-drop-region] container.
-    expect(status.style.minHeight).toBe("calc(100% - 140px)");
-    expect(status.className).toContain("flex");
+    // Row height must be deterministic: nothing may depend on the WebView
+    // resolving min-height:calc(100% - 140px) inside the auto-height
+    // [data-drop-region] container.
+    expect(status.style.minHeight).toBe("");
     const rows = screen.getAllByTestId("skeleton-row");
     expect(rows).toHaveLength(
       Math.max(4, Math.ceil((window.innerHeight - 140) / 72)),
     );
     for (const row of rows) {
-      expect(row.className).toContain("flex-1");
+      expect(row.className).not.toContain("flex-1");
     }
-    // The SkeletonRowList container itself stretches to fill the wrapper.
+    // SkeletonRowList keeps its natural container: gap-3 (12px) mirrors the
+    // real list's pb-3 wrapper, so the pitch stays 72px + 12px = SongCard rows.
     const row = rows[0];
     if (row === undefined) throw new Error("expected skeleton row");
     const container = row.parentElement;
     expect(container).not.toBeNull();
     if (container) {
-      expect(container.className).toContain("h-full");
+      expect(container.className).not.toContain("h-full");
+      expect(container.className).toContain("gap-3");
     }
     // While loading, the empty-state branch must never be reachable.
     expect(screen.queryByText("drive.no_audio")).toBeNull();

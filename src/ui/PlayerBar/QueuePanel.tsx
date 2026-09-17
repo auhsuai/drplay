@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, X } from "lucide-react";
@@ -40,18 +40,13 @@ export interface QueuePanelProps {
 }
 
 /**
- * Play-queue drawer docked to the right edge of the tab-content row in
- * AppShell: the actual playback order (playbackQueue), with search, per-row
- * menu and multi-select bulk removal. Rendered
- * inline (no portal/overlay) — the app stays usable while the pane slides
- * over the right side of the list, matching the sidebar's 300ms rhythm.
+ * Play-queue pane docked at the same level as the tab content in AppShell:
+ * the actual playback order (playbackQueue), with search, per-row menu and
+ * multi-select bulk removal. Rendered inline (no portal/overlay) — opening it
+ * takes width away from the list in flow (the list column shrinks) instead of
+ * covering it, mirroring the sidebar's 300ms width transition on the left.
  */
-export function QueuePanel({
-  open,
-  onClose,
-  onSelectTrack,
-  activeTab,
-}: QueuePanelProps) {
+export function QueuePanel({ open, onClose, onSelectTrack }: QueuePanelProps) {
   const { t } = useTranslation();
   const { playbackQueue, currentTrack } = usePlayerStore(
     useShallow((s) => ({
@@ -118,7 +113,7 @@ export function QueuePanel({
   // Reset transient UI on every reopen — adjusted during render (React
   // "adjusting state during render" pattern) so no setState runs inside an
   // effect. hasOpened flips once: after the first open the pane CONTENT stays
-  // mounted so the slide-out transition can play (and scroll/selection survive
+  // mounted so the close transition can play (and scroll/selection survive
   // a close); before that first open only the empty shell renders — mounting
   // the virtualized list and its row menus for a drawer nobody has seen is
   // pure waste.
@@ -159,74 +154,6 @@ export function QueuePanel({
           (track) => track.folderGroupId === effectiveFolderId,
         )?.folderGroupName ?? "");
 
-  // The drawer top aligns with the sticky header of the ACTIVE view: the
-  // header is measured at runtime, so a view without one (LikedSongs,
-  // Settings) keeps top 0. HomeTab keeps its other views mounted but hidden
-  // (display:none → offsetParent null) — only VISIBLE headers count.
-  // ResizeObserver also fires its initial observation right after observe(),
-  // which is how the first measurement lands (no synchronous setState in the
-  // effect body). Tab content is lazy (Suspense), so on a first visit the
-  // header mounts AFTER this effect ran; if the scope keeps its size no
-  // ResizeObserver tick follows and topOffset would stay stuck at the
-  // previous view's value — hence the MutationObserver below.
-  const paneRef = useRef<HTMLElement | null>(null);
-  const [topOffset, setTopOffset] = useState(0);
-  useLayoutEffect(() => {
-    if (!open) return;
-    const scope = paneRef.current?.parentElement;
-    if (!scope) return;
-
-    const measure = () => {
-      const headers = scope.querySelectorAll<HTMLElement>("[data-view-header]");
-      for (const header of headers) {
-        if (header.offsetParent !== null) {
-          // A header that mounted after this effect ran was never observed
-          // (the loop below only saw the then-existing nodes): observing it
-          // here is idempotent, missing it would freeze its measured size.
-          observer.observe(header);
-          setTopOffset(header.offsetHeight);
-          return;
-        }
-      }
-      setTopOffset(0);
-    };
-
-    const observer = new ResizeObserver(measure);
-    // Observe the scope itself too: with no header (or a still-hidden one the
-    // observer cannot observe) the initial observation still fires and
-    // resolves topOffset back to 0 — a stale height from the previous tab
-    // must never leak into the new one.
-    observer.observe(scope);
-    for (const header of scope.querySelectorAll("[data-view-header]")) {
-      observer.observe(header);
-    }
-
-    // Lazy tab content mounts its header after the effect ran; catch that
-    // insert/removal directly. Filtering to nodes that are (or carry) a
-    // [data-view-header] keeps ordinary re-renders inside the scope — the
-    // panel itself lives here — from triggering needless measurements.
-    const mutationObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
-          if (!(node instanceof Element)) continue;
-          if (
-            node.matches("[data-view-header]") ||
-            node.querySelector("[data-view-header]")
-          ) {
-            measure();
-            return;
-          }
-        }
-      }
-    });
-    mutationObserver.observe(scope, { childList: true, subtree: true });
-
-    return () => {
-      observer.disconnect();
-      mutationObserver.disconnect();
-    };
-  }, [open, activeTab]);
-
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -239,17 +166,15 @@ export function QueuePanel({
   }, [open, onClose]);
 
   return (
-    // eslint-disable-next-line jsx-a11y/no-redundant-roles -- explicit role is part of the drawer's fixed contract; <aside> implies the same complementary role.
+    // eslint-disable-next-line jsx-a11y/no-redundant-roles -- explicit role is part of the pane's fixed contract; <aside> implies the same complementary role.
     <aside
-      ref={paneRef}
       data-testid="queue-panel"
       role="complementary"
       aria-label={t("queue.title")}
       aria-hidden={!open}
       inert={!open}
-      style={{ top: topOffset }}
-      className={`absolute right-0 bottom-0 w-[400px] flex flex-col bg-white dark:bg-[#121212] border-l border-gray-200/50 dark:border-gray-800/50 transition-transform duration-300 ease-in-out ${
-        open ? "translate-x-0" : "translate-x-full"
+      className={`shrink-0 h-full flex flex-col overflow-hidden bg-white dark:bg-[#121212] transition-all duration-300 ease-in-out ${
+        open ? "w-[400px]" : "w-0"
       }`}
     >
       {hasOpened ? (
@@ -320,7 +245,7 @@ function QueuePanelDialog({
   const { t } = useTranslation();
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
+    <div className="flex w-[400px] shrink-0 flex-1 min-h-0 flex-col gap-4 pl-4 pr-8 pt-8">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-bold text-gray-900 dark:text-white">
           {t("queue.title")}

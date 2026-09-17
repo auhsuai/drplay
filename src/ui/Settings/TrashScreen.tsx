@@ -1,19 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import {
-  Trash2,
-  X,
-  RefreshCw,
-  LoaderCircle,
-  TriangleAlert,
-  SquareCheckBig,
-  Ellipsis,
-} from "lucide-react";
+import { Trash2, X, RefreshCw, LoaderCircle, Check, Minus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SkeletonRowList } from "../components/Skeleton";
 import { restoreFile, permanentlyDeleteFile } from "../../utils/driveApi";
 import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
-import { useClickOutside } from "../../hooks/useClickOutside";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 import { TrashItemRow } from "./TrashItemRow";
 import {
@@ -29,41 +20,42 @@ interface TrashScreenProps {
   onClose: () => void;
 }
 
+// Set membership toggle shared by the per-row busy indicators and the
+// selection set (add/remove one id without duplicating the Set dance).
+const withMembership = (
+  prev: Set<string>,
+  id: string,
+  on: boolean,
+): Set<string> => {
+  const next = new Set(prev);
+  if (on) next.add(id);
+  else next.delete(id);
+  return next;
+};
+
 export function TrashScreen({ token, onClose }: TrashScreenProps) {
   const { t } = useTranslation();
   const { items, setItems, isLoading, setIsLoading } = useTrashedFiles(token);
   const [isEmptying, setIsEmptying] = useState(false);
-  // A Set, not a single slot: two restores can be in flight at once, and one
-  // completing must not clear the other's spinner/disabled state.
+  // A Set, not a single slot: two restores/deletes can be in flight at once,
+  // and one completing must not clear the other's spinner/disabled state.
   const [restoringIds, setRestoringIds] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const markRestoring = (id: string, on: boolean) => {
-    setRestoringIds((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
+    setRestoringIds((prev) => withMembership(prev, id, on));
+  };
+  const markDeleting = (id: string, on: boolean) => {
+    setDeletingIds((prev) => withMembership(prev, id, on));
   };
 
-  // Selection states
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  // Selection states — the row checkboxes are always visible, so there is no
+  // separate "selection mode" to enter/leave.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkActioning, setIsBulkActioning] = useState(false);
+  const allSelected = items.length > 0 && selectedIds.size === items.length;
+  const someSelected = selectedIds.size > 0 && !allSelected;
 
-  // More menu state
-  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
-  const moreMenuRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-
-  // Listener exists only while the menu is open (active flag), matching the
-  // previous conditional-add/remove effect exactly.
-  useClickOutside(
-    moreMenuRef,
-    () => {
-      setIsMoreMenuOpen(false);
-    },
-    isMoreMenuOpen,
-  );
 
   // APG dialog-modal (P2-05-6): initial focus moves into the dialog (the Close
   // button is the first control) and the invoker is remembered so focus returns
@@ -150,6 +142,27 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     }
   };
 
+  // Per-row permanent delete (new): confirm first, log + toast on failure,
+  // prune the id from the selection so the bulk toolbar count stays accurate.
+  const handleDelete = async (id: string) => {
+    if (!window.confirm(t("settings.trash_delete_confirm"))) return;
+    markDeleting(id, true);
+    try {
+      await permanentlyDeleteFile(token, id);
+      setItems((prev) => prev.filter((item) => item.id !== id));
+      setSelectedIds((prev) => withMembership(prev, id, false));
+    } catch (e) {
+      void captureError({
+        level: "error",
+        source: TRASH_MODULE,
+        message: `delete-item-failed: ${describeError(e)}`,
+      });
+      showErrorToast(t("settings.trash_delete_error"));
+    } finally {
+      markDeleting(id, false);
+    }
+  };
+
   const handleEmptyTrash = async () => {
     if (!window.confirm(t("settings.confirm_empty_trash"))) {
       return;
@@ -203,7 +216,6 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         setSelectedIds((prev) => removeIdsFromSelection(prev, succeededIds));
       } else {
         setSelectedIds(new Set());
-        setIsSelectionMode(false);
       }
     } catch (e) {
       void captureError({
@@ -236,7 +248,6 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         setSelectedIds((prev) => removeIdsFromSelection(prev, succeededIds));
       } else {
         setSelectedIds(new Set());
-        setIsSelectionMode(false);
       }
     } catch (e) {
       void captureError({
@@ -259,6 +270,12 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     });
   };
 
+  const toggleAll = () => {
+    setSelectedIds(
+      allSelected ? new Set() : new Set(items.map((item) => item.id)),
+    );
+  };
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
@@ -274,36 +291,18 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         aria-labelledby="trash-title"
         className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
       >
-        {/* Header */}
-        <div className="px-6 py-5 flex items-center justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
-              <svg
-                className="w-5 h-5 text-brand-text"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                ></path>
-              </svg>
-            </div>
-            <div>
-              <h1
-                id="trash-title"
-                className="text-lg font-bold text-gray-900 dark:text-white"
-              >
-                {t("settings.trash")}
-              </h1>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {t("settings.trash_desc")}
-              </p>
-            </div>
+        {/* Header — title + the 30-day note, Close on the right */}
+        <div className="px-6 py-4 flex items-start justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
+          <div className="min-w-0">
+            <h1
+              id="trash-title"
+              className="text-lg font-bold text-gray-900 dark:text-white"
+            >
+              {t("settings.trash")}
+            </h1>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {t("settings.trash_warning")}
+            </p>
           </div>
           <button
             ref={closeButtonRef}
@@ -316,17 +315,17 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
         </div>
 
         {/* List */}
-        <div className="flex-1 overflow-y-auto p-4 bg-white dark:bg-[#121212]">
+        <div className="flex-1 overflow-y-auto bg-white dark:bg-[#121212]">
           {isLoading ? (
-            // The list area is a definite-height flex child (dialog h-[70vh]
-            // flex-col), so h-full resolves and the stretch skeleton fills
-            // the whole region instead of leaving a blank band (RC-C).
-            <div role="status" aria-label={t("loading")} className="p-4 h-full">
+            // Skeleton rows mirror the flat TrashItemRow (h-12 rows with a
+            // hairline divider): no stretch and no h-full on the container,
+            // which divided the list height across rows and made them up to
+            // ~2x taller on tall screens.
+            <div role="status" aria-label={t("loading")} className="h-full">
               <SkeletonRowList
                 rows={6}
                 variant="trash"
-                stretch
-                containerClassName="flex flex-col gap-2 h-full"
+                containerClassName="flex flex-col"
               />
             </div>
           ) : items.length === 0 ? (
@@ -337,70 +336,58 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
               </h3>
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between px-1 py-3 mb-2">
-                <div className="flex items-center gap-2 text-sm text-brand-text font-medium">
-                  <TriangleAlert className="w-5 h-5 shrink-0" />
-                  <p>{t("settings.trash_warning")}</p>
-                </div>
-                <div className="relative" ref={moreMenuRef}>
-                  {isSelectionMode ? (
-                    <button
-                      onClick={() => {
-                        setIsSelectionMode(false);
-                        setSelectedIds(new Set());
+            <>
+              <div className="sticky top-0 z-10 flex h-9 items-center border-b border-gray-200 bg-white px-3 dark:border-[#2A2A2A] dark:bg-[#121212]">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <span className="relative inline-flex shrink-0">
+                    <input
+                      ref={(el) => {
+                        // Native partial state: checked stays false while only
+                        // some rows are selected.
+                        if (el) el.indeterminate = someSelected;
                       }}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
-                    >
-                      {t("common.cancel")}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setIsMoreMenuOpen(!isMoreMenuOpen);
-                      }}
-                      className="p-1.5 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                    >
-                      <Ellipsis className="w-5 h-5" />
-                    </button>
-                  )}
-
-                  {isMoreMenuOpen && !isSelectionMode && (
-                    <div className="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-gray-100 dark:border-white/5 p-1 z-50 animate-in fade-in zoom-in-95 duration-200">
-                      <button
-                        onClick={() => {
-                          setIsSelectionMode(true);
-                          setIsMoreMenuOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors group"
-                      >
-                        <SquareCheckBig className="w-4 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
-                        <span className="text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
-                          {t("menu.select_multiple")}
-                        </span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      className="peer appearance-none w-4 h-4 rounded border-2 border-gray-400 dark:border-gray-500 bg-white dark:bg-[#2a2b2f] checked:bg-brand-primary checked:border-brand-primary indeterminate:bg-brand-primary indeterminate:border-brand-primary cursor-pointer transition-colors"
+                    />
+                    <Check
+                      className="absolute inset-0 m-auto w-3 h-3 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
+                      strokeWidth={3}
+                    />
+                    {someSelected && (
+                      <Minus
+                        className="absolute inset-0 m-auto w-3 h-3 text-white pointer-events-none"
+                        strokeWidth={3}
+                      />
+                    )}
+                  </span>
+                  <span className="text-xs font-medium text-gray-500">
+                    {allSelected
+                      ? t("settings.trash_unselect_all")
+                      : t("settings.trash_select_all")}
+                  </span>
+                </label>
               </div>
               {items.map((item) => (
                 <TrashItemRow
                   key={item.id}
                   item={item}
                   isSelected={selectedIds.has(item.id)}
-                  isSelectionMode={isSelectionMode}
                   isRestoring={restoringIds.has(item.id)}
+                  isDeleting={deletingIds.has(item.id)}
                   onToggle={toggleItem}
                   onRestore={handleRestore}
+                  onDelete={handleDelete}
                 />
               ))}
-            </div>
+            </>
           )}
         </div>
 
         {/* Footer */}
         <div className="px-6 py-4 flex items-center justify-between bg-gray-50/50 dark:bg-[#1a1b1e]/50 shrink-0">
-          {isSelectionMode ? (
+          {selectedIds.size > 0 ? (
             <>
               <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 {selectedIds.size} {t("common.selected")}
@@ -410,7 +397,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   onClick={() => {
                     void handleBulkRestore();
                   }}
-                  disabled={selectedIds.size === 0 || isBulkActioning}
+                  disabled={isBulkActioning}
                   className="px-4 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-medium hover:bg-brand-hover disabled:opacity-50 transition-colors flex items-center gap-2"
                 >
                   {isBulkActioning ? (
@@ -419,14 +406,14 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                     <RefreshCw className="w-4 h-4" />
                   )}
                   <span className="hidden sm:inline">
-                    {t("settings.restore")}
+                    {t("settings.trash_restore_selected")}
                   </span>
                 </button>
                 <button
                   onClick={() => {
                     void handleBulkDelete();
                   }}
-                  disabled={selectedIds.size === 0 || isBulkActioning}
+                  disabled={isBulkActioning}
                   className="px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 disabled:opacity-50 transition-colors flex items-center gap-2"
                 >
                   {isBulkActioning ? (
@@ -434,7 +421,9 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
                   ) : (
                     <Trash2 className="w-4 h-4" />
                   )}
-                  <span className="hidden sm:inline">{t("common.delete")}</span>
+                  <span className="hidden sm:inline">
+                    {t("settings.trash_delete_selected")}
+                  </span>
                 </button>
               </div>
             </>

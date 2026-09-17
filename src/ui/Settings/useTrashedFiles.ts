@@ -9,6 +9,9 @@ export interface TrashedItem {
   id: string;
   name: string;
   mimeType: string;
+  size?: string;
+  modifiedTime?: string;
+  trashedTime?: string;
 }
 
 export function useTrashedFiles(token: string) {
@@ -29,11 +32,20 @@ export function useTrashedFiles(token: string) {
       // fetch) must not overwrite the current account's list.
       if (signal?.aborted) return;
       setItems(
-        files.map((f: TrashedItem) => ({
-          id: f.id,
-          name: f.name,
-          mimeType: f.mimeType,
-        })),
+        files.map((f: TrashedItem) => {
+          const item: TrashedItem = {
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType,
+          };
+          // exactOptionalPropertyTypes: omit absent metadata instead of
+          // writing undefined; the row distinguishes missing (renders "—")
+          // from present values.
+          if (f.size !== undefined) item.size = f.size;
+          if (f.modifiedTime !== undefined) item.modifiedTime = f.modifiedTime;
+          if (f.trashedTime !== undefined) item.trashedTime = f.trashedTime;
+          return item;
+        }),
       );
     } catch (e) {
       // Cancellation is not a failure — no log, no toast.

@@ -126,18 +126,21 @@ describe("SkeletonRowList variants (dimensions mirror the real list rows)", () =
     expect(textLinesInRow(row)).toBe(2);
   });
 
-  it('variant="trash" matches TrashScreen: 40px icon, exactly ONE text line, gap-3 + p-3 (padding all four sides)', () => {
+  it('variant="trash" matches the flat TrashScreen row: 32px icon, ONE text line + metadata bar, gap-3 + h-12 + px-3', () => {
     const { container } = render(<SkeletonRowList rows={1} variant="trash" />);
     const row = container.querySelector(
       '[data-testid="skeleton-row"]',
     ) as HTMLElement;
     expect(rowTokens(row)).toContain("gap-3");
-    expect(rowTokens(row)).toContain("p-3");
-    expect(rowTokens(row)).not.toContain("py-3");
-    expect(row.querySelectorAll(".w-10.h-10")).toHaveLength(1);
+    expect(rowTokens(row)).toContain("h-12");
+    expect(rowTokens(row)).toContain("px-3");
+    expect(rowTokens(row)).not.toContain("p-3");
+    expect(rowTokens(row)).not.toContain("rounded-xl");
+    expect(row.querySelectorAll(".w-8.h-8")).toHaveLength(1);
     expect(row.querySelectorAll('[class~="h-3.5"]')).toHaveLength(1);
     expect(row.querySelectorAll('[class~="h-4"]')).toHaveLength(0);
-    expect(row.querySelectorAll(".h-3")).toHaveLength(0);
+    // The two h-3 bars mirror the deleted-date + size columns.
+    expect(row.querySelectorAll(".h-3")).toHaveLength(2);
     expect(textLinesInRow(row)).toBe(1);
   });
 
@@ -159,13 +162,15 @@ describe("SkeletonRowList variants (dimensions mirror the real list rows)", () =
     expect(row.className).toContain("rounded-xl");
   });
 
-  it('variant="trash" rows carry the TrashScreen gray-50 background + rounded-xl', () => {
+  it('variant="trash" rows are flat: hairline divider, no card background, no rounding', () => {
     const { container } = render(<SkeletonRowList rows={1} variant="trash" />);
     const row = container.querySelector(
       '[data-testid="skeleton-row"]',
     ) as HTMLElement;
-    expect(row.className).toContain("bg-gray-50 dark:bg-[#202124]");
-    expect(row.className).toContain("rounded-xl");
+    expect(row.className).toContain("border-b border-gray-200");
+    expect(row.className).toContain("dark:border-[#2A2A2A]");
+    expect(row.className).not.toContain("rounded-xl");
+    expect(row.className).not.toContain("bg-gray-50");
   });
 
   it("stretch still adds flex-1 to rows of every variant", () => {
@@ -192,7 +197,7 @@ describe("SkeletonRowList variants (dimensions mirror the real list rows)", () =
       ) as HTMLElement;
       const icon =
         variant === "trash"
-          ? row.querySelector(".w-10.h-10")
+          ? row.querySelector(".w-8.h-8")
           : row.querySelector(".w-12.h-12");
       expect(icon, `variant=${variant}`).not.toBeNull();
       const iconEl = icon as HTMLElement;

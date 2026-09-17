@@ -194,9 +194,6 @@ export function SettingsTab({
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
                     {t("settings.metadata_fetch")}
                   </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                    {t("settings.metadata_fetch_desc")}
-                  </p>
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
