@@ -43,6 +43,7 @@ import {
 import { networkCooldownUntil, setNetworkCooldown } from "./cooldown";
 import { readCachedEntry } from "./parse";
 export { parseDiskMetadata } from "./parse";
+import { isMetadataFetchEnabled } from "./settings";
 import {
   prefetchAndScanM4aTail,
   prefetchFlacPictureRemainder,
@@ -77,6 +78,16 @@ async function getTrackMetadataImpl(
     const placeholder = makePlaceholder(safeName);
     setMetadataCache(fileId, placeholder);
     return placeholder;
+  }
+
+  // Settings toggle OFF: no NEW network fetch — the mem/IDB/disk cache reads
+  // above already served every cached entry, so existing metadata keeps
+  // rendering. The placeholder is returned WITHOUT pinning it (setMetadataCache
+  // would shadow every later fetch) and without cooldown/parse/tokenizer, so
+  // flipping the toggle back ON re-fetches naturally on the next call.
+  // forceNetwork does NOT bypass this: OFF means OFF.
+  if (!isMetadataFetchEnabled()) {
+    return makePlaceholder(safeName, size);
   }
 
   // Per-file network cooldown: a re-mount of a file whose last fetch failed

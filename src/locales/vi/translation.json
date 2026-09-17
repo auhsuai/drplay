@@ -214,6 +214,8 @@
     "dark_mode": "Tối",
     "system_mode": "Hệ thống",
     "minimize_to_tray": "Thu nhỏ xuống khay hệ thống",
+    "metadata_fetch": "Tải metadata",
+    "metadata_fetch_desc": "Đọc tên bài, ca sĩ và ảnh bìa từ file nhạc. Tắt để tiết kiệm dữ liệu Drive.",
     "data_management": "Quản lý dữ liệu",
     "trash": "Thùng rác",
     "trash_desc": "Quản lý và xóa vĩnh viễn các tệp.",

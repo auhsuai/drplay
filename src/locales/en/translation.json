@@ -218,6 +218,8 @@
     "dark_mode": "Dark",
     "system_mode": "System Default",
     "minimize_to_tray": "Minimize to System Tray",
+    "metadata_fetch": "Fetch metadata",
+    "metadata_fetch_desc": "Read title, artist and cover art from your music files. Turn off to save Drive data.",
     "data_management": "Data Management",
     "trash": "Trash",
     "trash_desc": "Manage and permanently delete items.",

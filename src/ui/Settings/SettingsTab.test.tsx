@@ -413,3 +413,52 @@ describe("SettingsTab import seed button", () => {
     );
   });
 });
+
+describe("SettingsTab metadata fetch toggle", () => {
+  const KEY = "drplay_metadata_fetch_enabled";
+
+  beforeEach(() => {
+    localStorage.clear();
+    getEffectiveDownloadPath.mockReset();
+    getEffectiveDownloadPath.mockResolvedValue("");
+    captureErrorMocks.captureError.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("renders the toggle checked by default when storage is empty", () => {
+    render(<SettingsTab {...baseProps} />);
+    const checkbox = screen.getByRole<HTMLInputElement>("checkbox", {
+      name: "Fetch metadata",
+    });
+    expect(checkbox.checked).toBe(true);
+    expect(
+      screen.getByText(
+        "Read title, artist and cover art from your music files. Turn off to save Drive data.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("persists OFF to localStorage when toggled off", () => {
+    render(<SettingsTab {...baseProps} />);
+    const checkbox = screen.getByRole<HTMLInputElement>("checkbox", {
+      name: "Fetch metadata",
+    });
+
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(false);
+    expect(localStorage.getItem(KEY)).toBe("false");
+  });
+
+  it("renders unchecked when storage already says 'false'", () => {
+    localStorage.setItem(KEY, "false");
+    render(<SettingsTab {...baseProps} />);
+    const checkbox = screen.getByRole<HTMLInputElement>("checkbox", {
+      name: "Fetch metadata",
+    });
+    expect(checkbox.checked).toBe(false);
+  });
+});

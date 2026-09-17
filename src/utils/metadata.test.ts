@@ -1209,6 +1209,100 @@ describe("getTrackMetadata real metadata fetch", () => {
   });
 });
 
+// ---- Settings toggle: metadata fetch disabled
+//
+// The guard sits in getTrackMetadataImpl AFTER the mem/IDB/disk cache read and
+// BEFORE any tokenizer/network work, so cached entries keep serving while the
+// toggle is OFF — only NEW network fetches stop.
+describe("metadata fetch disabled (settings toggle OFF)", () => {
+  const fresh = () => import("./metadata");
+  const KEY = "drplay_metadata_fetch_enabled";
+
+  // This file runs in the node env (no DOM Storage), but the settings module
+  // reads the toggle through the REAL localStorage API — the stub is what the
+  // guard actually reads.
+  function stubLocalStorage(initial: Record<string, string> = {}) {
+    const store = new Map<string, string>(Object.entries(initial));
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => {
+        store.clear();
+      },
+    });
+    return store;
+  }
+
+  it("OFF: size>0 with no cached entry returns a placeholder — no fetch, no parse, no cache write", async () => {
+    stubLocalStorage({ [KEY]: "false" });
+    const fixture = buildMp3Fixture("Hidden", "Hidden", "Hidden");
+    const { getTrackMetadata, metadataCache } = await fresh();
+    const { mock } = makeFetchMock(fixture);
+    const mm = await import("music-metadata");
+    const parseSpy = vi.mocked(mm.parseFromTokenizer);
+    parseSpy.mockClear();
+
+    const r = await getTrackMetadata("off-id", "tok", 2048, "off.mp3");
+    expect(r.v).toBe(V_PLACEHOLDER);
+    expect(r.title).toBe("off");
+    expect(r.size).toBe(2048);
+    expect(mock).not.toHaveBeenCalled();
+    expect(parseSpy).not.toHaveBeenCalled();
+    // No placeholder pinning: the mem cache stays empty so turning the toggle
+    // back ON refetches instead of serving the OFF placeholder forever.
+    expect(metadataCache.get("off-id")).toBeUndefined();
+    expect(tokenizerConstructions).toHaveLength(0);
+  });
+
+  it("OFF: an already-cached IDB entry is still served (cache is not gated by the toggle)", async () => {
+    stubLocalStorage({ [KEY]: "false" });
+    putCacheRow(
+      "metadata_off-cached-id",
+      makeRealEntry({ title: "Cached While Off" }),
+    );
+    const { getTrackMetadata } = await fresh();
+    const { mock } = makeFetchMock(buildMp3Fixture("X", "Y", "Z"));
+
+    const r = await getTrackMetadata(
+      "off-cached-id",
+      "tok",
+      2048,
+      "cached.mp3",
+    );
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Cached While Off");
+    expect(mock).not.toHaveBeenCalled();
+  });
+
+  it("OFF then back ON: the next call fetches for real (no stale placeholder pin)", async () => {
+    const store = stubLocalStorage({ [KEY]: "false" });
+    const fixture = buildMp3Fixture(
+      "Back On",
+      "Back On Artist",
+      "Back On Album",
+    );
+    const { getTrackMetadata, metadataCache } = await fresh();
+    const { mock } = makeFetchMock(fixture);
+
+    const off = await getTrackMetadata("toggle-id", "tok", 2048, "toggle.mp3");
+    expect(off.v).toBe(V_PLACEHOLDER);
+    expect(off.title).toBe("toggle");
+    expect(metadataCache.get("toggle-id")).toBeUndefined();
+    expect(mock).not.toHaveBeenCalled();
+
+    store.set(KEY, "true");
+    const on = await getTrackMetadata("toggle-id", "tok", 2048, "toggle.mp3");
+    expect(on.v).toBe(8);
+    expect(on.title).toBe("Back On");
+    expect(mock).toHaveBeenCalled();
+  });
+});
+
 describe("getTrackMetadata head fetch + transient network failures", () => {
   const fresh = () => import("./metadata");
 

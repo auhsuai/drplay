@@ -7,6 +7,7 @@ import {
   Eraser,
   Archive,
   Cloud,
+  Tag,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
@@ -20,6 +21,10 @@ import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useState } from "react";
 import { useDownloadPathSetting } from "./useDownloadPathSetting";
 import { useSeedImport } from "./useSeedImport";
+import {
+  isMetadataFetchEnabled,
+  setMetadataFetchEnabled,
+} from "../../utils/metadata/settings";
 
 interface SettingsTabProps {
   theme: ThemeType;
@@ -40,6 +45,11 @@ export function SettingsTab({
 }: SettingsTabProps) {
   const { t } = useTranslation();
   const [showCacheManager, setShowCacheManager] = useState(false);
+  // Local state, localStorage-backed: no prop drilling into App/TabContentRouter
+  // for a setting only this tab reads and writes.
+  const [metadataFetchEnabled, setMetadataFetchEnabledState] = useState(
+    isMetadataFetchEnabled,
+  );
   const { downloadPath, isPicking, handlePickDownloadPath } =
     useDownloadPathSetting();
   const { importingSeed, handleImportSeed } = useSeedImport();
@@ -172,6 +182,36 @@ export function SettingsTab({
                   {t("settings.change_path")}
                 </button>
               </div>
+            </div>
+
+            {/* Metadata Fetch Setting */}
+            <div className="flex items-center justify-between py-4 pb-6">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
+                  <Tag className="w-6 h-6 text-brand-text" />
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                    {t("settings.metadata_fetch")}
+                  </p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                    {t("settings.metadata_fetch_desc")}
+                  </p>
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <span className="sr-only">{t("settings.metadata_fetch")}</span>
+                <input
+                  type="checkbox"
+                  checked={metadataFetchEnabled}
+                  onChange={(e) => {
+                    setMetadataFetchEnabled(e.target.checked);
+                    setMetadataFetchEnabledState(e.target.checked);
+                  }}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
+              </label>
             </div>
           </div>
 
