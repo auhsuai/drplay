@@ -7,7 +7,7 @@
 //!   (logged), they never crash the reader.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -107,11 +107,26 @@ fn parse_line(line: &str) -> Option<Incoming> {
 struct IpcCore {
     pending: Mutex<HashMap<u64, oneshot::Sender<MpvReply>>>,
     event_sink: EventSink,
+    /// Set before a commanded shutdown (`mpv_shutdown`, used by the frontend's
+    /// load-deadline sidecar restart): the pipe ending that follows is
+    /// expected, so the reader must not report it as an engine failure — the
+    /// frontend treats `ipc-closed` as "mpv died unexpectedly".
+    shutdown_requested: AtomicBool,
 }
 
 impl IpcCore {
     fn new(event_sink: EventSink) -> Self {
-        Self { pending: Mutex::new(HashMap::new()), event_sink }
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            event_sink,
+            shutdown_requested: AtomicBool::new(false),
+        }
+    }
+
+    /// True once the owner commanded mpv to shut down: the connection close
+    /// that follows is expected, not an engine failure.
+    fn shutdown_was_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Relaxed)
     }
 
     /// Recover from poisoning instead of panicking: the map holds only
@@ -171,6 +186,13 @@ impl MpvIpc {
             writer: Arc::new(AsyncMutex::new(write_half)),
             next_request_id: AtomicU64::new(1),
         }
+    }
+
+    /// Mark the connection as deliberately closed BEFORE killing mpv: the
+    /// reader then stays silent about the pipe ending instead of emitting the
+    /// `ipc-closed` engine-failure signal the frontend reacts to.
+    pub(crate) fn mark_shutdown_requested(&self) {
+        self.core.shutdown_requested.store(true, Ordering::Relaxed);
     }
 
     /// Send one command and await its reply. Timeout-guarded; the pending
@@ -246,15 +268,21 @@ async fn write_frame_bounded<W: tokio::io::AsyncWrite + Unpin>(
 
 /// Pull bytes from the pipe forever, split them into `\n` lines and route
 /// each line through the core. Ends (notifying the sink + clearing all pending
-/// requests) when the pipe closes or errors.
+/// requests) when the pipe closes or errors — UNLESS the owner commanded the
+/// shutdown first: a close we asked for is not an engine failure and must not
+/// be reported as one.
 async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<IpcCore>) {
     let mut buffer: Vec<u8> = Vec::with_capacity(IPC_READ_CHUNK_SIZE);
     let mut chunk = [0u8; IPC_READ_CHUNK_SIZE];
     loop {
         match reader.read(&mut chunk).await {
             Ok(0) => {
-                log::warn!("[mpv-ipc] pipe closed by mpv");
-                (core.event_sink)(IpcMessage::ConnectionClosed { cause: "eof".to_string() });
+                if core.shutdown_was_requested() {
+                    log::info!("[mpv-ipc] pipe closed after a requested shutdown");
+                } else {
+                    log::warn!("[mpv-ipc] pipe closed by mpv");
+                    (core.event_sink)(IpcMessage::ConnectionClosed { cause: "eof".to_string() });
+                }
                 core.fail_all_pending();
                 return;
             }
@@ -267,10 +295,16 @@ async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<Ipc
                 }
             }
             Err(read_error) => {
-                log::error!("[mpv-ipc] pipe read failed: {read_error}");
-                (core.event_sink)(IpcMessage::ConnectionClosed {
-                    cause: format!("read error: {read_error}"),
-                });
+                if core.shutdown_was_requested() {
+                    log::info!(
+                        "[mpv-ipc] pipe read ended after a requested shutdown: {read_error}"
+                    );
+                } else {
+                    log::error!("[mpv-ipc] pipe read failed: {read_error}");
+                    (core.event_sink)(IpcMessage::ConnectionClosed {
+                        cause: format!("read error: {read_error}"),
+                    });
+                }
                 core.fail_all_pending();
                 return;
             }
@@ -398,6 +432,37 @@ mod tests {
         assert_eq!(
             collected.as_slice(),
             [IpcMessage::ConnectionClosed { cause: "eof".to_string() }]
+        );
+    }
+
+    #[tokio::test]
+    async fn reader_stays_silent_when_the_shutdown_was_requested() {
+        // The owner commanded the shutdown (the load-deadline sidecar
+        // restart): the pipe ending is expected and must NOT surface as the
+        // `ipc-closed` engine failure the frontend reacts to.
+        let (core, collected) = core_with_collector();
+        core.shutdown_requested.store(true, Ordering::Relaxed);
+        let empty: &[u8] = &[];
+        read_loop(empty, Arc::new(core)).await;
+        let collected = collected.lock().unwrap();
+        assert!(
+            collected.is_empty(),
+            "a commanded shutdown must not be reported as an engine failure, got {:?}",
+            collected.as_slice()
+        );
+    }
+
+    #[tokio::test]
+    async fn reader_stays_silent_about_a_read_error_after_a_requested_shutdown() {
+        // Killing mpv can also surface as a read error instead of a clean EOF.
+        let (core, collected) = core_with_collector();
+        core.shutdown_requested.store(true, Ordering::Relaxed);
+        read_loop(FailingReader, Arc::new(core)).await;
+        let collected = collected.lock().unwrap();
+        assert!(
+            collected.is_empty(),
+            "a commanded shutdown must not be reported as an engine failure, got {:?}",
+            collected.as_slice()
         );
     }
 

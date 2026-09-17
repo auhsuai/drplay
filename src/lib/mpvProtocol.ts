@@ -98,6 +98,26 @@ export const STALL_POLL_INTERVAL_MS = 5_000;
 export const STALL_RECONCILE_MS = 10_000;
 export const STALL_RECOVER_MS = 75_000;
 export const STALL_RECOVERY_MAX_ATTEMPTS = 2;
+/** Load grace before the first recovery reload, for a playhead that never
+ *  left the stream start (time-pos still ≈ 0 since the load began). While the
+ *  playhead never moved, cacheEnd growth is the stream being DOWNLOADED, not
+ *  playback: a wedged `loadfile replace` (H1, 2026-09-17 freeze report) keeps
+ *  the demuxer fed with the clock frozen forever. Waiting bounds a slow-but-
+ *  healthy first load without reloading it early, and still ends in a bounded
+ *  recovery + error instead of a silent download. */
+export const STALL_LOAD_GRACE_MS = 150_000;
+/** Deadline for `file-loaded` after a `loadfile`: a wedged playback chain
+ *  never emits it (no error either, pipe alive). Past this the engine
+ *  restarts the mpv sidecar — the only proven cure — and loads the track
+ *  once more. Well above a healthy slow load; far below "the app is dead". */
+export const LOADFILE_DEADLINE_MS = 30_000;
+/** Sidecar restarts per load before the failure surfaces (bounded budget). */
+export const LOADFILE_RESTART_MAX_ATTEMPTS = 1;
+/** Bound for one sidecar-restart IPC call (shutdown/spawn). Why: the Rust
+ *  `mpv_shutdown` awaits the child's exit unbounded, and a hung reply would
+ *  turn the cure into a second silent wedge — the exact failure class this
+ *  deadline exists to end. */
+export const LOADFILE_RESTART_TIMEOUT_MS = 10_000;
 /** Two observed positions within this delta are the same frozen playhead. */
 export const STALL_EPSILON_SECS = 0.05;
 /** Below this pinned position a recovery reload restarts from the top — a
@@ -397,10 +417,14 @@ export type StallReconcilerCallbacks = {
  * bounded time, or a clear bounded error":
  * - once no playhead progress was observed for STALL_RECONCILE_MS, it queries
  *   the truth every STALL_POLL_INTERVAL_MS;
- * - progress (time-pos moved or cacheEnd grew past STALL_EPSILON_SECS)
- *   re-anchors the window — a long-but-healthy buffer never recovers;
- * - a playhead pinned for STALL_RECOVER_MS → onStallRecover (attempt 1..N),
- *   each attempt owning its own window;
+ * - progress is a moved time-pos, or cacheEnd growth ONCE the playhead has
+ *   actually started (time-pos seen past STALL_EPSILON_SECS). Before that the
+ *   download is not playback: a wedged load keeps cacheEnd growing with
+ *   time-pos pinned at 0 forever, and counting that as progress was exactly
+ *   what kept this reconciler from ever firing (2026-09-17 freeze report D1);
+ * - a playhead pinned for STALL_RECOVER_MS (or, when it never started, for
+ *   STALL_LOAD_GRACE_MS first) → onStallRecover (attempt 1..N), each attempt
+ *   owning its own window;
  * - attempts exhausted → onStallExhausted exactly once, then it stops;
  * - a polled buffering=false → onReconcileBuffering(false) every round (a lost
  *   settle event must not leave the spinner stuck).
@@ -417,6 +441,9 @@ export class StallReconciler {
   private lastProgressAt = 0;
   private lastTimePos: number | null = null;
   private lastCacheEnd: number | null = null;
+  /** The playhead has left the stream start (time-pos seen past
+   *  STALL_EPSILON_SECS) — only then does cacheEnd growth prove anything. */
+  private playheadStarted = false;
   private attempts = 0;
   private exhausted = false;
   private readonly cb: StallReconcilerCallbacks;
@@ -450,6 +477,7 @@ export class StallReconciler {
     this.lastProgressAt = Date.now();
     this.lastTimePos = null;
     this.lastCacheEnd = null;
+    this.playheadStarted = false;
     this.attempts = 0;
     this.exhausted = false;
   }
@@ -495,7 +523,15 @@ export class StallReconciler {
         return;
       }
     }
-    if (Date.now() - this.lastProgressAt < STALL_RECOVER_MS) return;
+    // Why: a playhead that never left the stream start gets the load grace
+    // before the first reload — a slow-but-healthy first load must not be
+    // reloaded early. In every other state the normal recovery cadence holds,
+    // including after a reload attempt was already made.
+    const recoverAfterMs =
+      this.attempts === 0 && !this.playheadStarted
+        ? STALL_LOAD_GRACE_MS
+        : STALL_RECOVER_MS;
+    if (Date.now() - this.lastProgressAt < recoverAfterMs) return;
     if (this.attempts >= STALL_RECOVERY_MAX_ATTEMPTS) {
       this.exhausted = true;
       this.stop();
@@ -503,15 +539,20 @@ export class StallReconciler {
       return;
     }
     this.attempts += 1;
-    // Why: every attempt owns its own STALL_RECOVER_MS window, so a reload
-    // that does not unpin the playhead cannot fire the next one instantly.
+    // Why: every attempt owns its own window, so a reload that does not unpin
+    // the playhead cannot fire the next one instantly.
     this.lastProgressAt = Date.now();
     this.cb.onStallRecover(this.lastTimePos ?? 0, this.attempts);
   }
 
   /** Truth observations: time-pos moved (either direction — a backward seek
-   *  is movement, not a pin) OR cacheEnd grew = progress. A first observation
-   *  only anchors its baseline. */
+   *  is movement, not a pin) OR cacheEnd grew = progress — but cacheEnd
+   *  growth only counts once the playhead actually started (time-pos seen
+   *  past STALL_EPSILON_SECS since beginTrack). While the playhead has never
+   *  left the start, a growing cacheEnd is the stream being downloaded, not
+   *  audio flowing (2026-09-17 freeze report D1: mpv wedged after `loadfile`
+   *  with the clock stuck at 0 while the demuxer kept fetching data). A first
+   *  observation only anchors its baseline. */
   private noteTruthProgress(truth: StallTruth): boolean {
     let progressed = false;
     if (truth.timePos !== null) {
@@ -521,10 +562,12 @@ export class StallReconciler {
       ) {
         progressed = true;
       }
+      if (truth.timePos > STALL_EPSILON_SECS) this.playheadStarted = true;
       this.lastTimePos = truth.timePos;
     }
     if (truth.cacheEnd !== null) {
       if (
+        this.playheadStarted &&
         this.lastCacheEnd !== null &&
         truth.cacheEnd - this.lastCacheEnd > STALL_EPSILON_SECS
       ) {
@@ -545,18 +588,20 @@ export function maxRangeEnd(ranges: MpvRange[]): number | null {
   return max;
 }
 
-/** Bound one promisified mpv IPC query to STALL_QUERY_TIMEOUT_MS. The wrapped
- *  promise always gets a handler attached, so a late reply/rejection after the
- *  timeout fired is never an unhandled rejection. */
-export function withStallQueryTimeout<T>(promise: Promise<T>): Promise<T> {
+/** Bound one promisified mpv IPC call to `timeoutMs` (default:
+ *  STALL_QUERY_TIMEOUT_MS). The wrapped promise always gets a handler
+ *  attached, so a late reply/rejection after the timeout fired is never an
+ *  unhandled rejection. */
+export function withStallQueryTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number = STALL_QUERY_TIMEOUT_MS,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(
-        new Error(
-          `mpv query timeout (no reply within ${String(STALL_QUERY_TIMEOUT_MS)}ms)`,
-        ),
+        new Error(`mpv IPC timeout (no reply within ${String(timeoutMs)}ms)`),
       );
-    }, STALL_QUERY_TIMEOUT_MS);
+    }, timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);

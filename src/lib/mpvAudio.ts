@@ -17,6 +17,9 @@ import {
   extractCacheRanges,
   freshThrottleClocks,
   isRecord,
+  LOADFILE_DEADLINE_MS,
+  LOADFILE_RESTART_MAX_ATTEMPTS,
+  LOADFILE_RESTART_TIMEOUT_MS,
   maxRangeEnd,
   MPV_BOOL,
   MPV_COMMANDS,
@@ -73,6 +76,12 @@ export class MpvAudioController {
   // requested target, every time-pos is either stale or unacknowledged.
   private seekTarget: number | null = null;
   private seekFailsafe: ReturnType<typeof setTimeout> | null = null;
+  /** `file-loaded` deadline for the load in flight (H1: a wedged chain never
+   *  emits it) — see armLoadDeadline. */
+  private loadDeadline: ReturnType<typeof setTimeout> | null = null;
+  /** Sidecar restarts spent on the current load (bounded by
+   *  LOADFILE_RESTART_MAX_ATTEMPTS, reset per user/UI load attempt). */
+  private loadRestarts = 0;
   private volume = 1;
   private muted = false;
   private throttle = freshThrottleClocks();
@@ -184,6 +193,8 @@ export class MpvAudioController {
       this.emitProgress();
     },
     onFileLoaded: () => {
+      // The load completed: the wedged-chain deadline no longer applies.
+      this.clearLoadDeadline();
       this.applyPendingSeek();
       // Why: mpv's pause flag does not change across a loadfile replace, so
       // track N>1 never gets a pause=false event — file-loaded is the moment
@@ -193,6 +204,7 @@ export class MpvAudioController {
     },
     onEndFile: (outcome, mpvError) => {
       this.playbackFinished = true;
+      this.clearLoadDeadline();
       this.interpolator.reset();
       // Why (S4): the track is terminal — no more ticks can confirm progress,
       // so the spinner must not ride the 8s safety net (eof and error alike).
@@ -218,6 +230,7 @@ export class MpvAudioController {
       // engine; reset lifecycle so the next playTrack respawns via mpv_spawn.
       this.logError(`mpv engine closed: ${cause}`);
       this.started = false;
+      this.clearLoadDeadline();
       this.detachListeners(this.unlistenFns);
       this.unlistenFns = [];
       this.playbackFinished = true;
@@ -444,18 +457,22 @@ export class MpvAudioController {
     // Fresh track, fresh stall window: drop the previous track's baselines
     // and its (possibly spent) recovery budget.
     this.reconciler.reset();
-    if (this.paused) {
-      // mpv's pause flag is process-global: a loadfile while paused would
-      // start the new track frozen. Clear it so the new track actually plays.
-      this.paused = false;
-      void this.sendCommand([
-        MPV_COMMANDS.setProperty,
-        MPV_PROPERTY_ARGS.pause,
-        MPV_BOOL.no,
-      ]).catch((e: unknown) => {
-        this.logWarn(`resume-on-switch-failed: ${describeError(e)}`);
-      });
-    }
+    this.clearLoadDeadline();
+    this.armLoadDeadline(track.id);
+    // mpv's pause flag is process-global and a loadfile never resets it: a
+    // switch made while mpv is paused would start the new track frozen, and a
+    // lost `pause` push (the property-push class TimePosWatchdog covers) meant
+    // the cached flag below never learned the real state — the new track then
+    // stayed silent while the app believed it played. Always clear the flag
+    // for a newly loaded track: a same-track resume never reaches this path.
+    this.paused = false;
+    void this.sendCommand([
+      MPV_COMMANDS.setProperty,
+      MPV_PROPERTY_ARGS.pause,
+      MPV_BOOL.no,
+    ]).catch((e: unknown) => {
+      this.logWarn(`resume-on-switch-failed: ${describeError(e)}`);
+    });
   }
 
   private playbackFailure(where: string, e: unknown): void {
@@ -488,25 +505,39 @@ export class MpvAudioController {
       // Why: release() mid-start must abort silently — no loadfile into a
       // shutdown mpv and no state resurrection after the teardown.
       if (this.isStale(epoch)) return;
-      const port = await this.ensureProxyPort();
-      if (this.isStale(epoch)) return;
-      await this.sendCommand([
-        MPV_COMMANDS.loadfile,
-        this.streamUrl(track.id, port),
-        MPV_COMMANDS.replace,
-      ]);
-      if (this.isStale(epoch)) return;
-      this.beginTrack(track, startTime);
-      // v3 (S2): a new track promotes the spinner immediately — waiting for
-      // the 250ms display delay left a no-source gap between first-audio and
-      // the promote (the button flashed the Pause icon mid-load).
-      this.buffering.request(true);
+      // A user/UI load attempt owns a fresh sidecar-restart budget (the
+      // restart-reload below must NOT reset its own budget).
+      this.loadRestarts = 0;
+      await this.loadTrack(track, startTime, epoch);
     } catch (e: unknown) {
       // Why: a command failing because release() tore the engine down is not
       // a playback failure — release paths are deliberately silent.
       if (this.isStale(epoch)) return;
       this.playbackFailure("play-track-failed", e);
     }
+  }
+
+  /** Issue one `loadfile replace` for a track and begin its per-track
+   *  bookkeeping (spinner, pause flag, load deadline). Shared by the user
+   *  load path and the load-deadline sidecar restart. */
+  private async loadTrack(
+    track: Track,
+    startTime: number | undefined,
+    epoch: number,
+  ): Promise<void> {
+    const port = await this.ensureProxyPort();
+    if (this.isStale(epoch)) return;
+    await this.sendCommand([
+      MPV_COMMANDS.loadfile,
+      this.streamUrl(track.id, port),
+      MPV_COMMANDS.replace,
+    ]);
+    if (this.isStale(epoch)) return;
+    this.beginTrack(track, startTime);
+    // v3 (S2): a new track promotes the spinner immediately — waiting for
+    // the 250ms display delay left a no-source gap between first-audio and
+    // the promote (the button flashed the Pause icon mid-load).
+    this.buffering.request(true);
   }
 
   public togglePlay(): void {
@@ -607,6 +638,8 @@ export class MpvAudioController {
     // Stop first (kills the interval), then a clean slate for the next engine.
     this.reconciler.stop();
     this.reconciler.reset();
+    this.clearLoadDeadline();
+    this.loadRestarts = 0;
     this.interpolator.reset();
     this.throttle = freshThrottleClocks();
     void invoke(TAURI_COMMANDS.mpvShutdown).catch((e: unknown) => {
@@ -724,16 +757,92 @@ export class MpvAudioController {
 
   /** Stall self-heal step 2: budget spent — bounded error, replayable track. */
   private handleStallExhausted(): void {
+    this.failTerminal(
+      "stall-recovery-exhausted",
+      "playhead pinned; reload failed",
+    );
+  }
+
+  /** Terminal playback failure: no ticks can confirm progress anymore — stop
+   *  the self-heal machinery, then surface the bounded error + play state. */
+  private failTerminal(where: string, detail: unknown): void {
     // Why these flags: playbackFailure surfaces `network_interrupted` and
     // flips isPlaying off; playbackFinished=true is what routes a later
     // playTrack(same track) through the full reload path (mpvAudio guard).
     this.playbackFinished = true;
+    this.clearLoadDeadline();
     this.interpolator.reset();
     this.watchdog.stop();
     this.reconciler.stop();
-    this.playbackFailure(
-      "stall-recovery-exhausted",
-      "playhead pinned; reload failed",
+    this.playbackFailure(where, detail);
+  }
+
+  /** Arm the `file-loaded` deadline for the load just issued. H1 (2026-09-17
+   *  freeze report): mpv can wedge its playback chain after `loadfile
+   *  replace` — no `file-loaded`, no `end-file`, no error, pipe alive, the
+   *  demuxer still downloading. Nothing in the IPC contract reports it, so
+   *  the engine treats "no file-loaded within the deadline" as a wedged
+   *  chain and restarts the sidecar (the only proven cure). */
+  private armLoadDeadline(trackId: string): void {
+    this.clearLoadDeadline();
+    const epoch = this.lifecycleEpoch;
+    this.loadDeadline = setTimeout(() => {
+      this.loadDeadline = null;
+      void this.onLoadDeadline(trackId, epoch);
+    }, LOADFILE_DEADLINE_MS);
+  }
+
+  private clearLoadDeadline(): void {
+    if (this.loadDeadline !== null) {
+      clearTimeout(this.loadDeadline);
+      this.loadDeadline = null;
+    }
+  }
+
+  private async onLoadDeadline(trackId: string, epoch: number): Promise<void> {
+    // Stale (release/teardown) or superseded (another track loading, or a
+    // terminal outcome already decided): this deadline has nothing to cure.
+    if (this.isStale(epoch)) return;
+    if (this.currentTrackId !== trackId) return;
+    if (this.playbackFinished) return;
+    if (this.loadRestarts >= LOADFILE_RESTART_MAX_ATTEMPTS) {
+      this.failTerminal(
+        "load-deadline-exhausted",
+        `no file-loaded within ${String(LOADFILE_DEADLINE_MS)}ms after a sidecar restart`,
+      );
+      return;
+    }
+    this.loadRestarts += 1;
+    this.logWarn(
+      `load-deadline: no file-loaded for ${trackId} within ${String(LOADFILE_DEADLINE_MS)}ms — restarting the mpv sidecar (attempt ${String(this.loadRestarts)})`,
     );
+    const track = this.lastTrack;
+    if (track === null) return;
+    try {
+      // Why: a fresh mpv process is the only cure for a wedged chain (an app
+      // restart used to be the user's only way out). The Rust side reports a
+      // commanded shutdown as expected, so the listeners and engine state
+      // survive the swap untouched. Both calls are bounded: a hung Rust reply
+      // must end in the bounded error, never in a second silent wedge.
+      await withStallQueryTimeout(
+        invoke(TAURI_COMMANDS.mpvShutdown),
+        LOADFILE_RESTART_TIMEOUT_MS,
+      );
+      if (this.isStale(epoch)) return;
+      await withStallQueryTimeout(
+        invoke(TAURI_COMMANDS.mpvSpawn),
+        LOADFILE_RESTART_TIMEOUT_MS,
+      );
+      if (this.isStale(epoch)) return;
+      // A fresh mpv starts at volume 100 — re-apply the facade volume, then
+      // load the same track once more (beginTrack re-arms its own deadline).
+      this.applyVolume();
+      await this.loadTrack(track, undefined, epoch);
+    } catch (e: unknown) {
+      if (this.isStale(epoch)) return;
+      // Why (per 0/6): a failed restart or reload is terminal for this load —
+      // surface the bounded error instead of retrying the sidecar forever.
+      this.failTerminal("load-deadline-restart-failed", e);
+    }
   }
 }

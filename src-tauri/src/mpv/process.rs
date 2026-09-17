@@ -1,7 +1,7 @@
 //! mpv sidecar process: executable resolution, spawn with the chosen flag set,
 //! and named-pipe connect with bounded retry.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
@@ -14,6 +14,10 @@ pub(crate) const MPV_PIPE_PREFIX: &str = r"\\.\pipe\drplay-mpv-";
 pub(crate) const PIPE_CONNECT_TIMEOUT_SECS: u64 = 5;
 /// Delay between pipe connect attempts while mpv is still starting.
 pub(crate) const PIPE_CONNECT_BACKOFF_MS: u64 = 100;
+/// The sidecar's own log inside the app log directory (`--log-file`).
+pub(crate) const MPV_LOG_FILE_NAME: &str = "mpv.log";
+/// Extension of the kept previous-session log (`mpv.1`).
+const MPV_LOG_PREVIOUS_EXTENSION: &str = "1";
 /// Win32 error: the pipe does not exist (yet).
 const WIN32_ERROR_FILE_NOT_FOUND: i32 = 2;
 /// Win32 error: the pipe exists but no server instance is listening yet.
@@ -26,9 +30,43 @@ pub(crate) fn new_pipe_name() -> String {
     format!("{MPV_PIPE_PREFIX}{}", uuid::Uuid::new_v4())
 }
 
+/// Keep the previous session's sidecar log before mpv truncates it: mpv
+/// truncates `--log-file` on every spawn (mpv docs), so the log of the session
+/// that wedged would be lost exactly when the user restarts the app — the very
+/// restart that cures the wedge. `mpv.log` becomes `mpv.1` (any older `mpv.1`
+/// is dropped). Best effort: a failure only costs diagnostics, never playback.
+pub(crate) fn rotate_mpv_log(log_file: &Path) -> Result<(), String> {
+    if !log_file.is_file() {
+        return Ok(()); // no previous session's log — nothing to keep
+    }
+    let previous = log_file.with_extension(MPV_LOG_PREVIOUS_EXTENSION);
+    match std::fs::remove_file(&previous) {
+        Ok(()) => {}
+        Err(remove_error) if remove_error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(remove_error) => {
+            return Err(format!(
+                "mpv log rotate: cannot replace {}: {remove_error}",
+                previous.display()
+            ));
+        }
+    }
+    std::fs::rename(log_file, &previous).map_err(|rename_error| {
+        format!(
+            "mpv log rotate: cannot keep {} as {}: {rename_error}",
+            log_file.display(),
+            previous.display()
+        )
+    })
+}
+
 /// The exact flag set chosen for the DrPlay audio-only engine (plan 1.3).
-pub(crate) fn mpv_flags(pipe_name: &str) -> Vec<String> {
-    vec![
+/// `mpv_log` adds `--log-file` (diagnostics only, never behavior): without it
+/// the sidecar's stdout/stderr go to null and a wedged playback chain leaves
+/// zero evidence behind (2026-09-17 freeze report D2). The log level for
+/// `--log-file` is at least `-v -v` per the mpv manual, so no `--msg-level`
+/// companion is needed — it could only raise it further.
+pub(crate) fn mpv_flags(pipe_name: &str, mpv_log: Option<&Path>) -> Vec<String> {
+    let mut flags = vec![
         "--no-video".to_string(),
         "--no-terminal".to_string(),
         // Never read the user's %APPDATA%\mpv\mpv.conf / watch-later state:
@@ -60,7 +98,11 @@ pub(crate) fn mpv_flags(pipe_name: &str) -> Vec<String> {
         "--demuxer-max-bytes=64MiB".to_string(),
         "--cache=yes".to_string(),
         "--force-media-title=no".to_string(),
-    ]
+    ];
+    if let Some(log_file) = mpv_log {
+        flags.push(format!("--log-file={}", log_file.display()));
+    }
+    flags
 }
 
 /// Locate the sidecar exe where tauri-build stages it: next to the app
@@ -98,12 +140,20 @@ pub(crate) struct SpawnedSidecar {
 }
 
 /// Spawn the sidecar detached from any console with the engine flag set.
-/// The child joins a kill-on-close job BEFORE this returns: job creation or
-/// assignment failure kills the partial child and surfaces Err (fail loud —
-/// never hand back a running orphan).
-pub(crate) fn spawn_mpv(pipe_name: &str) -> Result<SpawnedSidecar, String> {
+/// `mpv_log` names the sidecar log file (see `rotate_mpv_log`); the child joins
+/// a kill-on-close job BEFORE this returns: job creation or assignment failure
+/// kills the partial child and surfaces Err (fail loud — never hand back a
+/// running orphan).
+pub(crate) fn spawn_mpv(pipe_name: &str, mpv_log: Option<&Path>) -> Result<SpawnedSidecar, String> {
     let exe = resolve_mpv_exe()?;
-    let flags = mpv_flags(pipe_name);
+    if let Some(log_file) = mpv_log {
+        // Keep the wedged session's log: mpv truncates the file on open, and
+        // the restart that cures a wedge would otherwise erase its evidence.
+        if let Err(rotate_error) = rotate_mpv_log(log_file) {
+            log::warn!("[mpv] {rotate_error}");
+        }
+    }
+    let flags = mpv_flags(pipe_name, mpv_log);
     log::info!(
         "[mpv] spawning sidecar {} ({} flags, pipe {pipe_name})",
         exe.display(),
@@ -194,7 +244,7 @@ mod tests {
     #[test]
     fn flags_match_the_chosen_engine_config() {
         let pipe = r"\\.\pipe\drplay-mpv-test";
-        let flags = mpv_flags(pipe);
+        let flags = mpv_flags(pipe, None);
         let expected_static = [
             "--no-video",
             "--no-terminal",
@@ -218,6 +268,49 @@ mod tests {
             flags.contains(&format!("--input-ipc-server={pipe}")),
             "flags must target the per-session pipe"
         );
+        assert!(
+            !flags.iter().any(|flag| flag.starts_with("--log-file")),
+            "no log file must be requested when no log path is given"
+        );
+    }
+
+    #[test]
+    fn flags_add_the_sidecar_log_when_a_path_is_given() {
+        let pipe = r"\\.\pipe\drplay-mpv-test";
+        let log = Path::new(r"C:\logs\mpv.log");
+        let flags = mpv_flags(pipe, Some(log));
+        assert!(
+            flags.contains(&r"--log-file=C:\logs\mpv.log".to_string()),
+            "the sidecar must log to the given path, got: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn rotate_mpv_log_keeps_the_previous_session_and_drops_the_older_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "drplay-mpv-log-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        let log = dir.join(MPV_LOG_FILE_NAME);
+        let previous = log.with_extension(MPV_LOG_PREVIOUS_EXTENSION);
+
+        // No previous log at all: rotation must not create anything.
+        rotate_mpv_log(&log).expect("rotating a missing log must succeed");
+        assert!(!log.exists() && !previous.exists(), "no file must appear out of nowhere");
+
+        std::fs::write(&previous, "older session").expect("older log must be writable");
+        std::fs::write(&log, "wedged session").expect("live log must be writable");
+        rotate_mpv_log(&log).expect("rotation must succeed");
+
+        assert!(!log.exists(), "the live log is renamed away, not copied");
+        assert_eq!(
+            std::fs::read_to_string(&previous).expect("kept log must be readable"),
+            "wedged session",
+            "the previous session must replace the older mpv.1"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -231,7 +324,8 @@ mod tests {
 
     /// Real end-to-end spike against the fetched sidecar: spawn mpv, connect
     /// the JSON IPC pipe, load a local wav, read `time-pos`, observe property
-    /// changes and quit. Run explicitly: `cargo test mpv:: -- --ignored --nocapture`
+    /// changes, write the sidecar log and quit. Run explicitly:
+    /// `cargo test mpv:: -- --ignored --nocapture`
     /// (requires src-tauri/bin/mpv-x86_64-pc-windows-msvc.exe, i.e. fetch-mpv.mjs).
     #[tokio::test]
     #[ignore = "spike against the real mpv sidecar binary"]
@@ -253,13 +347,23 @@ mod tests {
             .ok_or_else(|| "no local wav sample found for the spike".to_string())
             .expect("spike needs a local wav sample");
 
+        let log_dir = std::env::temp_dir().join(format!(
+            "drplay-mpv-spike-logs-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&log_dir).expect("spike log dir must be creatable");
+        let log_file = log_dir.join(MPV_LOG_FILE_NAME);
+
         let pipe_name = new_pipe_name();
-        let spawned = spawn_mpv(&pipe_name).expect("sidecar must spawn");
+        let spawned = spawn_mpv(&pipe_name, Some(log_file.as_path())).expect("sidecar must spawn");
         let mut child = spawned.child;
         // Keep the job alive for the spike duration: dropping it would
         // terminate mpv via KILL_ON_JOB_CLOSE before the pipeline runs.
         let _job = spawned.job;
-        println!("[spike] spawned mpv (pipe: {pipe_name})");
+        println!(
+            "[spike] spawned mpv (pipe: {pipe_name}, log: {})",
+            log_file.display()
+        );
 
         let client = connect_pipe(&pipe_name).await.expect("pipe must connect");
         println!("[spike] pipe connected");
@@ -344,5 +448,26 @@ mod tests {
             .expect("mpv must exit after quit")
             .expect("child wait must not error");
         println!("[spike] mpv exited cleanly");
+
+        // F2 verification: the sidecar wrote its own log at the requested path
+        // (with --no-terminal in effect) — the diagnostics a wedged chain
+        // needs (cplayer/demuxer/ao lines) are actually captured.
+        let log_text = std::fs::read_to_string(&log_file).expect("sidecar log must exist");
+        println!("[spike] sidecar log: {} bytes", log_text.len());
+        assert!(
+            log_text.len() > 1000,
+            "sidecar log must carry the verbose session, got {} bytes",
+            log_text.len()
+        );
+        assert!(
+            log_text.contains("[cplayer]"),
+            "sidecar log must include cplayer messages"
+        );
+        assert!(
+            log_text.contains(sample_file),
+            "sidecar log must record the loaded file"
+        );
+
+        std::fs::remove_dir_all(&log_dir).ok();
     }
 }

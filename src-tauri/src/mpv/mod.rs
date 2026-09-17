@@ -97,7 +97,18 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     let pipe_name = process::new_pipe_name();
-    let spawned = process::spawn_mpv(&pipe_name)?;
+    // Sidecar log (F2, 2026-09-17 freeze report): with stdout/stderr null a
+    // wedged playback chain leaves zero evidence. The log lives next to the
+    // app log; spawn_mpv rotates the previous session to `mpv.1` first.
+    let mpv_log = app
+        .path()
+        .app_log_dir()
+        .ok()
+        .map(|dir| dir.join(process::MPV_LOG_FILE_NAME));
+    if mpv_log.is_none() {
+        log::warn!("[mpv] app log dir unavailable — the sidecar will run without its own log");
+    }
+    let spawned = process::spawn_mpv(&pipe_name, mpv_log.as_deref())?;
     let mut child = spawned.child;
     let job = spawned.job;
     let client = match process::connect_pipe(&pipe_name).await {
@@ -167,6 +178,10 @@ pub async fn mpv_shutdown() -> Result<(), String> {
     let Some(mut handle) = slot.take() else {
         return Ok(());
     };
+    // The pipe close that follows is commanded, not an engine failure: tell
+    // the reader so the frontend does not see `ipc-closed` (the load-deadline
+    // sidecar restart keeps its listeners and state across this swap).
+    handle.ipc.mark_shutdown_requested();
     // mpv keeps no persistent state here (cache is in-memory), so a hard kill
     // is the reliable shutdown path; watch-later is not configured.
     if let Err(kill_error) = handle.child.start_kill() {

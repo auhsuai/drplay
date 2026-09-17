@@ -44,8 +44,10 @@ import { MpvAudioController } from "./mpvAudio";
 import { captureError } from "../utils/errorLog";
 import {
   resetWarnThrottleForTest,
+  STALL_LOAD_GRACE_MS,
   STALL_RECONCILE_MS,
   STALL_RECOVER_MS,
+  STALL_RECOVERY_MAX_ATTEMPTS,
   WATCHDOG_INTERVAL_MS,
 } from "./mpvProtocol";
 
@@ -183,6 +185,7 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
     });
 
     await ctrl.playTrack(trackA); // v3: immediate promote -> true
+    fireMpvEvent("file-loaded"); // the load itself succeeded — only playback wedged
     fireProperty("pause", false);
     fireProperty("paused-for-cache", true); // genuine stall: the net re-arms
     expect(buffering).toEqual([{ isBuffering: true }]);
@@ -196,6 +199,7 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
 
   it("(f) pinned playhead: reload per attempt at 75s (resume seek), exhausted after 2, replay reloads", async () => {
     await ctrl.playTrack(trackA);
+    fireMpvEvent("file-loaded"); // past the load phase: the playhead is live
     fireProperty("pause", false);
     freezeTruth(true);
     tauriMocks.invoke.mockClear();
@@ -251,6 +255,7 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
 
   it("(h) user pause: no reconcile query and no recovery while paused", async () => {
     await ctrl.playTrack(trackA);
+    fireMpvEvent("file-loaded"); // the track loaded, then the user paused it
     fireProperty("pause", false);
     fireProperty("pause", true); // user pauses — nothing is stalled
     freezeTruth(false);
@@ -260,5 +265,46 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
 
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
+  });
+
+  it("(i) playhead never started (time-pos 0) while cache downloads: grace -> recovery reloads -> bounded error, no silent download", async () => {
+    await ctrl.playTrack(trackA);
+    fireMpvEvent("file-loaded");
+    fireProperty("pause", false);
+    let cacheEnd = 100;
+    tauriMocks.invoke.mockImplementation(
+      (command: string, args?: { prop?: string }) => {
+        if (command === "stream_proxy_start")
+          return Promise.resolve(PROXY_PORT);
+        if (command === "mpv_get_property") {
+          if (args?.prop === "time-pos") return Promise.resolve(0);
+          if (args?.prop === "paused-for-cache") return Promise.resolve(false);
+          if (args?.prop === "demuxer-cache-state") {
+            cacheEnd += 10; // still downloading — the old rule read this as progress
+            return Promise.resolve({
+              "seekable-ranges": [{ start: 0, end: cacheEnd }],
+            });
+          }
+        }
+        return Promise.resolve(undefined);
+      },
+    );
+    tauriMocks.invoke.mockClear();
+
+    await vi.advanceTimersByTimeAsync(
+      STALL_LOAD_GRACE_MS +
+        (STALL_RECOVERY_MAX_ATTEMPTS + 1) * STALL_RECOVER_MS,
+    );
+
+    // One recovery reload per attempt (no load deadline: file-loaded arrived),
+    // then the single bounded error surface.
+    expect(loadfiles()).toEqual([
+      ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+      ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+    ]);
+    expect(errors).toEqual([
+      expect.objectContaining({ code: "network_interrupted" }),
+    ]);
+    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 });

@@ -14,6 +14,7 @@ import {
   dispatchPropertyEvent,
   resetWarnThrottleForTest,
   StallReconciler,
+  STALL_LOAD_GRACE_MS,
   STALL_POLL_INTERVAL_MS,
   STALL_RECONCILE_MS,
   STALL_RECOVER_MS,
@@ -329,6 +330,68 @@ describe("StallReconciler (pinned-playhead self-heal)", () => {
     sc.stop();
   });
 
+  it("load-wedged playhead (time-pos stuck at 0, cacheEnd growing): the load grace ends in a recovery — never a silent download", async () => {
+    // The H1 bug shape: `loadfile replace` wedged mpv's playback chain. The
+    // playhead never left zero while the demuxer kept downloading the stream.
+    // The old rule counted that download as progress, so recovery never fired
+    // and nothing was ever logged.
+    let cacheEnd = 100;
+    queryTruth.mockImplementation(() => {
+      cacheEnd += 10;
+      return Promise.resolve({ timePos: 0, buffering: false, cacheEnd });
+    });
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(
+      STALL_LOAD_GRACE_MS + STALL_POLL_INTERVAL_MS,
+    );
+
+    expect(onStallRecover).toHaveBeenCalledTimes(1);
+    expect(onStallRecover).toHaveBeenLastCalledWith(0, 1);
+    sc.stop();
+  });
+
+  it("a slow first load inside the grace is never reloaded; past the grace the normal bounded budget applies", async () => {
+    let cacheEnd = 100;
+    queryTruth.mockImplementation(() => {
+      cacheEnd += 10;
+      return Promise.resolve({ timePos: 0, buffering: true, cacheEnd });
+    });
+    const sc = makeReconciler();
+    sc.start();
+
+    // 60s in: still inside the load grace — a slow-but-alive stream may not
+    // have started yet and must not be reloaded early.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onStallRecover).not.toHaveBeenCalled();
+
+    // Past the grace the pin is real: one reload per window, then the bounded
+    // error — the user never gets an endless silent download.
+    await vi.advanceTimersByTimeAsync(
+      STALL_LOAD_GRACE_MS -
+        60_000 +
+        (STALL_RECOVERY_MAX_ATTEMPTS + 1) * STALL_RECOVER_MS,
+    );
+    expect(onStallRecover).toHaveBeenCalledTimes(STALL_RECOVERY_MAX_ATTEMPTS);
+    expect(onStallExhausted).toHaveBeenCalledTimes(1);
+    sc.stop();
+  });
+
+  it("time-pos null (nothing loaded yet): never progress, never pinned — the grace still bounds the wait", async () => {
+    truth = { timePos: null, buffering: true, cacheEnd: null };
+    const sc = makeReconciler();
+    sc.start();
+
+    await vi.advanceTimersByTimeAsync(
+      STALL_LOAD_GRACE_MS + STALL_POLL_INTERVAL_MS,
+    );
+
+    expect(onStallRecover).toHaveBeenCalledTimes(1);
+    expect(onStallRecover).toHaveBeenLastCalledWith(0, 1);
+    sc.stop();
+  });
+
   it("truth buffering=false reconciles the spinner every round (settle signal was lost)", async () => {
     truth = { timePos: 42, buffering: false, cacheEnd: 100 };
     const sc = makeReconciler();
@@ -476,7 +539,12 @@ describe("StallReconciler (pinned-playhead self-heal)", () => {
     const sc = makeReconciler();
     sc.start();
 
-    await vi.advanceTimersByTimeAsync(STALL_RECOVER_MS);
+    // No observable truth at all: the playhead state is unknown, so the load
+    // grace applies (the reconciler cannot tell a wedged load from a slow one
+    // without a single time-pos observation) — still bounded, still logged.
+    await vi.advanceTimersByTimeAsync(
+      STALL_LOAD_GRACE_MS + STALL_POLL_INTERVAL_MS,
+    );
 
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({ level: "warn", source: "mpvProtocol" }),
@@ -508,6 +576,9 @@ describe("stall reconciler constants (locked tuning)", () => {
     // > mpv's --network-timeout (60s) so mpv's own error path wins first.
     expect(STALL_RECOVER_MS).toBe(75_000);
     expect(STALL_RECOVERY_MAX_ATTEMPTS).toBe(2);
+    // Load grace for a playhead that never started (>2x the recover window):
+    // generous enough for a slow-but-alive first load, far below "app is dead".
+    expect(STALL_LOAD_GRACE_MS).toBe(150_000);
   });
 });
 

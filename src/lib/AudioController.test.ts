@@ -124,6 +124,8 @@ describe("AudioController facade over the mpv engine", () => {
         `http://127.0.0.1:${String(PROXY_PORT)}/stream/A`,
         "replace",
       ],
+      // A fresh load always clears mpv's process-global pause flag (H2 fix).
+      ["set_property", "pause", "no"],
     ]);
   });
 

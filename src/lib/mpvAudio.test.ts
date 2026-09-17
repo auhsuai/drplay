@@ -138,6 +138,8 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+      // H2 fix: a fresh load always clears mpv's process-global pause flag.
+      ["set_property", "pause", "no"],
     ]);
   });
 
@@ -147,9 +149,10 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
 
     await ctrl.playTrack(trackB);
 
-    expect(commandNames()).toEqual(["mpv_command"]);
+    expect(commandNames()).toEqual(["mpv_command", "mpv_command"]);
     expect(mpvCommands()).toEqual([
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
+      ["set_property", "pause", "no"],
     ]);
   });
 
@@ -172,6 +175,7 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
 
     expect(mpvCommands()).toEqual([
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+      ["set_property", "pause", "no"],
     ]);
   });
 
@@ -757,6 +761,7 @@ describe("MpvAudioController — transport", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(mpvCommands()).toEqual([
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+      ["set_property", "pause", "no"],
     ]);
   });
 });
@@ -819,6 +824,7 @@ describe("MpvAudioController — release lifecycle", () => {
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
+      ["set_property", "pause", "no"],
     ]);
   });
 
@@ -1039,6 +1045,7 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
 
   it("timers are cleaned up: seek arms display+deadline+failsafe, settle drains, release cancels", async () => {
     await ctrl.playTrack(trackA);
+    fireMpvEvent("file-loaded"); // the load completed — clears the load deadline
     settleViaTicks();
     expect(vi.getTimerCount()).toBe(0); // settle drained everything
 
