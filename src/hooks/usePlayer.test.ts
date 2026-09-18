@@ -90,61 +90,23 @@ vi.mock("../lib/AudioController", () => ({
   AudioController: { getInstance: () => audioMock },
 }));
 
-// jsdom does not implement the Media Session API — tests install their own.
-class MediaMetadataMock implements MediaMetadata {
-  title = "";
-  artist = "";
-  album = "";
-  artwork: MediaImage[] = [];
-  constructor(init?: MediaMetadataInit) {
-    this.title = init?.title ?? "";
-    this.artist = init?.artist ?? "";
-    this.album = init?.album ?? "";
-    this.artwork = init?.artwork ?? [];
-  }
-}
+const mediaControlsMock = vi.hoisted(() => ({
+  options: null as {
+    onTogglePlay: () => void;
+    onNext: () => void;
+    onPrev: () => void;
+  } | null,
+}));
 
-type ActionHandler = (details?: {
-  seekTime?: number;
-  seekOffset?: number;
-}) => void;
-
-const MEDIA_ACTIONS = [
-  "play",
-  "pause",
-  "nexttrack",
-  "previoustrack",
-  "seekto",
-  "seekbackward",
-  "seekforward",
-] as const;
-
-function installSessionMock() {
-  const handlers = new Map<string, ActionHandler | null>();
-  const session = {
-    metadata: null as MediaMetadata | null,
-    playbackState: "none" as MediaSessionPlaybackState,
-    setActionHandler: vi.fn((action: string, handler: ActionHandler | null) => {
-      handlers.set(action, handler);
-    }),
-    setPositionState: vi.fn(),
-  };
-  Object.defineProperty(navigator, "mediaSession", {
-    value: session,
-    configurable: true,
-    writable: true,
-  });
-  return {
-    session,
-    invoke: (
-      action: string,
-      details?: { seekTime?: number; seekOffset?: number },
-    ) => {
-      const handler = handlers.get(action);
-      if (handler) handler(details);
-    },
-  };
-}
+vi.mock("./useMediaControls", () => ({
+  useMediaControls: (options: {
+    onTogglePlay: () => void;
+    onNext: () => void;
+    onPrev: () => void;
+  }) => {
+    mediaControlsMock.options = options;
+  },
+}));
 
 function makeTrack(id: string): Track {
   return {
@@ -168,125 +130,48 @@ beforeEach(() => {
   });
   audioMock.getCurrentTime.mockReturnValue(0);
   audioMock.getDuration.mockReturnValue(0);
-  (globalThis as { MediaMetadata?: unknown }).MediaMetadata = MediaMetadataMock;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("usePlayer media session integration (Task A mount)", () => {
-  it("mount → handlers đăng ký đủ 7 action + metadata theo currentTrack + playbackState theo isPlaying", () => {
-    const { session } = installSessionMock();
-    usePlayerStore.setState({
-      currentTrack: makeTrack("t1"),
-      isPlaying: false,
-    });
-
+describe("usePlayer media controls integration", () => {
+  it("mount → useMediaControls nhận handler nối đúng queue (next/prev)", () => {
     renderHook(() => usePlayer("test-token"));
 
-    expect(session.metadata?.title).toBe("Title t1");
-    expect(session.metadata?.artist).toBe("Artist t1");
-    expect(session.playbackState).toBe("paused");
-    for (const action of MEDIA_ACTIONS) {
-      expect(session.setActionHandler).toHaveBeenCalledWith(
-        action,
-        expect.any(Function),
-      );
-    }
-  });
-
-  it("track đổi qua store → metadata + playbackState cập nhật (không cần remount)", () => {
-    const { session } = installSessionMock();
-    renderHook(() => usePlayer("test-token"));
+    expect(mediaControlsMock.options).not.toBeNull();
 
     act(() => {
-      usePlayerStore.setState({
-        currentTrack: makeTrack("t1"),
-        isPlaying: true,
-      });
-    });
-    expect(session.metadata?.title).toBe("Title t1");
-    expect(session.playbackState).toBe("playing");
-
-    act(() => {
-      usePlayerStore.setState({
-        currentTrack: makeTrack("t2"),
-        isPlaying: false,
-      });
-    });
-    expect(session.metadata?.title).toBe("Title t2");
-    expect(session.playbackState).toBe("paused");
-  });
-
-  it("nexttrack media action → gọi handleNextTrack của usePlayerQueue", () => {
-    const { invoke } = installSessionMock();
-    renderHook(() => usePlayer("test-token"));
-
-    act(() => {
-      invoke("nexttrack");
+      mediaControlsMock.options?.onNext();
     });
     expect(queueMock.handleNextTrack).toHaveBeenCalledTimes(1);
 
     act(() => {
-      invoke("previoustrack");
+      mediaControlsMock.options?.onPrev();
     });
     expect(queueMock.handlePrevTrack).toHaveBeenCalledTimes(1);
   });
 
-  it("play media action khi paused (track có streamUrl) → resume qua handleTogglePlay → store isPlaying true", () => {
-    const { session, invoke } = installSessionMock();
+  it("onTogglePlay khi paused (track có streamUrl) → resume qua handleTogglePlay → store isPlaying true", () => {
     usePlayerStore.setState({
       currentTrack: makeTrack("t1"),
       isPlaying: false,
     });
-
     renderHook(() => usePlayer("test-token"));
-    expect(session.playbackState).toBe("paused");
 
     act(() => {
-      invoke("play");
+      mediaControlsMock.options?.onTogglePlay();
     });
     expect(usePlayerStore.getState().isPlaying).toBe(true);
-    expect(session.playbackState).toBe("playing");
   });
 
-  it("seekto media action → audio.seek + setPositionState", () => {
-    const { session, invoke } = installSessionMock();
-    usePlayerStore.setState({
-      currentTrack: makeTrack("t1"),
-      isPlaying: true,
-    });
-    audioMock.getCurrentTime.mockReturnValue(10);
-    audioMock.getDuration.mockReturnValue(240);
-    renderHook(() => usePlayer("test-token"));
-
-    act(() => {
-      invoke("seekto", { seekTime: 100 });
-    });
-    expect(audioMock.seek).toHaveBeenCalledWith(100);
-    expect(session.setPositionState).toHaveBeenCalledWith({
-      duration: 240,
-      position: 10,
-      playbackRate: 1,
-    });
-  });
-
-  it("unmount usePlayer → cleanup media session (handlers null + metadata null)", () => {
-    const { session } = installSessionMock();
-    usePlayerStore.setState({ currentTrack: makeTrack("t1") });
+  it("unmount usePlayer không throw (hook native vắng mặt trong jsdom)", () => {
     const { unmount } = renderHook(() => usePlayer("test-token"));
-
     unmount();
-
-    for (const action of MEDIA_ACTIONS) {
-      expect(session.setActionHandler).toHaveBeenCalledWith(action, null);
-    }
-    expect(session.metadata).toBeNull();
   });
 
   it("return shape: expose đủ API player cho UI (smoke)", () => {
-    installSessionMock();
     const { result } = renderHook(() => usePlayer("test-token"));
 
     expect(typeof result.current.handlePlayTrack).toBe("function");
@@ -303,7 +188,6 @@ describe("usePlayer media session integration (Task A mount)", () => {
 
 describe("usePlayer broken-track reset on logout (Task D residual)", () => {
   it("PLAYER_STOP_EVENT → brokenTrackIds reset về [] (không sót sang session sau)", () => {
-    installSessionMock();
     renderHook(() => usePlayer("test-token"));
 
     act(() => {
@@ -330,7 +214,6 @@ describe("usePlayer next-track prefetch", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response("{}", { status: 200 }));
-    installSessionMock();
     const { result } = renderHook(() => usePlayer("test-token"));
 
     await act(async () => {
@@ -367,7 +250,6 @@ describe("usePlayer pre-play streamUnplayable gate (P1)", () => {
 
   it("click lần 1 trên track cờ → bị chặn: không session, không isPlaying, có toast", async () => {
     metadataCache.set("gate-a", makeFlagged(true));
-    installSessionMock();
     const { result } = renderHook(() => usePlayer("test-token"));
 
     await act(async () => {
@@ -383,7 +265,6 @@ describe("usePlayer pre-play streamUnplayable gate (P1)", () => {
 
   it("click lần 2 ĐÚNG track vừa bị chặn → force phát bình thường (toast không lặp)", async () => {
     metadataCache.set("gate-b", makeFlagged(true));
-    installSessionMock();
     const { result } = renderHook(() => usePlayer("test-token"));
 
     await act(async () => {
@@ -405,7 +286,6 @@ describe("usePlayer pre-play streamUnplayable gate (P1)", () => {
   it("phát track khác giữa chừng → ref reset, quay lại track cờ bị chặn lại từ đầu", async () => {
     metadataCache.set("gate-c", makeFlagged(true));
     metadataCache.set("gate-d", makeFlagged(undefined));
-    installSessionMock();
     const { result } = renderHook(() => usePlayer("test-token"));
 
     await act(async () => {
@@ -429,7 +309,6 @@ describe("usePlayer pre-play streamUnplayable gate (P1)", () => {
   });
 
   it("track không cờ → phát như cũ, không toast", async () => {
-    installSessionMock();
     const { result } = renderHook(() => usePlayer("test-token"));
 
     await act(async () => {
@@ -445,7 +324,6 @@ describe("usePlayer pre-play streamUnplayable gate (P1)", () => {
 
   it("isNavigation=true (auto-advance) bỏ qua gate → track cờ vẫn được phát thử", async () => {
     metadataCache.set("gate-f", makeFlagged(true));
-    installSessionMock();
     const { result } = renderHook(() => usePlayer("test-token"));
 
     await act(async () => {
@@ -469,7 +347,6 @@ describe("usePlayer resume path — no streamUrl, paused (B14-1/B14-2)", () => {
   });
 
   it("B14-2: token resolve → commit NGAY (URL + triggerReload + isPlaying), không chờ metadata", async () => {
-    installSessionMock();
     vi.mocked(getTrackMetadata).mockReturnValueOnce(
       new Promise<never>(() => {}),
     );
@@ -491,7 +368,6 @@ describe("usePlayer resume path — no streamUrl, paused (B14-1/B14-2)", () => {
   });
 
   it("B14-1: abort giữa token (STOP) → KHÔNG commit URL/triggerReload/isPlaying", async () => {
-    installSessionMock();
     let resolveToken: ((token: string) => void) | undefined;
     vi.mocked(getValidToken).mockReturnValueOnce(
       new Promise<string>((resolve) => {

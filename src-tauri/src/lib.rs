@@ -12,6 +12,8 @@ mod token_store;
 mod seed;
 #[cfg(windows)]
 mod mpv;
+#[cfg(windows)]
+mod media_controls;
 mod stream_proxy;
 
 use auth::{login_google_native, refresh_google_token};
@@ -197,6 +199,14 @@ pub fn run() {
 
             setup_tray(app)?;
 
+            // Windows media flyout (SMTC): the app-owned session must be
+            // registered after the main window exists. A failure only costs
+            // the flyout — playback and the tray keep working.
+            #[cfg(windows)]
+            if let Err(controls_error) = media_controls::init(app.handle()) {
+                log::warn!("[media-controls] init failed: {controls_error}");
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -239,6 +249,7 @@ pub fn run() {
             #[cfg(windows)] mpv_command,
             #[cfg(windows)] mpv_get_property,
             #[cfg(windows)] mpv_shutdown,
+            #[cfg(windows)] media_controls::media_controls_update,
         ])
         .build(tauri::generate_context!());
 

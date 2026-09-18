@@ -97,7 +97,14 @@ pub(crate) fn mpv_flags(pipe_name: &str, mpv_log: Option<&Path>) -> Vec<String> 
         "--demuxer-max-back-bytes=8MiB".to_string(),
         "--demuxer-max-bytes=64MiB".to_string(),
         "--cache=yes".to_string(),
-        "--force-media-title=no".to_string(),
+        // Windows SMTC (media flyout): the app owns the session
+        // (src/media_controls.rs) so the flyout shows the app queue's
+        // metadata and drives its next/prev. mpv's own session would be a
+        // second, queue-unaware entry; and mpv must not grab the media keys
+        // (input-media-keys) or Windows would route them to mpv instead of
+        // the app session. Audio playback itself is unchanged.
+        "--media-controls=no".to_string(),
+        "--input-media-keys=no".to_string(),
     ];
     if let Some(log_file) = mpv_log {
         flags.push(format!("--log-file={}", log_file.display()));
@@ -259,7 +266,8 @@ mod tests {
             "--demuxer-max-back-bytes=8MiB",
             "--demuxer-max-bytes=64MiB",
             "--cache=yes",
-            "--force-media-title=no",
+            "--media-controls=no",
+            "--input-media-keys=no",
         ];
         for flag in expected_static {
             assert!(flags.iter().any(|candidate| candidate == flag), "missing flag {flag}");

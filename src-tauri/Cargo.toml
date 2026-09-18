@@ -69,6 +69,11 @@ bytes = "1.6.0"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38.2"
 windows-core = "0.61.2"
+# App-owned Windows SMTC session (src/media_controls.rs): track metadata,
+# transport buttons and the flyout timeline. The version matches the one
+# tauri 2.11 already pulls (Cargo.lock), so the extra features add no new
+# crate graph node.
+windows = { version = "0.61", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT"] }
 # Orphan guarantee for the mpv sidecar: Windows Job Object with
 # KILL_ON_JOB_CLOSE (see src/mpv/job.rs). Pinned to 0.59 to reuse the
 # version already in Cargo.lock (no new graph nodes).

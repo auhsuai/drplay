@@ -21,7 +21,7 @@ import type { QueueDriveItem } from "./player/usePlayerQueue";
 import type { TabKey } from "../utils/driveConstants";
 
 import { usePlayerStore } from "../store/playerStore";
-import { useMediaSession } from "./useMediaSession";
+import { useMediaControls } from "./useMediaControls";
 
 export { PLAYER_STOP_EVENT } from "./player/usePlayerLifecycle";
 
@@ -191,10 +191,11 @@ export const usePlayer = (accessToken: string | null) => {
     t,
   ]);
 
-  // Bridge OS media keys / Windows flyout (Media Session API) to the existing
-  // player handlers. Called unconditionally: with no track the session shows
-  // "none" and the hook no-ops when navigator.mediaSession is unavailable.
-  useMediaSession({
+  // Bridge the OS media surface (Windows flyout / keyboard media keys) to the
+  // existing player handlers. The native SMTC session lives in Rust
+  // (src-tauri/src/media_controls.rs) — this hook only routes its events and
+  // pushes state snapshots, so queue/playback logic stays single-sourced here.
+  useMediaControls({
     onTogglePlay: () => {
       void handleTogglePlay();
     },

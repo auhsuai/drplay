@@ -46,7 +46,7 @@ export function TrackInfo({
   // restore) — the fetched metadata was only ever used for the cover. Once a
   // REAL entry (v < V_PLACEHOLDER) arrives, fold the parsed title/artist into
   // the store (same updater pattern usePlayer uses for restoreDuration) so
-  // the bar (and useMediaSession, which reads the store) shows the real tags.
+  // the bar (and useMediaControls, which reads the store) shows the real tags.
   // Guards: a placeholder entry (filename title, "Unknown Artist") never
   // writes; the updater returns prev unchanged when nothing actually differs,
   // so a store update cannot retrigger this effect into a loop.
