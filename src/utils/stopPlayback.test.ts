@@ -5,8 +5,10 @@ import { renderHook, act } from "@testing-library/react";
 const mocks = vi.hoisted(() => {
   const store = {
     currentTrack: null as { id: string } | null,
+    isDownloading: false,
     setCurrentTrack: vi.fn(),
     setIsPlaying: vi.fn(),
+    setIsDownloading: vi.fn(),
   };
   return {
     store,
@@ -43,8 +45,10 @@ import { useDriveBulkOps } from "../hooks/useDriveBulkOps";
 
 beforeEach(() => {
   mocks.store.currentTrack = null;
+  mocks.store.isDownloading = false;
   mocks.store.setCurrentTrack.mockClear();
   mocks.store.setIsPlaying.mockClear();
+  mocks.store.setIsDownloading.mockClear();
   mocks.release.mockClear();
   mocks.deleteFile.mockReset();
   mocks.showErrorToast.mockClear();
@@ -62,6 +66,18 @@ describe("stopPlaybackIfTrack", () => {
     expect(mocks.store.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
+  it("clears isDownloading when the deleted file IS the current track (hard reset)", () => {
+    mocks.store.currentTrack = { id: "track-1" };
+    mocks.store.isDownloading = true;
+
+    stopPlaybackIfTrack("track-1");
+
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+    expect(mocks.store.setCurrentTrack).toHaveBeenCalledWith(null);
+    expect(mocks.store.setIsPlaying).toHaveBeenCalledWith(false);
+    expect(mocks.store.setIsDownloading).toHaveBeenCalledWith(false);
+  });
+
   it("is a no-op when the deleted file is NOT the current track", () => {
     mocks.store.currentTrack = { id: "track-1" };
 
@@ -70,6 +86,7 @@ describe("stopPlaybackIfTrack", () => {
     expect(mocks.release).not.toHaveBeenCalled();
     expect(mocks.store.setCurrentTrack).not.toHaveBeenCalled();
     expect(mocks.store.setIsPlaying).not.toHaveBeenCalled();
+    expect(mocks.store.setIsDownloading).not.toHaveBeenCalled();
   });
 
   it("is a no-op when no track is loaded", () => {
@@ -80,6 +97,7 @@ describe("stopPlaybackIfTrack", () => {
     expect(mocks.release).not.toHaveBeenCalled();
     expect(mocks.store.setCurrentTrack).not.toHaveBeenCalled();
     expect(mocks.store.setIsPlaying).not.toHaveBeenCalled();
+    expect(mocks.store.setIsDownloading).not.toHaveBeenCalled();
   });
 });
 

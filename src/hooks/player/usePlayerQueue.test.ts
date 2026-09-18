@@ -829,3 +829,63 @@ describe("handlePrevTrack broken-track guard (B16-5)", () => {
     expect(handlePlayTrack).not.toHaveBeenCalled();
   });
 });
+
+describe("handleNextTrack end-of-queue terminal state (A4)", () => {
+  const setup = (
+    currentTrack: Track | null,
+    playbackQueue: Track[],
+    playMode: PlayMode,
+  ) => {
+    const setPlaybackQueue = vi.fn();
+    const setOriginalQueue = vi.fn();
+    const setPlayMode = vi.fn();
+    const handlePlayTrack = vi.fn();
+
+    const { result } = renderHook(() =>
+      usePlayerQueue(
+        currentTrack,
+        playbackQueue,
+        playbackQueue,
+        playMode,
+        setPlaybackQueue,
+        setOriginalQueue,
+        setPlayMode,
+        handlePlayTrack,
+      ),
+    );
+    return { result, handlePlayTrack };
+  };
+
+  beforeEach(() => {
+    usePlayerStore.setState({ brokenTrackIds: [], isPlaying: true });
+  });
+
+  it("A4: normal mode, bài cuối queue, không còn target → isPlaying=false (terminal deterministic)", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2")];
+    const current = queue[1];
+    if (current === undefined) throw new Error("expected track at index 1");
+    const { result, handlePlayTrack } = setup(current, queue, "normal");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("A4: normal mode còn bài kế → auto-advance, KHÔNG set isPlaying=false oan", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    const { result, handlePlayTrack } = setup(current, queue, "normal");
+
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(handlePlayTrack).toHaveBeenCalledTimes(1);
+    expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t2" });
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+});

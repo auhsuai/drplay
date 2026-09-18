@@ -195,3 +195,90 @@ describe("usePlayerTrackPlayback — token refresh failure feedback", () => {
     expect(usePlayerStore.getState().currentTrack).toBeNull();
   });
 });
+
+describe("usePlayerTrackPlayback — isDownloading owner check (attempt supersede)", () => {
+  it("UTP-4: superseded attempt must NOT clear the new attempt's spinner on its late abort", async () => {
+    const tokenA = deferred<string | null>();
+    const tokenB = deferred<string | null>();
+    vi.mocked(getValidToken)
+      .mockReturnValueOnce(tokenA.promise)
+      .mockReturnValueOnce(tokenB.promise);
+    const { result, unmount } = renderPlayback();
+
+    const playA = beginPlay(result, makeTrack("t1"));
+    // B supersedes A: same controller swap a second click performs.
+    const playB = beginPlay(result, makeTrack("t2"));
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+
+    // A's token resolves late; A resumes with its signal already aborted.
+    await act(async () => {
+      tokenA.resolve("token-a");
+      await playA;
+    });
+
+    // A must not touch the spinner now owned by B, and must not commit.
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+    expect(usePlayerStore.getState().currentTrack).toBeNull();
+
+    // B still completes its own intent normally.
+    await act(async () => {
+      tokenB.resolve("token-b");
+      await playB;
+    });
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("t2");
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+    expect(recordPlay).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t2" }),
+    );
+
+    // No RTL auto-cleanup in this suite (globals off): unmount so this hook's
+    // pending defer cannot react to the next test's PLAYER_STOP_EVENT.
+    unmount();
+  });
+
+  it("UTP-5: the current attempt aborted early (player-stop) clears its own spinner", async () => {
+    const token = deferred<string | null>();
+    vi.mocked(getValidToken).mockReturnValue(token.promise);
+    const { result, unmount } = renderPlayback();
+
+    const playPromise = beginPlay(result, makeTrack("t1"));
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+
+    act(() => {
+      window.dispatchEvent(new Event(PLAYER_STOP_EVENT));
+    });
+
+    await act(async () => {
+      token.resolve("fresh-token");
+      await playPromise;
+    });
+
+    expect(usePlayerStore.getState().isDownloading).toBe(false);
+    expect(usePlayerStore.getState().currentTrack).toBeNull();
+    expect(recordPlay).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("UTP-6: normal completion — defer fallback fire clears the spinner as before", async () => {
+    vi.useFakeTimers();
+    try {
+      const { result, unmount } = renderPlayback();
+
+      await act(async () => {
+        await result.current.handlePlayTrack(makeTrack("t1"));
+      });
+      expect(usePlayerStore.getState().isDownloading).toBe(true);
+
+      await act(async () => {
+        vi.advanceTimersByTime(9_000);
+        await Promise.resolve();
+      });
+
+      expect(usePlayerStore.getState().isDownloading).toBe(false);
+      expect(usePlayerStore.getState().currentTrack?.id).toBe("t1");
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

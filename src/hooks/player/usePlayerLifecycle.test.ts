@@ -5,7 +5,8 @@ import {
   start as keepAwakeStart,
   stop as keepAwakeStop,
 } from "tauri-plugin-keepawake-api";
-import { usePlayerLifecycle } from "./usePlayerLifecycle";
+import { PLAYER_STOP_EVENT, usePlayerLifecycle } from "./usePlayerLifecycle";
+import { usePlayerStore } from "../../store/playerStore";
 
 vi.mock("tauri-plugin-keepawake-api", () => ({
   start: vi.fn(() => Promise.resolve()),
@@ -51,6 +52,7 @@ const flush = async (): Promise<void> => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  usePlayerStore.setState({ isDownloading: false });
 });
 
 afterEach(() => {
@@ -108,5 +110,28 @@ describe("usePlayerLifecycle keep-awake cleanup", () => {
       vi.mocked(keepAwakeStart).mock.invocationCallOrder[0] ?? 0;
     const stopOrder = vi.mocked(keepAwakeStop).mock.invocationCallOrder[0] ?? 0;
     expect(stopOrder).toBeGreaterThan(startOrder);
+  });
+});
+
+describe("usePlayerLifecycle player-stop hard reset", () => {
+  it("UPL-2: player-stop while a load is in flight clears isDownloading immediately", () => {
+    usePlayerStore.setState({ isDownloading: true });
+    const deps = makeDeps(false);
+    const { unmount } = renderHook(() => {
+      usePlayerLifecycle(deps);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event(PLAYER_STOP_EVENT));
+    });
+
+    expect(usePlayerStore.getState().isDownloading).toBe(false);
+    expect(deps.setCurrentTrack).toHaveBeenCalledWith(null);
+    expect(deps.setIsPlaying).toHaveBeenCalledWith(false);
+    expect(deps.setOriginalQueue).toHaveBeenCalledWith([]);
+    expect(deps.setPlaybackQueue).toHaveBeenCalledWith([]);
+    expect(deps.resetBrokenTracks).toHaveBeenCalledTimes(1);
+
+    unmount();
   });
 });

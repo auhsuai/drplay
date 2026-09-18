@@ -261,14 +261,26 @@ export class BufferingTracker {
     return this.state === "shown";
   }
 
+  /** Track switch: silently drop the previous track's buffering session —
+   *  timers, tick-pairing baseline and the cached stall flag all belong to
+   *  that track. Never emits (unlike settle() there is no transition to
+   *  report); the new track's own request() emits its state. */
+  resetForTrack(): void {
+    this.resetSession();
+  }
+
   cancel(): void {
+    // Why (v4): release() tears the mpv process down — its last
+    // paused-for-cache report is dead state and must not suppress the next
+    // engine's tick-settle.
+    this.resetSession();
+  }
+
+  private resetSession(): void {
     this.clearTimers();
     this.lastTickAt = null;
     this.lastTickValue = null;
     this.state = "idle";
-    // Why (v4): release() tears the mpv process down — its last
-    // paused-for-cache report is dead state and must not suppress the next
-    // engine's tick-settle.
     this.mpvBuffering = false;
   }
 
@@ -354,7 +366,7 @@ export class TimePosWatchdog {
     // Why: clearing the interval cannot cancel a poll already awaiting the
     // IPC reply — the bump is what invalidates that continuation.
     this.generation += 1;
-    clearTimeout(this.timer ?? undefined);
+    clearInterval(this.timer ?? undefined);
     this.timer = null;
   }
   private async poll(): Promise<void> {
@@ -498,7 +510,14 @@ export class StallReconciler {
 
   private async round(): Promise<void> {
     if (this.polling || this.exhausted) return;
-    if (!this.cb.isActive()) return;
+    if (!this.cb.isActive()) {
+      // Why: a deactivated reconciler (pause/end/finished) has nothing left
+      // to observe — stop the interval instead of running a no-op round
+      // every 5s until release. The engine's normal re-arm paths
+      // (pause=false / file-loaded) call start() again.
+      this.stop();
+      return;
+    }
     if (Date.now() - this.lastProgressAt < STALL_RECONCILE_MS) return;
     if (this.cb.isBusy()) return;
     const gen = this.generation;

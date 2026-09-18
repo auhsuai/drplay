@@ -55,6 +55,7 @@ export function useSeekDrag({
   const blurRef = useRef<() => void>(() => {});
   const lostCaptureRef = useRef<() => void>(() => {});
   const hardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Unmount safety net: if the component unmounts mid-drag (view closed /
   // track switched while dragging), the window listeners added by
@@ -73,6 +74,10 @@ export function useSeekDrag({
       if (hardTimerRef.current !== null) {
         clearTimeout(hardTimerRef.current);
         hardTimerRef.current = null;
+      }
+      if (releaseTimerRef.current !== null) {
+        clearTimeout(releaseTimerRef.current);
+        releaseTimerRef.current = null;
       }
     },
     [progressBarRef],
@@ -248,7 +253,8 @@ export function useSeekDrag({
         playheadRef.current,
       );
       // Give the audio engine a small window to flush old timeupdate events
-      setTimeout(() => {
+      releaseTimerRef.current = setTimeout(() => {
+        releaseTimerRef.current = null;
         isDraggingRef.current = false;
         setIsDragging(false);
       }, DRAG_RELEASE_DELAY_MS);

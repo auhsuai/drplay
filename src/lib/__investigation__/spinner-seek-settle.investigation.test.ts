@@ -266,14 +266,15 @@ describe("spinner/seek/settle investigation — engine level (S1 + S4)", () => {
     log.push("-- +250ms after B's request");
 
     console.log(log.join("\n"));
-    // Shown -> shown dedupe: no re-emit, and crucially NO false — the spinner
-    // never drops while B has produced no audio.
+    // A2 (R4): the switch resets A's session and promotes B's own — exactly
+    // one fresh true; crucially NO false — the spinner never drops while B
+    // has produced no audio.
     expect(buffering, "no false may drop B's spinner").not.toContain(false);
-    expect(buffering).toEqual([]);
+    expect(buffering).toEqual([true]);
     // Tracker is still alive: B's progressing ticks settle it exactly once.
     fireProperty("time-pos", 1);
     fireProperty("time-pos", 1.5);
-    expect(buffering).toEqual([false]);
+    expect(buffering).toEqual([true, false]);
   });
 
   it("E5 (S4 fixed): pause while shown then resume — the resume's pause=false never settles the stall away", async () => {

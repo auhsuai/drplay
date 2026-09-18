@@ -104,6 +104,12 @@ beforeEach(() => {
   mockedGet.mockResolvedValue(undefined);
   mockedGetValidToken.mockResolvedValue("test-token");
   mockedGetPrefetchedStreamUrl.mockReturnValue(undefined);
+  // Default store state cho mọi test (tránh leak mockReturnValue giữa các test —
+  // guard restore đọc getState() nên cần giá trị khởi tạo thật của store).
+  vi.mocked(usePlayerStore.getState).mockReturnValue({
+    currentTrack: null,
+    isDownloading: false,
+  } as unknown as ReturnType<typeof usePlayerStore.getState>);
 });
 
 afterEach(() => {
@@ -499,5 +505,124 @@ describe("usePlayerSession queue element validation (B16-4)", () => {
     expect(playback).toHaveLength(1);
     expect(playback[0]).toBe(valid);
     expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("usePlayerSession restore race (user intent guard)", () => {
+  it("N: user click bài trong lúc restore đang await → bỏ toàn bộ commit (queue + track)", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 5, duration: 100 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+    let resolveToken: (token: string) => void = () => {};
+    mockedGetValidToken.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+
+    const {
+      setCurrentTrack,
+      setOriginalQueue,
+      setPlaybackQueue,
+      setPlayMode,
+      triggerReload,
+    } = makeHook();
+    await flushMicrotasks();
+    expect(mockedGetValidToken).toHaveBeenCalledTimes(1);
+
+    // user click bài khác trong lúc restore còn chờ token
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: makeTrack("user-click"),
+      isDownloading: false,
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+
+    resolveToken("test-token");
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).not.toHaveBeenCalled();
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(triggerReload).not.toHaveBeenCalled();
+    expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+
+  it("O: user đang load (isDownloading=true) khi restore resolve → bỏ toàn bộ commit", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 5, duration: 100 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+    let resolveToken: (token: string) => void = () => {};
+    mockedGetValidToken.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+
+    const {
+      setCurrentTrack,
+      setOriginalQueue,
+      setPlaybackQueue,
+      setPlayMode,
+      triggerReload,
+    } = makeHook();
+    await flushMicrotasks();
+    expect(mockedGetValidToken).toHaveBeenCalledTimes(1);
+
+    // user vừa bắt đầu một lượt load (isDownloading) trong lúc restore await
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: null,
+      isDownloading: true,
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+
+    resolveToken("test-token");
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).not.toHaveBeenCalled();
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(triggerReload).not.toHaveBeenCalled();
+    expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+
+  it("P: user không tương tác (currentTrack=null, isDownloading=false) → restore commit đủ như cũ", async () => {
+    const queue = [makeTrack("t1", "q1"), makeTrack("t2", "q2")];
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: queue[0], time: 7, duration: 120 }),
+    );
+    mockedGet.mockImplementation((key: string) => {
+      if (key === QUEUE_STORAGE_KEY) return Promise.resolve(queue);
+      if (key === PLAYMODE_STORAGE_KEY) return Promise.resolve("normal");
+      return Promise.resolve(undefined);
+    });
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: null,
+      isDownloading: false,
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+
+    const {
+      setCurrentTrack,
+      setOriginalQueue,
+      setPlaybackQueue,
+      setPlayMode,
+      triggerReload,
+    } = makeHook();
+    await flushMicrotasks();
+
+    expect(setOriginalQueue).toHaveBeenCalledWith(queue);
+    expect(setPlaybackQueue).toHaveBeenCalledTimes(1);
+    const restored = setCurrentTrack.mock.calls[0]?.[0] as Track;
+    expect(restored.id).toBe("t1");
+    expect(restored.restoreTime).toBe(7);
+    expect(setPlayMode).toHaveBeenCalledWith("normal");
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).not.toHaveBeenCalled();
   });
 });

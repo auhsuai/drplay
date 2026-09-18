@@ -396,3 +396,119 @@ describe("usePlayer resume path — no streamUrl, paused (B14-1/B14-2)", () => {
     expect(state.loadNonce).toBe(0);
   });
 });
+
+describe("usePlayer resume intent ownership (R5b/RC-6) — user pause aborts in-flight resume", () => {
+  const resumeTrack = (id: string): Track => ({
+    ...makeTrack(id),
+    streamUrl: "",
+  });
+
+  it("R6-1: user pause trong lúc resume await → attempt bị abort, KHÔNG commit, isPlaying giữ false, spinner clear", async () => {
+    let resolveToken: ((token: string) => void) | undefined;
+    vi.mocked(getValidToken).mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        resolveToken = resolve;
+      }),
+    );
+    usePlayerStore.setState({
+      currentTrack: resumeTrack("r6-1"),
+      isPlaying: false,
+    });
+    const { result, unmount } = renderHook(() => usePlayer("test-token"));
+
+    act(() => {
+      void result.current.handleTogglePlay();
+    });
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+
+    // Engine/đường khác đẩy isPlaying=true trong lúc token còn pending → lần
+    // toggle kế tiếp rơi vào else-branch và là một lệnh PAUSE của user.
+    act(() => {
+      usePlayerStore.setState({ isPlaying: true });
+    });
+    act(() => {
+      void result.current.handleTogglePlay();
+    });
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+
+    await act(async () => {
+      resolveToken?.("fresh-token");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const state = usePlayerStore.getState();
+    expect(state.isPlaying).toBe(false);
+    expect(state.currentTrack?.streamUrl).toBe("");
+    expect(state.loadNonce).toBe(0);
+    expect(state.isDownloading).toBe(false);
+    unmount();
+  });
+
+  it("R6-2: resume hoàn tất bình thường → commit URL + isPlaying true, spinner clear", async () => {
+    usePlayerStore.setState({
+      currentTrack: resumeTrack("r6-2"),
+      isPlaying: false,
+    });
+    const { result, unmount } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handleTogglePlay();
+    });
+
+    const state = usePlayerStore.getState();
+    expect(state.currentTrack?.streamUrl).toBe("/drive-stream/r6-2");
+    expect(state.isPlaying).toBe(true);
+    expect(state.loadNonce).toBe(1);
+    expect(state.isDownloading).toBe(false);
+    unmount();
+  });
+
+  it("R6-3: resume bị supersede → attempt cũ resolve muộn KHÔNG clear isDownloading của attempt mới", async () => {
+    let resolveA: ((token: string) => void) | undefined;
+    let resolveB: ((token: string) => void) | undefined;
+    vi.mocked(getValidToken)
+      .mockReturnValueOnce(
+        new Promise<string>((resolve) => {
+          resolveA = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<string>((resolve) => {
+          resolveB = resolve;
+        }),
+      );
+    usePlayerStore.setState({
+      currentTrack: resumeTrack("r6-3"),
+      isPlaying: false,
+    });
+    const { result, unmount } = renderHook(() => usePlayer("test-token"));
+
+    act(() => {
+      void result.current.handleTogglePlay();
+    });
+    act(() => {
+      void result.current.handleTogglePlay();
+    });
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+
+    await act(async () => {
+      resolveA?.("token-a");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // A đã bị abort bởi attempt B → không commit, không clear spinner của B.
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+    expect(usePlayerStore.getState().currentTrack?.streamUrl).toBe("");
+    expect(usePlayerStore.getState().loadNonce).toBe(0);
+
+    await act(async () => {
+      resolveB?.("token-b");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(usePlayerStore.getState().currentTrack?.streamUrl).toBe(
+      "/drive-stream/r6-3",
+    );
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(usePlayerStore.getState().isDownloading).toBe(false);
+    unmount();
+  });
+});

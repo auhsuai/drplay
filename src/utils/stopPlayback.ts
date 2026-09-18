@@ -15,6 +15,7 @@ import { usePlayerStore } from "../store/playerStore";
 export function stopPlaybackIfTrack(fileId: string): void {
   if (usePlayerStore.getState().currentTrack?.id !== fileId) return;
   AudioController.getInstance().release();
+  usePlayerStore.getState().setIsDownloading(false);
   usePlayerStore.getState().setCurrentTrack(null);
   usePlayerStore.getState().setIsPlaying(false);
 }

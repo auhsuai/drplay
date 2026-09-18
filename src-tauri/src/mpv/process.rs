@@ -379,7 +379,7 @@ mod tests {
         let received: std::sync::Arc<Mutex<Vec<IpcMessage>>> = Default::default();
         let sink: EventSink = {
             let received = received.clone();
-            std::sync::Arc::new(move |message| received.lock().unwrap().push(message))
+            std::sync::Arc::new(move |message, _epoch| received.lock().unwrap().push(message))
         };
         let ipc = MpvIpc::new(client, sink);
 

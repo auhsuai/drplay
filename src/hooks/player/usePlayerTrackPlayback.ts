@@ -63,6 +63,19 @@ export function usePlayerTrackPlayback(
     return ctrl.signal;
   };
 
+  // Why: isDownloading is shared by every attempt; a superseded attempt must
+  // only clear the spinner it still owns (same controller in the ref) — a
+  // later attempt has already set its own state on the same flag.
+  const isCurrentAttempt = (signal: AbortSignal) =>
+    abortControllerRef.current?.signal === signal;
+
+  // Why: abort the owning attempt WITHOUT swapping the ref to a fresh
+  // controller. The aborted attempt stays the ref's current one, so its
+  // owner-checked cleanup still clears the spinner it set (a plain
+  // createAbortSignal would hand ownership to an empty controller and leak
+  // the spinner). Used by handleTogglePlay's user-pause path.
+  const abortCurrentAttempt = () => abortControllerRef.current?.abort();
+
   useEffect(() => {
     const handleStop = () => {
       abortControllerRef.current?.abort();
@@ -157,8 +170,13 @@ export function usePlayerTrackPlayback(
         );
 
         // guard UTP-1: the LEAD token-refresh branch does not race the signal,
-        // so an aborted attempt resumes here — never commit it.
-        if (signal.aborted) return;
+        // so an aborted attempt resumes here — never commit it. Clear the
+        // spinner only while this attempt still owns it: on supersede the ref
+        // already points at the newer controller, whose spinner must survive.
+        if (signal.aborted) {
+          if (isCurrentAttempt(signal)) setIsDownloading(false);
+          return;
+        }
 
         if (!freshToken) {
           setIsDownloading(false);
@@ -283,5 +301,10 @@ export function usePlayerTrackPlayback(
     ],
   );
 
-  return { handlePlayTrack, createAbortSignal };
+  return {
+    handlePlayTrack,
+    createAbortSignal,
+    isCurrentAttempt,
+    abortCurrentAttempt,
+  };
 }

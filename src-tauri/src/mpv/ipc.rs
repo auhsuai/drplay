@@ -6,7 +6,7 @@
 //! - incoming bytes are split on `\n`; unparseable lines are dropped
 //!   (logged), they never crash the reader.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -49,8 +49,11 @@ pub(crate) enum IpcMessage {
     ConnectionClosed { cause: String },
 }
 
-/// Callback invoked for every mpv event the reader task receives.
-pub(crate) type EventSink = Arc<dyn Fn(IpcMessage) + Send + Sync>;
+/// Callback invoked for every mpv event the reader task receives, together
+/// with the load epoch current at dispatch time. The epoch increments once
+/// per dispatched `loadfile` reply (see `IpcCore::dispatch`), so consumers
+/// can drop messages that predate the latest requested load.
+pub(crate) type EventSink = Arc<dyn Fn(IpcMessage, u64) + Send + Sync>;
 
 /// One line received from mpv, classified.
 enum Incoming {
@@ -106,6 +109,14 @@ fn parse_line(line: &str) -> Option<Incoming> {
 
 struct IpcCore {
     pending: Mutex<HashMap<u64, oneshot::Sender<MpvReply>>>,
+    /// Request ids of in-flight `loadfile` commands. The reply resolving one
+    /// of them is what advances `load_epoch`: bumping in the single reader
+    /// task keeps the wire order exact (events parsed before the reply carry
+    /// the old epoch, events parsed after carry the new one).
+    loadfile_requests: Mutex<HashSet<u64>>,
+    /// Monotonic per-connection load counter, attached to every dispatched
+    /// event and returned by `mpv_command` (see `MpvIpc::current_epoch`).
+    load_epoch: AtomicU64,
     event_sink: EventSink,
     /// Set before a commanded shutdown (`mpv_shutdown`, used by the frontend's
     /// load-deadline sidecar restart): the pipe ending that follows is
@@ -118,6 +129,8 @@ impl IpcCore {
     fn new(event_sink: EventSink) -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),
+            loadfile_requests: Mutex::new(HashSet::new()),
+            load_epoch: AtomicU64::new(0),
             event_sink,
             shutdown_requested: AtomicBool::new(false),
         }
@@ -139,6 +152,22 @@ impl IpcCore {
         self.lock_pending().insert(request_id, sender);
     }
 
+    /// Recover from poisoning instead of panicking (same rationale as
+    /// `lock_pending`: the set holds plain ids, no invariant can be broken).
+    fn lock_loadfile_requests(&self) -> std::sync::MutexGuard<'_, HashSet<u64>> {
+        self.loadfile_requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Mark an outgoing `loadfile` so its reply advances `load_epoch`.
+    fn register_loadfile_request(&self, request_id: u64) {
+        self.lock_loadfile_requests().insert(request_id);
+    }
+
+    /// Epoch of the latest dispatched `loadfile` reply (0 before the first).
+    fn load_epoch(&self) -> u64 {
+        self.load_epoch.load(Ordering::SeqCst)
+    }
+
     /// Drop every pending sender (pipe died): awaiting commands observe
     /// "connection closed" instead of hanging until timeout.
     fn fail_all_pending(&self) {
@@ -148,6 +177,13 @@ impl IpcCore {
     fn dispatch(&self, line: &str) {
         match parse_line(line) {
             Some(Incoming::Reply { request_id, error, data }) => {
+                // Bump BEFORE waking the waiter: the `loadfile` caller reads
+                // `current_epoch()` right after its reply resolves, and every
+                // event parsed from here on carries the new epoch (the single
+                // reader task makes this the exact wire point of the load).
+                if self.lock_loadfile_requests().remove(&request_id) {
+                    self.load_epoch.fetch_add(1, Ordering::SeqCst);
+                }
                 let sender = self.lock_pending().remove(&request_id);
                 match sender {
                     Some(sender) => {
@@ -158,7 +194,7 @@ impl IpcCore {
                     }
                 }
             }
-            Some(Incoming::Event(message)) => (self.event_sink)(message),
+            Some(Incoming::Event(message)) => (self.event_sink)(message, self.load_epoch()),
             None => {
                 let preview: String = line.chars().take(80).collect();
                 log::debug!("[mpv-ipc] ignoring non-JSON line: {preview:?}");
@@ -195,13 +231,27 @@ impl MpvIpc {
         self.core.shutdown_requested.store(true, Ordering::Relaxed);
     }
 
+    /// Load epoch of the latest dispatched `loadfile` reply (0 before the
+    /// first load). `mpv_command` includes it in its reply so the frontend
+    /// can tag engine events.
+    pub(crate) fn current_epoch(&self) -> u64 {
+        self.core.load_epoch()
+    }
+
     /// Send one command and await its reply. Timeout-guarded; the pending
     /// entry is registered BEFORE the write so a fast reply cannot race us.
+    /// A `loadfile` is additionally tracked so its reply advances
+    /// `load_epoch` (see `register_loadfile_request`); the tracking entry is
+    /// dropped on every failure path so it cannot leak or bump later.
     pub(crate) async fn send_command(&self, args: Vec<Value>) -> Result<Value, String> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let is_loadfile = args.first().and_then(Value::as_str) == Some("loadfile");
         let frame = frame_message(&json!({ "command": args, "request_id": request_id }))?;
         let (sender, receiver) = oneshot::channel();
         self.core.register(request_id, sender);
+        if is_loadfile {
+            self.core.register_loadfile_request(request_id);
+        }
 
         let write_result = write_frame_bounded(
             &self.writer,
@@ -212,6 +262,7 @@ impl MpvIpc {
 
         if let Err(write_error) = write_result {
             self.core.lock_pending().remove(&request_id);
+            self.core.lock_loadfile_requests().remove(&request_id);
             return Err(write_error);
         }
 
@@ -220,10 +271,12 @@ impl MpvIpc {
             Ok(Err(_sender_dropped)) => {
                 // fail_all_pending dropped the sender: the pipe died mid-flight.
                 self.core.lock_pending().remove(&request_id);
+                self.core.lock_loadfile_requests().remove(&request_id);
                 return Err("mpv IPC: connection closed before a reply arrived (mpv exited?)".to_string());
             }
             Err(_elapsed) => {
                 self.core.lock_pending().remove(&request_id);
+                self.core.lock_loadfile_requests().remove(&request_id);
                 return Err(format!("mpv IPC: no reply within {IPC_COMMAND_TIMEOUT_SECS}s"));
             }
         };
@@ -281,7 +334,10 @@ async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<Ipc
                     log::info!("[mpv-ipc] pipe closed after a requested shutdown");
                 } else {
                     log::warn!("[mpv-ipc] pipe closed by mpv");
-                    (core.event_sink)(IpcMessage::ConnectionClosed { cause: "eof".to_string() });
+                    (core.event_sink)(
+                        IpcMessage::ConnectionClosed { cause: "eof".to_string() },
+                        core.load_epoch(),
+                    );
                 }
                 core.fail_all_pending();
                 return;
@@ -301,9 +357,12 @@ async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<Ipc
                     );
                 } else {
                     log::error!("[mpv-ipc] pipe read failed: {read_error}");
-                    (core.event_sink)(IpcMessage::ConnectionClosed {
-                        cause: format!("read error: {read_error}"),
-                    });
+                    (core.event_sink)(
+                        IpcMessage::ConnectionClosed {
+                            cause: format!("read error: {read_error}"),
+                        },
+                        core.load_epoch(),
+                    );
                 }
                 core.fail_all_pending();
                 return;
@@ -316,15 +375,25 @@ async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<Ipc
 mod tests {
     use super::*;
 
-    type Collected = Arc<Mutex<Vec<IpcMessage>>>;
+    type Collected = Arc<Mutex<Vec<(IpcMessage, u64)>>>;
 
-    fn core_with_collector() -> (IpcCore, Collected) {
+    fn sink_with_collector() -> (EventSink, Collected) {
         let collected: Collected = Arc::new(Mutex::new(Vec::new()));
         let sink: EventSink = {
             let collected = Arc::clone(&collected);
-            Arc::new(move |message| collected.lock().unwrap().push(message))
+            Arc::new(move |message, epoch| collected.lock().unwrap().push((message, epoch)))
         };
+        (sink, collected)
+    }
+
+    fn core_with_collector() -> (IpcCore, Collected) {
+        let (sink, collected) = sink_with_collector();
         (IpcCore::new(sink), collected)
+    }
+
+    /// The messages alone, for assertions that do not care about the epoch.
+    fn collected_messages(collected: &Collected) -> Vec<IpcMessage> {
+        collected.lock().unwrap().iter().map(|(message, _)| message.clone()).collect()
     }
 
     #[test]
@@ -369,9 +438,8 @@ mod tests {
     fn property_change_event_is_parsed_with_name_and_data() {
         let (core, collected) = core_with_collector();
         core.dispatch(r#"{"event":"property-change","id":2,"name":"time-pos","data":12.5}"#);
-        let collected = collected.lock().unwrap();
         assert_eq!(
-            collected.as_slice(),
+            collected_messages(&collected),
             [IpcMessage::PropertyChange { name: "time-pos".to_string(), data: json!(12.5) }]
         );
     }
@@ -380,9 +448,8 @@ mod tests {
     fn end_file_event_is_parsed_with_reason() {
         let (core, collected) = core_with_collector();
         core.dispatch(r#"{"event":"end-file","reason":"eof","playlist_entry_id":1}"#);
-        let collected = collected.lock().unwrap();
         assert_eq!(
-            collected.as_slice(),
+            collected_messages(&collected),
             [IpcMessage::MpvEvent {
                 event: "end-file".to_string(),
                 reason: Some("eof".to_string()),
@@ -397,9 +464,8 @@ mod tests {
         core.dispatch(
             r#"{"event":"end-file","reason":"error","error":"generic failure","file_error":"connection timed out"}"#,
         );
-        let collected = collected.lock().unwrap();
         assert_eq!(
-            collected.as_slice(),
+            collected_messages(&collected),
             [IpcMessage::MpvEvent {
                 event: "end-file".to_string(),
                 reason: Some("error".to_string()),
@@ -412,9 +478,8 @@ mod tests {
     fn end_file_event_falls_back_to_error_field() {
         let (core, collected) = core_with_collector();
         core.dispatch(r#"{"event":"end-file","reason":"error","error":"Connection reset by peer"}"#);
-        let collected = collected.lock().unwrap();
         assert_eq!(
-            collected.as_slice(),
+            collected_messages(&collected),
             [IpcMessage::MpvEvent {
                 event: "end-file".to_string(),
                 reason: Some("error".to_string()),
@@ -428,9 +493,8 @@ mod tests {
         let (core, collected) = core_with_collector();
         let empty: &[u8] = &[];
         read_loop(empty, Arc::new(core)).await;
-        let collected = collected.lock().unwrap();
         assert_eq!(
-            collected.as_slice(),
+            collected_messages(&collected),
             [IpcMessage::ConnectionClosed { cause: "eof".to_string() }]
         );
     }
@@ -485,9 +549,8 @@ mod tests {
     async fn reader_error_notifies_sink_with_the_read_error_as_cause() {
         let (core, collected) = core_with_collector();
         read_loop(FailingReader, Arc::new(core)).await;
-        let collected = collected.lock().unwrap();
         assert_eq!(
-            collected.as_slice(),
+            collected_messages(&collected),
             [IpcMessage::ConnectionClosed { cause: "read error: pipe gone".to_string() }]
         );
     }
@@ -501,9 +564,8 @@ mod tests {
         core.dispatch(r#"{"event":"property-change","id":1}"#); // property change without a name
         core.dispatch(r#"{"error":"success","request_id":42}"#); // reply for an unknown id
         core.dispatch(r#"{"event":"property-change","id":5,"name":"pause","data":true}"#);
-        let collected = collected.lock().unwrap();
         assert_eq!(
-            collected.as_slice(),
+            collected_messages(&collected),
             [IpcMessage::PropertyChange { name: "pause".to_string(), data: json!(true) }]
         );
     }
@@ -585,7 +647,7 @@ mod tests {
         let client = tokio::net::windows::named_pipe::ClientOptions::new()
             .open(&pipe_name)
             .expect("test pipe client must connect");
-        let sink: EventSink = Arc::new(|_| {});
+        let sink: EventSink = Arc::new(|_, _| {});
         let ipc = MpvIpc::new(client, sink);
 
         // Kill the peer: the next write must fail instead of reaching mpv.
@@ -603,5 +665,220 @@ mod tests {
             ipc.core.lock_pending().is_empty(),
             "a failed write must not leave a pending entry behind"
         );
+    }
+
+    // --- load epoch (Fix 5A — stale event identity at the IPC boundary) ------
+
+    #[test]
+    fn loadfile_reply_bumps_the_load_epoch_exactly_once() {
+        let (core, _collected) = core_with_collector();
+        assert_eq!(core.load_epoch(), 0, "a fresh connection starts at epoch 0");
+
+        let (sender, mut receiver) = oneshot::channel();
+        core.register(11, sender);
+        core.register_loadfile_request(11);
+        core.dispatch(r#"{"error":"success","data":null,"request_id":11}"#);
+        let _ = receiver.try_recv().expect("the loadfile reply must resolve its waiter");
+        assert_eq!(core.load_epoch(), 1, "a dispatched loadfile reply must bump the epoch");
+
+        // A duplicate reply for the same id must not bump a second time.
+        core.dispatch(r#"{"error":"success","data":null,"request_id":11}"#);
+        assert_eq!(core.load_epoch(), 1, "a loadfile request must bump at most once");
+    }
+
+    #[test]
+    fn non_loadfile_reply_does_not_bump_the_load_epoch() {
+        let (core, _collected) = core_with_collector();
+        let (sender, mut receiver) = oneshot::channel();
+        core.register(5, sender);
+        core.dispatch(r#"{"error":"success","data":null,"request_id":5}"#);
+        let _ = receiver.try_recv().expect("the reply must resolve its waiter");
+        assert_eq!(core.load_epoch(), 0, "only loadfile replies may bump the epoch");
+    }
+
+    #[test]
+    fn events_carry_the_epoch_current_at_dispatch_time() {
+        let (core, collected) = core_with_collector();
+
+        // Event of the old track, before the new loadfile's reply is parsed.
+        core.dispatch(r#"{"event":"end-file","reason":"eof"}"#);
+
+        let (sender, mut receiver) = oneshot::channel();
+        core.register(21, sender);
+        core.register_loadfile_request(21);
+        core.dispatch(r#"{"error":"success","data":null,"request_id":21}"#);
+        let _ = receiver.try_recv().expect("the loadfile reply must resolve its waiter");
+
+        // Event of the new track, parsed after the loadfile reply.
+        core.dispatch(r#"{"event":"file-loaded"}"#);
+
+        let epochs: Vec<u64> =
+            collected.lock().unwrap().iter().map(|(_, epoch)| *epoch).collect();
+        assert_eq!(
+            epochs,
+            [0, 1],
+            "an event before the loadfile reply carries the old epoch, one after carries the new"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_command_tracks_a_loadfile_and_bumps_when_its_reply_arrives() {
+        // Success path over a real named pipe: the test plays mpv's side.
+        let pipe_name = format!(r"\\.\pipe\drplay-ipc-epoch-{}", std::process::id());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&pipe_name)
+            .expect("test pipe server must be created");
+        let client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .expect("test pipe client must connect");
+        let (sink, _collected) = sink_with_collector();
+        let ipc = MpvIpc::new(client, sink);
+
+        let responder = tokio::spawn(async move {
+            server.connect().await.expect("server must accept the client");
+            let (read_half, mut write_half) = tokio::io::split(server);
+            let mut reader = tokio::io::BufReader::new(read_half);
+            let mut frame = String::new();
+            tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut frame)
+                .await
+                .expect("the framed command must arrive");
+            let request_id = serde_json::from_str::<Value>(frame.trim_end())
+                .expect("the frame must be JSON")["request_id"]
+                .as_u64()
+                .expect("the frame must carry a request_id");
+            let reply = format!(r#"{{"error":"success","data":null,"request_id":{request_id}}}"#);
+            write_half.write_all(reply.as_bytes()).await.expect("the reply must be writable");
+            write_half.write_all(b"\n").await.expect("the frame newline must be writable");
+            write_half.flush().await.expect("the reply must flush");
+        });
+
+        let data = ipc
+            .send_command(vec![json!("loadfile"), json!("http://host/a"), json!("replace")])
+            .await
+            .expect("the loadfile must succeed");
+        assert_eq!(data, Value::Null);
+        responder.await.expect("the responder must finish");
+
+        assert_eq!(
+            ipc.current_epoch(),
+            1,
+            "the loadfile reply must bump the epoch before the command resolves"
+        );
+        assert!(
+            ipc.core.lock_loadfile_requests().is_empty(),
+            "a dispatched loadfile must be removed from the tracking set"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_command_clears_loadfile_tracking_when_the_write_fails() {
+        let pipe_name = format!(r"\\.\pipe\drplay-ipc-epoch-fail-{}", std::process::id());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&pipe_name)
+            .expect("test pipe server must be created");
+        let client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .expect("test pipe client must connect");
+        let (sink, _collected) = sink_with_collector();
+        let ipc = MpvIpc::new(client, sink);
+
+        drop(server); // kill the peer: the next write must fail
+
+        let error = ipc
+            .send_command(vec![json!("loadfile"), json!("http://host/a"), json!("replace")])
+            .await
+            .expect_err("a write to a dead pipe must fail the command");
+        assert!(
+            error.starts_with("mpv IPC: failed to write command to pipe"),
+            "the failure must name the write phase, got: {error}"
+        );
+        assert!(
+            ipc.core.lock_pending().is_empty(),
+            "a failed write must not leave a pending entry behind"
+        );
+        assert!(
+            ipc.core.lock_loadfile_requests().is_empty(),
+            "a failed loadfile write must not leave a tracked request behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_command_clears_loadfile_tracking_when_the_connection_closes_mid_flight() {
+        let pipe_name = format!(r"\\.\pipe\drplay-ipc-epoch-eof-{}", std::process::id());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&pipe_name)
+            .expect("test pipe server must be created");
+        let client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .expect("test pipe client must connect");
+        let (sink, _collected) = sink_with_collector();
+        let ipc = MpvIpc::new(client, sink);
+
+        let closer = tokio::spawn(async move {
+            let mut server = server;
+            server.connect().await.expect("server must accept the client");
+            let mut frame = [0u8; 1024];
+            let _ = server.read(&mut frame).await; // consume the command, never reply
+            drop(server); // closing makes the client reader report the pipe gone
+        });
+
+        let error = ipc
+            .send_command(vec![json!("loadfile"), json!("http://host/a"), json!("replace")])
+            .await
+            .expect_err("a pipe closed before the reply must fail the command");
+        assert!(
+            error.contains("connection closed before a reply arrived"),
+            "the failure must name the closed connection, got: {error}"
+        );
+        closer.await.expect("the closer task must finish");
+        assert!(
+            ipc.core.lock_pending().is_empty(),
+            "a mid-flight close must not leave a pending entry behind"
+        );
+        assert!(
+            ipc.core.lock_loadfile_requests().is_empty(),
+            "a mid-flight close must not leave a tracked loadfile request behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_command_clears_loadfile_tracking_when_the_reply_times_out() {
+        let pipe_name = format!(r"\\.\pipe\drplay-ipc-epoch-timeout-{}", std::process::id());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&pipe_name)
+            .expect("test pipe server must be created");
+        let client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .expect("test pipe client must connect");
+        let (sink, _collected) = sink_with_collector();
+        let ipc = MpvIpc::new(client, sink);
+
+        // Hold the pipe open without ever replying: the command must fail at
+        // its own deadline (IPC_COMMAND_TIMEOUT_SECS) and clean up after.
+        let mute = tokio::spawn(async move {
+            let mut server = server;
+            server.connect().await.expect("server must accept the client");
+            let mut frame = [0u8; 1024];
+            let _ = server.read(&mut frame).await;
+            tokio::time::sleep(Duration::from_secs(IPC_COMMAND_TIMEOUT_SECS + 5)).await;
+        });
+
+        let error = ipc
+            .send_command(vec![json!("loadfile"), json!("http://host/a"), json!("replace")])
+            .await
+            .expect_err("a missing reply must fail the command at the deadline");
+        assert!(
+            error.contains("no reply within"),
+            "the failure must name the deadline, got: {error}"
+        );
+        assert!(
+            ipc.core.lock_pending().is_empty(),
+            "a timed-out command must not leave a pending entry behind"
+        );
+        assert!(
+            ipc.core.lock_loadfile_requests().is_empty(),
+            "a timed-out loadfile must not leave a tracked request behind"
+        );
+        mute.abort();
     }
 }

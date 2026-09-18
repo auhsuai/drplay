@@ -8,6 +8,7 @@ import type { Track, PlayMode } from "../../types";
 import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { AudioController } from "../../lib/AudioController";
+import { usePlayerStore } from "../../store/playerStore";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
@@ -81,6 +82,7 @@ export function usePlayerLifecycle({
       // B3: release the real audio elements (buffers, src, pending retry)
       // before clearing the store state.
       AudioController.getInstance().release();
+      usePlayerStore.getState().setIsDownloading(false);
       setCurrentTrack(null);
       setIsPlaying(false);
       setOriginalQueue([]);

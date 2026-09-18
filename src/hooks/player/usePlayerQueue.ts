@@ -84,7 +84,6 @@ export function usePlayerQueue(
     // by the queue length (wrapping once for repeat-all/shuffle), so a
     // fully-broken queue resolves to null instead of looping. Tracks are
     // un-marked by updateQueueContext when the user explicitly plays one.
-    const wraps = playMode === "repeat-all" || playMode === "shuffle";
     const { brokenTrackIds, setIsPlaying } = usePlayerStore.getState();
     const target = resolveNextTrack(
       playbackQueue,
@@ -95,10 +94,11 @@ export function usePlayerQueue(
 
     if (target) {
       handlePlayTrack(target, undefined, true);
-    } else if (wraps || currentIndex < playbackQueue.length - 1) {
-      // Nothing playable left in the queue — stop instead of replaying the
-      // same broken track forever. (Normal mode at the last index keeps its
-      // no-op parity: playback simply ends there.)
+    } else {
+      // Nothing playable left in the queue (end of queue, or every candidate
+      // broken) — deterministic terminal state: always park the store at
+      // isPlaying=false instead of leaving it stuck true. Repeat-one never
+      // reaches this branch: PlayerBar replays the track directly.
       setIsPlaying(false);
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);

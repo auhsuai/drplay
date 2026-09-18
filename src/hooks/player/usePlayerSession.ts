@@ -96,6 +96,11 @@ export function usePlayerSession(
           const savedPlayMode = await get(SESSION_CLEANUP_KEYS.playModeKv);
           if (isAborted()) return;
 
+          // User đã hành động trong lúc restore await (click bài / bắt đầu load):
+          // bỏ toàn bộ restore commit để không đè lên intent của user.
+          const s = usePlayerStore.getState();
+          if (s.currentTrack !== null || s.isDownloading) return;
+
           const restoredTrack: Track = {
             ...lastSession.track,
             streamUrl,

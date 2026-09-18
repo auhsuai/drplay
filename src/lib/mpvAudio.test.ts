@@ -27,7 +27,12 @@ vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
 import { captureError } from "../utils/errorLog";
-import { resetWarnThrottleForTest } from "./mpvProtocol";
+import {
+  BufferingTracker,
+  LOADFILE_DEADLINE_MS,
+  resetWarnThrottleForTest,
+  TimePosWatchdog,
+} from "./mpvProtocol";
 
 const PROXY_PORT = 51234;
 const PROXY_URL_PREFIX = "http://127.0.0.1:51234/stream/";
@@ -1028,19 +1033,26 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
   });
 
-  it("request while shown keeps the spinner (no duplicate emit) and re-arms the net", async () => {
+  it("switch mid-stall: resetForTrack drops A's session, B promotes fresh and re-arms its own net", async () => {
     await ctrl.playTrack(trackA);
     vi.advanceTimersByTime(250);
     expect(buffering).toEqual([{ isBuffering: true }]);
     vi.advanceTimersByTime(7000);
 
     await ctrl.playTrack(trackB); // new track mid-stall
-    expect(buffering).toEqual([{ isBuffering: true }]); // no duplicate true
+    // A2 (R4): the switch intentionally starts a fresh buffering session for
+    // B (resetForTrack is silent, then B's own request(true) promotes) — the
+    // spinner stays visible; the extra true is B's session, not A's sticky one.
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: true }]);
 
-    vi.advanceTimersByTime(7999); // re-armed net not yet fired
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    vi.advanceTimersByTime(7999); // B's re-armed net not yet fired
+    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: true }]);
     vi.advanceTimersByTime(1);
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true },
+      { isBuffering: true },
+      { isBuffering: false },
+    ]);
   });
 
   it("timers are cleaned up: seek arms display+deadline+failsafe, settle drains, release cancels", async () => {
@@ -1361,5 +1373,356 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
     for (const p of timeupdates) {
       expect(p.currentTime - 112.5).toBeLessThan(1);
     }
+  });
+});
+
+describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrack invalidation (R2)", () => {
+  let ctrl: MpvAudioController;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000);
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    storeMocks.setIsPlaying.mockClear();
+    // Mirror the real store: setIsPlaying flips the isPlaying the timers read.
+    storeMocks.setIsPlaying.mockImplementation(
+      (playing: boolean | ((prev: boolean) => boolean)) => {
+        storeMocks.isPlaying =
+          typeof playing === "function"
+            ? playing(storeMocks.isPlaying)
+            : playing;
+      },
+    );
+    storeMocks.isPlaying = false;
+    resetWarnThrottleForTest();
+    vi.mocked(captureError).mockClear();
+    attachMocks();
+    ctrl = new MpvAudioController();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Parks playTrack after spawn (listeners live, no track yet) on a deferred
+   * proxy-port reply — the exact window where mpv's initial `pause=false`
+   * observe lands with currentTrackId still null.
+   */
+  async function parkBeforeFirstLoad(): Promise<() => Promise<void>> {
+    let releasePort: (port: number) => void = () => {};
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "stream_proxy_start") {
+        return new Promise<number>((resolve) => {
+          releasePort = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const play = ctrl.playTrack(trackA);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tauriListeners.get("mpv-property") ?? []).toHaveLength(1);
+    return async () => {
+      releasePort(PROXY_PORT);
+      await play;
+    };
+  }
+
+  it("spawn initial observe (currentTrackId=null): pause=false writes no store state and arms no timer", async () => {
+    const finishLoad = await parkBeforeFirstLoad();
+
+    fireProperty("pause", false);
+
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
+    expect(storeMocks.isPlaying).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await finishLoad();
+  });
+
+  it("pause=true while no active track: store untouched, timer cleanup stays idempotent", async () => {
+    const finishLoad = await parkBeforeFirstLoad();
+    storeMocks.isPlaying = true; // hypothetical stale store value
+
+    fireProperty("pause", true);
+
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await finishLoad();
+  });
+
+  it("active track: pause=false -> store true + 3 timers; pause=true -> store false + 0 timers", async () => {
+    await ctrl.playTrack(trackA);
+    fireMpvEvent("file-loaded"); // the load completed — clears the load deadline
+    fireProperty("time-pos", 0.5);
+    fireProperty("time-pos", 1); // two changed ticks settle the playTrack spinner
+    expect(vi.getTimerCount()).toBe(0);
+
+    fireProperty("pause", false);
+    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(true);
+    expect(storeMocks.isPlaying).toBe(true);
+    expect(vi.getTimerCount()).toBe(3); // watchdog + reconciler + interpolator
+
+    fireProperty("pause", true);
+    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
+    expect(storeMocks.isPlaying).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("active track before file-loaded: pause=false still arms store + timers (resume-on-switch)", async () => {
+    await ctrl.playTrack(trackA); // loadfile sent, no file-loaded yet
+    expect(vi.getTimerCount()).toBe(2); // load deadline + buffering net
+
+    fireProperty("pause", false);
+
+    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(true);
+    expect(storeMocks.isPlaying).toBe(true);
+    expect(vi.getTimerCount()).toBe(5); // + watchdog + reconciler + interpolator
+  });
+
+  it("finished track (end-file eof): pause=false neither writes the store nor arms timers", async () => {
+    await ctrl.playTrack(trackA);
+    fireMpvEvent("end-file", "eof");
+    tauriMocks.invoke.mockClear();
+    storeMocks.setIsPlaying.mockClear();
+
+    fireProperty("pause", false);
+
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
+    expect(storeMocks.isPlaying).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("switch A->B: watchdog.stop + buffering.resetForTrack run before the pause-no command", async () => {
+    const watchdogStop = vi.spyOn(TimePosWatchdog.prototype, "stop");
+    const resetForTrack = vi.spyOn(BufferingTracker.prototype, "resetForTrack");
+    await ctrl.playTrack(trackA);
+    watchdogStop.mockClear();
+    resetForTrack.mockClear();
+    tauriMocks.invoke.mockClear();
+
+    await ctrl.playTrack(trackB);
+
+    expect(watchdogStop).toHaveBeenCalled();
+    expect(resetForTrack).toHaveBeenCalled();
+
+    const calls = tauriMocks.invoke.mock.calls as unknown as Array<
+      [string, Record<string, unknown>?]
+    >;
+    const pauseIndex = calls.findIndex((call) => {
+      const cmd = call[1]?.["cmd"] as string[] | undefined;
+      return cmd?.[0] === "set_property" && cmd[1] === "pause";
+    });
+    expect(pauseIndex).toBeGreaterThanOrEqual(0);
+    const pauseOrder = tauriMocks.invoke.mock.invocationCallOrder[pauseIndex];
+    expect(watchdogStop.mock.invocationCallOrder[0]).toBeLessThan(pauseOrder);
+    expect(resetForTrack.mock.invocationCallOrder[0]).toBeLessThan(pauseOrder);
+  });
+
+  it("switch A->B while playing: A's watchdog poll never lands after the switch", async () => {
+    await ctrl.playTrack(trackA);
+    fireMpvEvent("file-loaded");
+    fireProperty("pause", false); // active: arms the watchdog for A
+    expect(storeMocks.isPlaying).toBe(true);
+
+    await ctrl.playTrack(trackB); // beginTrack must invalidate A's interval
+    tauriMocks.invoke.mockClear();
+
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(commandNames()).not.toContain("mpv_get_property");
+  });
+});
+
+describe("MpvAudioController — engineEpoch stale-event guard (Fix B3)", () => {
+  let ctrl: MpvAudioController;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000); // Date.now() off the 0 sentinel
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    storeMocks.setIsPlaying.mockClear();
+    attachMocks();
+    ctrl = new MpvAudioController();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function engineEpochOf(controller: MpvAudioController): number {
+    return (controller as unknown as { engineEpoch: number }).engineEpoch;
+  }
+
+  /** Every mpv_command resolves with Rust's additive `{ data, load_epoch }`
+   *  reply shape; `loadfileReplies` scripts the tag per loadfile, in call
+   *  order (non-loadfile replies are ignored by the engine). */
+  function attachEpochMocks(loadfileReplies: number[]): void {
+    tauriMocks.invoke.mockImplementation(
+      (command: string, payload?: Record<string, unknown>) => {
+        if (command === "stream_proxy_start") {
+          return Promise.resolve(PROXY_PORT);
+        }
+        if (command === "mpv_command") {
+          const cmd = (payload?.["cmd"] as string[] | undefined) ?? [];
+          const loadEpoch =
+            cmd[0] === "loadfile" ? (loadfileReplies.shift() ?? 0) : 0;
+          return Promise.resolve({ data: null, load_epoch: loadEpoch });
+        }
+        return Promise.resolve(undefined);
+      },
+    );
+  }
+
+  it("stale property event (epoch < engineEpoch) is dropped", async () => {
+    attachEpochMocks([1]);
+    await ctrl.playTrack(trackA);
+
+    fireTauri("mpv-property", { name: "time-pos", data: 42, epoch: 0 });
+
+    expect(ctrl.getCurrentTime()).toBe(0);
+    expect(engineEpochOf(ctrl)).toBe(1);
+  });
+
+  it("current property event (epoch === engineEpoch) passes", async () => {
+    attachEpochMocks([1]);
+    await ctrl.playTrack(trackA);
+
+    fireTauri("mpv-property", { name: "time-pos", data: 42, epoch: 1 });
+
+    expect(ctrl.getCurrentTime()).toBe(42);
+  });
+
+  it("stale mpv-event (epoch < engineEpoch) is dropped", async () => {
+    attachEpochMocks([1]);
+    await ctrl.playTrack(trackA);
+    const ended = vi.fn();
+    ctrl.on("ended", ended);
+
+    fireTauri("mpv-event", {
+      event: "end-file",
+      reason: "eof",
+      error: null,
+      epoch: 0,
+    });
+
+    expect(ended).not.toHaveBeenCalled();
+    expect(engineEpochOf(ctrl)).toBe(1);
+  });
+
+  it("current mpv-event (epoch === engineEpoch) passes", async () => {
+    attachEpochMocks([1]);
+    await ctrl.playTrack(trackA);
+    const ended = vi.fn();
+    ctrl.on("ended", ended);
+
+    fireTauri("mpv-event", {
+      event: "end-file",
+      reason: "eof",
+      error: null,
+      epoch: 1,
+    });
+
+    expect(ended).toHaveBeenCalledTimes(1);
+  });
+
+  it("payload without an epoch still passes (compatibility)", async () => {
+    attachEpochMocks([1]);
+    await ctrl.playTrack(trackA);
+
+    fireProperty("time-pos", 7); // legacy shape: no epoch tag at all
+    expect(ctrl.getCurrentTime()).toBe(7);
+
+    const ended = vi.fn();
+    ctrl.on("ended", ended);
+    fireMpvEvent("end-file", "eof"); // legacy shape: no epoch tag at all
+    expect(ended).toHaveBeenCalledTimes(1);
+  });
+
+  it("noteLoadEpoch raises to the reply's tag and never lowers it (Math.max)", async () => {
+    attachEpochMocks([5, 3]);
+    await ctrl.playTrack(trackA);
+    expect(engineEpochOf(ctrl)).toBe(5);
+
+    await ctrl.playTrack(trackB); // a lower reply tag must not regress the base
+
+    expect(engineEpochOf(ctrl)).toBe(5);
+    fireTauri("mpv-property", { name: "time-pos", data: 9, epoch: 4 });
+    expect(ctrl.getCurrentTime()).toBe(0);
+    fireTauri("mpv-property", { name: "time-pos", data: 9, epoch: 5 });
+    expect(ctrl.getCurrentTime()).toBe(9);
+  });
+
+  it("a loadfile reply without a numeric tag leaves the base untouched", async () => {
+    tauriMocks.invoke.mockImplementation((command: string) =>
+      command === "stream_proxy_start"
+        ? Promise.resolve(PROXY_PORT)
+        : command === "mpv_command"
+          ? Promise.resolve({ data: null })
+          : Promise.resolve(undefined),
+    );
+
+    await ctrl.playTrack(trackA);
+
+    expect(engineEpochOf(ctrl)).toBe(0);
+  });
+
+  it("release() resets engineEpoch to 0", async () => {
+    attachEpochMocks([5]);
+    await ctrl.playTrack(trackA);
+    expect(engineEpochOf(ctrl)).toBe(5);
+
+    ctrl.release();
+
+    expect(engineEpochOf(ctrl)).toBe(0);
+  });
+
+  it("release + fresh spawn: the new sidecar's low epochs are the new base", async () => {
+    attachEpochMocks([5, 1]);
+    await ctrl.playTrack(trackA);
+    ctrl.release();
+
+    await ctrl.playTrack(trackA); // fresh mpv process: the counter restarts
+
+    expect(engineEpochOf(ctrl)).toBe(1);
+    fireTauri("mpv-property", { name: "time-pos", data: 4, epoch: 0 });
+    expect(ctrl.getCurrentTime()).toBe(0);
+    fireTauri("mpv-property", { name: "time-pos", data: 4, epoch: 1 });
+    expect(ctrl.getCurrentTime()).toBe(4);
+  });
+
+  it("sidecar restart (load deadline) adopts the replacement's epoch base", async () => {
+    attachEpochMocks([5, 1]);
+    await ctrl.playTrack(trackA);
+    expect(engineEpochOf(ctrl)).toBe(5);
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS); // restart + reload
+
+    expect(engineEpochOf(ctrl)).toBe(1);
+    fireTauri("mpv-property", { name: "time-pos", data: 8, epoch: 1 });
+    expect(ctrl.getCurrentTime()).toBe(8);
+  });
+
+  it("respawn after ipc-closed adopts the fresh instance's epoch base", async () => {
+    attachEpochMocks([5, 1]);
+    await ctrl.playTrack(trackA);
+    fireMpvEvent("ipc-closed", "eof");
+    tauriMocks.invoke.mockClear();
+
+    await ctrl.playTrack(trackA); // ensureStarted -> fresh spawn + reload
+
+    expect(engineEpochOf(ctrl)).toBe(1);
+    fireTauri("mpv-property", { name: "time-pos", data: 2, epoch: 1 });
+    expect(ctrl.getCurrentTime()).toBe(2);
   });
 });

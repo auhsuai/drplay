@@ -7,6 +7,7 @@ import { captureError } from "../utils/errorLog";
 import {
   BufferingTracker,
   BUFFERING_TIMEOUT_MS,
+  SPINNER_DELAY_MS,
   WATCHDOG_INTERVAL_MS,
   WATCHDOG_STALE_MS,
   classifyEndFileError,
@@ -132,6 +133,17 @@ describe("TimePosWatchdog (mpv issue #13695 backfill)", () => {
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(5000);
     expect(getTimePos).toHaveBeenCalledTimes(1);
+  });
+
+  it("stop() clears the handle with clearInterval (interval-type timer hygiene)", () => {
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    const wd = makeWatchdog();
+    wd.start();
+    clearIntervalSpy.mockClear();
+
+    wd.stop();
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("null poll result skips the round (no forward) and rate-limits the nil-drop warn", async () => {
@@ -451,6 +463,24 @@ describe("StallReconciler (pinned-playhead self-heal)", () => {
     await vi.advanceTimersByTimeAsync(600_000);
     expect(queryTruth).toHaveBeenCalledTimes(rounds);
     sc.stop();
+  });
+
+  it("a round while !isActive() self-stops the interval (no orphan 5s poller)", async () => {
+    const sc = makeReconciler();
+    sc.start();
+    expect(vi.getTimerCount()).toBe(1);
+
+    active = false; // paused/ended mid-watch
+    await vi.advanceTimersByTimeAsync(STALL_POLL_INTERVAL_MS);
+
+    expect(queryTruth).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0); // the dead round killed its own interval
+
+    // Only the engine's normal re-arm paths (file-loaded / pause=false) may
+    // start it again — it must not resurrect itself.
+    active = true;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(queryTruth).not.toHaveBeenCalled();
   });
 
   it("stop(): no further query or callback (idempotent)", async () => {
@@ -784,6 +814,51 @@ describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
       tracker.onTimeTick(1);
       tracker.onTimeTick(2);
       expect(emitted).toEqual([true, true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("BufferingTracker resetForTrack (track switch, silent session reset)", () => {
+  it("clears pending/shown timers without emitting anything", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+
+      tracker.request(); // pending: the 250ms anti-flash promote is armed
+      tracker.resetForTrack();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS + 1);
+      expect(emitted, "a pending promote fired after the reset").toEqual([]);
+      expect(tracker.isShown()).toBe(false);
+
+      tracker.request(true); // shown: track A's stall spinner
+      tracker.reportMpvBuffering(true); // v4 flag + open-ended deadline re-arm
+      tracker.resetForTrack();
+
+      vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS * 3);
+      expect(emitted, "reset emitted a settle/transition").toEqual([true]);
+      expect(tracker.isShown()).toBe(false); // no re-armed deadline survived
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the sticky paused-for-cache flag: the next track settles on its own ticks", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      tracker.reportMpvBuffering(true); // track A stalled: flag now sticky
+
+      tracker.resetForTrack(); // switch to B (beginTrack order: reset, then request)
+      tracker.request(true); // B's load promotes the spinner
+      tracker.onTimeTick(1);
+      tracker.onTimeTick(2); // B's own CHANGED tick pair
+      expect(emitted).toEqual([true, true, false]); // settles — flag is gone
+      expect(tracker.isShown()).toBe(false);
     } finally {
       vi.useRealTimers();
     }
