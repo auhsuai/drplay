@@ -90,11 +90,9 @@ export function PlaylistSection({
 
   return (
     <>
-      <div
-        className={`px-4 mt-6 mb-2 flex items-center group transition-all duration-300 ${isSidebarOpen ? "justify-between" : ""}`}
-      >
+      <div className="px-4 mt-6 mb-2 flex items-center group transition-all duration-300">
         <div
-          className={`overflow-hidden transition-all duration-300 whitespace-nowrap ${isSidebarOpen ? "max-w-[160px] opacity-100 flex-1" : "max-w-0 opacity-0 flex-none"}`}
+          className={`overflow-hidden transition-all duration-300 whitespace-nowrap flex-1 ${isSidebarOpen ? "max-w-full opacity-100" : "max-w-0 opacity-0"}`}
         >
           <h2 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
             {t("sidebar.playlists")}

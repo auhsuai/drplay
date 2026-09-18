@@ -63,7 +63,7 @@ export function UserProfileSection({
         </div>
 
         <div
-          className={`overflow-hidden transition-all duration-300 whitespace-nowrap flex flex-col justify-center ${isSidebarOpen ? "max-w-[150px] opacity-100 ml-3" : "max-w-0 opacity-0 ml-0"}`}
+          className={`overflow-hidden transition-all duration-300 whitespace-nowrap flex flex-col justify-center flex-1 ${isSidebarOpen ? "max-w-full opacity-100 ml-3" : "max-w-0 opacity-0 ml-0"}`}
         >
           <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
             {userProfile ? userProfile.name : t("sidebar.guest")}

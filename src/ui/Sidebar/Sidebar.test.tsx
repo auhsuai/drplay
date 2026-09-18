@@ -675,20 +675,31 @@ describe("Sidebar playlist row + button alignment", () => {
     vi.clearAllMocks();
   });
 
-  it("pushes the playlist + button to the row right edge (justify-between) when expanded", () => {
+  // The label wrapper stays flex-1 with NO fixed max-width cap in both
+  // states: it absorbs all free space, so the + is pinned to the row right
+  // edge when expanded and glides with the label during the transition.
+  // A justify-between switch (or a 160px cap) re-anchors instantly and
+  // makes the + jump mid-animation.
+  it("pushes the playlist + button to the row right edge via the flex-1 label when expanded", () => {
     render(<Sidebar {...baseProps({ token: "tok-1" })} />);
     const btn = screen.getByTitle("Create Playlist");
     // The button's parent is the playlist row container.
     const row = btn.parentElement;
     expect(row).not.toBeNull();
     if (row) {
-      expect(row.className).toContain("justify-between");
+      expect(row.className).not.toContain("justify-between");
+      const label = row.firstElementChild;
+      expect(label).not.toBeNull();
+      if (label) {
+        expect(label.className).toContain("flex-1");
+        expect(label.className).toContain("max-w-full");
+      }
     }
-    // Expanded: no ml-3 spacer (justify-between distributes the space instead).
+    // Expanded: no ml-3 spacer (the flex-1 label takes the free space).
     expect(btn.className).not.toContain("ml-3");
   });
 
-  it("keeps the legacy collapsed layout (no justify-between, button keeps ml-3)", () => {
+  it("keeps the legacy collapsed layout (label collapses to max-w-0, button keeps ml-3)", () => {
     render(
       <Sidebar {...baseProps({ isSidebarOpen: false, token: "tok-1" })} />,
     );
@@ -697,6 +708,12 @@ describe("Sidebar playlist row + button alignment", () => {
     expect(row).not.toBeNull();
     if (row) {
       expect(row.className).not.toContain("justify-between");
+      const label = row.firstElementChild;
+      expect(label).not.toBeNull();
+      if (label) {
+        expect(label.className).toContain("flex-1");
+        expect(label.className).toContain("max-w-0");
+      }
     }
     expect(btn.className).toContain("ml-3");
   });
