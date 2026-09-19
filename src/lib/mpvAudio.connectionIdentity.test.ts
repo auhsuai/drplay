@@ -22,20 +22,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
@@ -117,7 +103,6 @@ describe("MpvAudioController — connection identity (R2.2)", () => {
     loadEpochs = [];
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
   });
@@ -196,7 +181,6 @@ describe("MpvAudioController — connection identity (R2.2)", () => {
     ctrl.on("timeupdate", timeupdate);
     const propertyHandlers = capturedHandlers("mpv-property");
     const eventHandlers = capturedHandlers("mpv-event");
-    const isPlayingCalls = storeMocks.setIsPlaying.mock.calls.length;
 
     ctrl.release();
 
@@ -220,7 +204,6 @@ describe("MpvAudioController — connection identity (R2.2)", () => {
     expect(firstAudio).not.toHaveBeenCalled();
     expect(timeupdate).not.toHaveBeenCalled();
     expect(ctrl.getCurrentTime()).toBe(0);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledTimes(isPlayingCalls);
     // file-loaded must not re-arm the watchdog / reconciler / interpolator.
     expect(vi.getTimerCount()).toBe(0);
     expect(engineConnOf(ctrl)).toBeNull();

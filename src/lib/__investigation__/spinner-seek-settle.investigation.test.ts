@@ -19,8 +19,8 @@
  *   E9/E10/E11 (variants, same root causes): frozen-value ticks are not
  *   progress; sequential seeks re-target the ack filter; eof settles too.
  *
- * Harness mirrors mpvAudio.test.ts (store isPlaying is mirrored so the
- * watchdog/interpolator read the live store).
+ * Harness mirrors mpvAudio.test.ts. R3.2: the engine owns its playback truth
+ * (no store mirror) — the watchdog/interpolator gates read engine state.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
@@ -32,20 +32,6 @@ const tauriMocks = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
-
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
 
 vi.mock("../../utils/errorLog", () => ({ captureError: vi.fn() }));
 
@@ -117,18 +103,6 @@ describe("spinner/seek/settle investigation — engine level (S1 + S4)", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.isPlaying = false;
-    storeMocks.setIsPlaying.mockReset();
-    // Mirror the real store: setIsPlaying flips the isPlaying the watchdog and
-    // the interpolator read on every tick.
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
     attachMocks();
     ctrl = new MpvAudioController();
     buffering = [];
@@ -162,7 +136,9 @@ describe("spinner/seek/settle investigation — engine level (S1 + S4)", () => {
     fireProperty("time-pos", position + 0.2);
     await vi.advanceTimersByTimeAsync(300);
     expect(buffering).toEqual([true, false]);
-    expect(storeMocks.isPlaying).toBe(true);
+    // R3.2: the store projection moved to the policy adapter — the engine
+    // fact proving playback is rolling is the `play` event itself (logged).
+    expect(log).toContain("play");
   }
 
   it("E1 (S1 fixed): seek() snaps the clock to the target — the stale pre-seek interpolation base never repaints", async () => {

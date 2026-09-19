@@ -134,12 +134,84 @@ describe("usePlayerPlaybackPolicy error surface", () => {
     expect(fakeController._handlers["error"] ?? []).toHaveLength(1);
     expect(fakeController._handlers["ended"] ?? []).toHaveLength(1);
     expect(fakeController._handlers["play"] ?? []).toHaveLength(1);
+    expect(fakeController._handlers["pause"] ?? []).toHaveLength(1);
 
     unmount();
 
     expect(fakeController._handlers["error"] ?? []).toHaveLength(0);
     expect(fakeController._handlers["ended"] ?? []).toHaveLength(0);
     expect(fakeController._handlers["play"] ?? []).toHaveLength(0);
+    expect(fakeController._handlers["pause"] ?? []).toHaveLength(0);
+  });
+});
+
+// R3.2: the engine stopped writing the store — every engine→store transition
+// is projected here from the emitted fact. These tests lock the projection
+// (value + identity filter), the engine suites lock the fact emission.
+describe("usePlayerPlaybackPolicy engine-fact projection (R3.2)", () => {
+  const CURRENT = { trackId: "track-1", attempt: 7 };
+
+  it("pause fact of the current track → isPlaying=false", () => {
+    renderPolicy();
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+
+    act(() => {
+      fakeController._emit("pause", CURRENT);
+    });
+
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("play fact of the current track → isPlaying=true", () => {
+    renderPolicy();
+    usePlayerStore.setState({ isPlaying: false });
+
+    act(() => {
+      fakeController._emit("play", CURRENT);
+    });
+
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+
+  it("network_interrupted error (terminal playbackFailure) → isPlaying=false", () => {
+    renderPolicy();
+
+    act(() => {
+      fakeController._emit("error", { ...NETWORK_ERROR, ...CURRENT });
+    });
+
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("format_error error does NOT flip isPlaying — the ended/advance policy owns that state (repeat-one parity)", () => {
+    renderPolicy();
+
+    act(() => {
+      fakeController._emit("error", { ...FORMAT_ERROR, ...CURRENT });
+    });
+
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+
+  it("foreign track facts never mutate the store (R2.1): pause/play/error", () => {
+    const foreign = { trackId: "stale-track", attempt: 1 };
+    renderPolicy();
+
+    act(() => {
+      fakeController._emit("pause", foreign);
+    });
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+
+    act(() => {
+      fakeController._emit("error", { ...NETWORK_ERROR, ...foreign });
+    });
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+
+    usePlayerStore.setState({ isPlaying: false });
+    act(() => {
+      fakeController._emit("play", foreign);
+    });
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
   });
 });
 

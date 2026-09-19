@@ -9,20 +9,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
@@ -120,7 +106,6 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -206,7 +191,9 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
     expect(ctrl.getCurrentTime()).toBe(0);
   });
 
-  it("playTrack failure (mpv_command rejects) does not crash: logs, emits error, resets isPlaying", async () => {
+  it("playTrack failure (mpv_command rejects) does not crash: logs and emits the terminal error fact", async () => {
+    const errors: unknown[] = [];
+    ctrl.on("error", (payload) => errors.push(payload));
     tauriMocks.invoke.mockImplementation((command: string) => {
       if (command === "mpv_command")
         return Promise.reject(
@@ -221,7 +208,13 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({ level: "error", source: "MpvAudioController" }),
     );
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
+    // R3.2: isPlaying=false is now the adapter's projection of this fact.
+    expect(errors).toEqual([
+      expect.objectContaining({
+        code: "network_interrupted",
+        trackId: "A",
+      }),
+    ]);
   });
 });
 
@@ -235,7 +228,6 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -270,6 +262,10 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
   }
 
   it("time-pos -> timeupdate {currentTime, duration} (real AudioEventMap shape), throttled to ~5/s", () => {
+    // R3.2: a freshly loaded track is rolling engine-side, so the synthetic
+    // interpolator is armed — park paused to assert the REAL-push throttle
+    // in isolation (interpolation has its own suite below).
+    fireProperty("pause", true);
     fireProperty("duration", 180);
 
     fireProperty("time-pos", 12);
@@ -296,14 +292,14 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
     expect(ctrl.getDuration()).toBe(180);
   });
 
-  it("pause=true -> pause event + setIsPlaying(false); pause=false -> play event + setIsPlaying(true)", () => {
+  it("pause=true -> pause event; pause=false -> play event", () => {
     fireProperty("pause", true);
     expect(emitted("pause")).toEqual([{ trackId: "A", attempt: 1 }]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
 
     fireProperty("pause", false);
     expect(emitted("play")).toEqual([{ trackId: "A", attempt: 1 }]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(true);
+    // R3.2: the store projection of these facts lives in the policy adapter
+    // (usePlayerPlaybackPolicy.test.ts) — the engine only emits.
   });
 
   it("paused-for-cache -> buffering {isBuffering} in order (sustained stall passes the delay)", () => {
@@ -361,7 +357,6 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
     fireProperty("pause", null);
     fireProperty("paused-for-cache", null);
     expect(events).toEqual([]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
   });
 
   it("unobserved property names and malformed payloads are skipped", () => {
@@ -382,7 +377,6 @@ describe("MpvAudioController — mpv-event mapping", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -460,7 +454,6 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -502,7 +495,6 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
       expect.objectContaining({ code: "network_interrupted" }),
     ]);
     expect(emitted("ended")).toEqual([]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
   it("proxy 429 (rate limit) -> network_interrupted (retryable)", () => {
@@ -567,7 +559,6 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
 
     expect(emitted("error")).toEqual([]);
     expect(emitted("ended")).toEqual([]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
   });
 
   it("a proxy event for another fileId never steers classification", () => {
@@ -597,7 +588,6 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
       expect.objectContaining({ code: "network_interrupted" }),
     ]);
     expect(emitted("ended")).toEqual([]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
 
     fireProperty("time-pos", 5);
     expect(emitted("timeupdate")).toEqual([]);
@@ -627,7 +617,6 @@ describe("MpvAudioController — volume & mute (facade 0..1 -> mpv 0..100)", () 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -698,7 +687,6 @@ describe("MpvAudioController — transport", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -786,7 +774,6 @@ describe("MpvAudioController — release lifecycle", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -864,7 +851,6 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -1123,6 +1109,9 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     await ctrl.playTrack(trackA);
     fireMpvEvent("file-loaded"); // the load completed — clears the load deadline
     settleViaTicks();
+    // R3.2: a loaded track is rolling engine-side, so the backfill machines are
+    // armed. Park it paused (real user path) to isolate the seek/display timers.
+    fireProperty("pause", true);
     expect(vi.getTimerCount()).toBe(0); // settle drained everything
 
     ctrl.seek(10);
@@ -1159,17 +1148,6 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
-    // Mirror the real store: setIsPlaying flips the isPlaying the watchdog reads.
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
-    storeMocks.isPlaying = false;
     resetWarnThrottleForTest(); // module-level warn rate limit: isolate per test
     vi.mocked(captureError).mockClear();
     attachMocks();
@@ -1194,8 +1172,8 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
   }
 
   it("push stall >1.2s while playing: polls mpv_get_property and backfills through the real onTimeUpdate path", async () => {
-    fireProperty("pause", false); // engine path that flips store isPlaying -> true
-    expect(storeMocks.isPlaying).toBe(true);
+    fireProperty("pause", false); // engine play fact — playback is rolling
+    expect(emitted("play")).toEqual([{ trackId: "A", attempt: 1 }]);
     tauriMocks.invoke.mockImplementation((command: string) =>
       command === "mpv_get_property"
         ? Promise.resolve(90)
@@ -1237,9 +1215,9 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
     );
   });
 
-  it("paused (isPlaying=false): watchdog never polls", async () => {
+  it("paused: watchdog never polls", async () => {
     fireProperty("pause", true);
-    expect(storeMocks.isPlaying).toBe(false);
+    expect(emitted("pause")).toEqual([{ trackId: "A", attempt: 1 }]);
 
     await vi.advanceTimersByTimeAsync(5000);
 
@@ -1293,17 +1271,6 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
-    // Mirror the real store: setIsPlaying flips the isPlaying the interpolator reads.
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
-    storeMocks.isPlaying = false;
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -1450,6 +1417,7 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
 
 describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrack invalidation (R2)", () => {
   let ctrl: MpvAudioController;
+  let facts: string[];
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1457,21 +1425,15 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
-    // Mirror the real store: setIsPlaying flips the isPlaying the timers read.
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
-    storeMocks.isPlaying = false;
     resetWarnThrottleForTest();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
+    // R3.2: the store projection moved to the policy adapter — the engine
+    // suite now locks the emitted facts (play/pause) and the machine timers.
+    facts = [];
+    ctrl.on("play", () => facts.push("play"));
+    ctrl.on("pause", () => facts.push("pause"));
   });
 
   afterEach(() => {
@@ -1506,7 +1468,7 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
     };
   }
 
-  it("spawn initial observe (currentTrackId=null): pause=false writes no store state and arms no timer", async () => {
+  it("spawn initial observe (currentTrackId=null): pause=false emits no fact and arms no timer", async () => {
     const finishLoad = await parkBeforeFirstLoad();
     // Parked proxy reply = its D8 bound timer is armed — sample the baseline
     // so the assertion still means "the pause event added no timer".
@@ -1514,65 +1476,62 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
 
     fireProperty("pause", false);
 
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
-    expect(storeMocks.isPlaying).toBe(false);
+    expect(facts).toEqual([]);
     expect(vi.getTimerCount()).toBe(timersWhileParked);
 
     await finishLoad();
   });
 
-  it("pause=true while no active track: store untouched, timer cleanup stays idempotent", async () => {
+  it("pause=true while no active track: no fact, timer cleanup stays idempotent", async () => {
     const finishLoad = await parkBeforeFirstLoad();
-    storeMocks.isPlaying = true; // hypothetical stale store value
     const timersWhileParked = vi.getTimerCount();
 
     fireProperty("pause", true);
 
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
+    expect(facts).toEqual([]);
     expect(vi.getTimerCount()).toBe(timersWhileParked);
 
     await finishLoad();
   });
 
-  it("active track: pause=false -> store true + 3 timers; pause=true -> store false + 0 timers", async () => {
+  it("active track: pause=false -> play fact + 3 timers; pause=true -> pause fact + 0 timers", async () => {
     await ctrl.playTrack(trackA);
     fireMpvEvent("file-loaded"); // the load completed — clears the load deadline
     fireProperty("time-pos", 0.5);
     fireProperty("time-pos", 1); // two changed ticks settle the playTrack spinner
+    // Park at a known stopped state: a loaded track is already rolling, so the
+    // pause push is what disarms the three machines for the count below.
+    fireProperty("pause", true);
+    expect(facts).toEqual(["pause"]);
     expect(vi.getTimerCount()).toBe(0);
 
     fireProperty("pause", false);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(true);
-    expect(storeMocks.isPlaying).toBe(true);
+    expect(facts).toEqual(["pause", "play"]);
     expect(vi.getTimerCount()).toBe(3); // watchdog + reconciler + interpolator
 
     fireProperty("pause", true);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
-    expect(storeMocks.isPlaying).toBe(false);
+    expect(facts).toEqual(["pause", "play", "pause"]);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("active track before file-loaded: pause=false still arms store + timers (resume-on-switch)", async () => {
+  it("active track before file-loaded: pause=false still emits the play fact + arms timers (resume-on-switch)", async () => {
     await ctrl.playTrack(trackA); // loadfile sent, no file-loaded yet
-    expect(vi.getTimerCount()).toBe(2); // load deadline + buffering net
+    expect(vi.getTimerCount()).toBe(3); // load deadline + buffering net + interpolator
 
     fireProperty("pause", false);
 
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(true);
-    expect(storeMocks.isPlaying).toBe(true);
-    expect(vi.getTimerCount()).toBe(5); // + watchdog + reconciler + interpolator
+    expect(facts).toEqual(["play"]);
+    expect(vi.getTimerCount()).toBe(5); // + watchdog + reconciler
   });
 
-  it("finished track (end-file eof): pause=false neither writes the store nor arms timers", async () => {
+  it("finished track (end-file eof): pause=false emits no fact and arms no timer", async () => {
     await ctrl.playTrack(trackA);
     fireMpvEvent("end-file", "eof");
     tauriMocks.invoke.mockClear();
-    storeMocks.setIsPlaying.mockClear();
 
     fireProperty("pause", false);
 
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
-    expect(storeMocks.isPlaying).toBe(false);
+    expect(facts).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -1607,7 +1566,7 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
     await ctrl.playTrack(trackA);
     fireMpvEvent("file-loaded");
     fireProperty("pause", false); // active: arms the watchdog for A
-    expect(storeMocks.isPlaying).toBe(true);
+    expect(facts).toEqual(["play"]);
 
     await ctrl.playTrack(trackB); // beginTrack must invalidate A's interval
     tauriMocks.invoke.mockClear();
@@ -1627,7 +1586,6 @@ describe("MpvAudioController — engineEpoch stale-event guard (Fix B3)", () => 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
   });

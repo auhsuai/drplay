@@ -18,14 +18,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({ setIsPlaying: vi.fn() }));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({ setIsPlaying: storeMocks.setIsPlaying })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { captureError } from "../utils/errorLog";
@@ -91,7 +83,6 @@ describe("AudioController facade over the mpv engine", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     // Fresh module each test so the singleton never leaks between tests.

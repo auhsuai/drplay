@@ -35,20 +35,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "../mpvAudio";
@@ -117,18 +103,6 @@ describe("buffering hold investigation — engine level (v4 spin-hold)", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.isPlaying = false;
-    storeMocks.setIsPlaying.mockReset();
-    // Mirror the real store: setIsPlaying flips the isPlaying the watchdog and
-    // the interpolator read on every tick.
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
     attachMocks();
     ctrl = new MpvAudioController();
     buffering = [];

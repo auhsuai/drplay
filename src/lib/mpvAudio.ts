@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Track } from "../types";
 import { captureError } from "../utils/errorLog";
-import { usePlayerStore } from "../store/playerStore";
 import type { BufferedSource } from "../utils/bufferedRange";
 import type {
   AudioEventIdentity,
@@ -103,6 +102,14 @@ export class MpvAudioController {
   private currentTrackId: string | null = null;
   private playbackFinished = true;
   private paused = false;
+  // Why (R3.2): engine-owned playback truth. The engine no longer reads OR
+  // writes the store — the policy adapter projects every fact it emits. A
+  // load starts rolling unless the user paused in the load window (pauseIntent
+  // is consumed by beginTrack), pause/play property pushes flip this, and
+  // terminal outcomes/release clear it. The watchdog, interpolator and
+  // reconciler gate on it (the reconciler also re-checks paused/finished so a
+  // stale flag can never look active).
+  private playing = false;
   // Why (F5-6/F8-2): pause() is fire-and-forget and no-ops before beginTrack,
   // so a pause requested inside the load window (or before a deadline sidecar
   // restart) would leave no trace — beginTrack then forced mpv back to play
@@ -146,7 +153,7 @@ export class MpvAudioController {
     this.emit("buffering", { isBuffering });
   }, this.timers);
   private watchdog = new TimePosWatchdog(
-    () => usePlayerStore.getState().isPlaying,
+    () => this.playing,
     () =>
       invoke(TAURI_COMMANDS.mpvGetProperty, { prop: MPV_PROPERTIES.timePos }),
     (time) => {
@@ -155,7 +162,7 @@ export class MpvAudioController {
     this.timers,
   );
   private interpolator = new TimeInterpolator(
-    () => usePlayerStore.getState().isPlaying,
+    () => this.playing,
     (time) => {
       // Interpolated emit: clock + consumer event only — deliberately NOT
       // watchdog.noteEmit/buffering.onTimeTick, so the watchdog keeps polling
@@ -177,10 +184,7 @@ export class MpvAudioController {
    */
   private reconciler = new StallReconciler(
     {
-      isActive: () =>
-        usePlayerStore.getState().isPlaying &&
-        !this.paused &&
-        !this.playbackFinished,
+      isActive: () => this.playing && !this.paused && !this.playbackFinished,
       isBusy: () => this.seekTarget !== null,
       queryTruth: () => this.queryStallTruth(),
       onReconcileBuffering: (buffering) => {
@@ -240,14 +244,14 @@ export class MpvAudioController {
         this.reconciler.stop();
         if (!active) return;
         this.emit("pause", undefined);
-        usePlayerStore.getState().setIsPlaying(false);
+        this.playing = false;
       } else {
         if (!active) return;
         // v3: pause=false no longer settles the spinner (S3/S4) — it also
         // follows a switch-while-paused clearing mpv's global flag, proving
         // nothing about audio flow. Truth settles via ticks/end-file/mpv.
         this.emit("play", undefined);
-        usePlayerStore.getState().setIsPlaying(true);
+        this.playing = true;
         this.watchdog.start();
         this.reconciler.start();
         this.interpolator.start();
@@ -272,6 +276,7 @@ export class MpvAudioController {
     },
     onEndFile: (outcome, mpvError) => {
       this.playbackFinished = true;
+      this.playing = false;
       this.clearLoadDeadline();
       this.interpolator.reset();
       // Why (S4): the track is terminal — no more ticks can confirm progress,
@@ -639,6 +644,23 @@ export class MpvAudioController {
     this.throttle = freshThrottleClocks();
     // Why: a new track has produced no audio yet — re-arm first-audio.
     this.firstAudioEmitted = false;
+    // mpv's pause flag is process-global and a loadfile never resets it: a
+    // switch made while mpv is paused would start the new track frozen, and a
+    // lost `pause` push (the property-push class TimePosWatchdog covers) meant
+    // the cached flag below never learned the real state — the new track then
+    // stayed silent while the app believed it played. Clear the flag for a
+    // newly loaded track — EXCEPT when the user paused inside the load window
+    // or before a deadline sidecar restart: that intent is consumed here, so
+    // the reload comes up pinned instead of erasing the pause (F5-6/F8-2).
+    // Consumed BEFORE the machines below: the interpolator is armed off
+    // `playing` and a fresh load must already know whether it starts rolling
+    // (R3.2).
+    const keepPaused = this.pauseIntent;
+    this.pauseIntent = false;
+    this.paused = keepPaused;
+    // R3.2: the load begins rolling unless the user paused in the load window
+    // — the same fact the (former) store carried in from the play intent.
+    this.playing = !keepPaused;
     // New track: no truth for it yet — the interpolator stays silent until
     // the first real time-pos push of THIS track (never drift from the old).
     this.interpolator.reset();
@@ -656,17 +678,6 @@ export class MpvAudioController {
     // baselines, safety net) belongs to the previous track — the new track
     // must start clean instead of inheriting a spinner it cannot settle.
     this.buffering.resetForTrack();
-    // mpv's pause flag is process-global and a loadfile never resets it: a
-    // switch made while mpv is paused would start the new track frozen, and a
-    // lost `pause` push (the property-push class TimePosWatchdog covers) meant
-    // the cached flag below never learned the real state — the new track then
-    // stayed silent while the app believed it played. Clear the flag for a
-    // newly loaded track — EXCEPT when the user paused inside the load window
-    // or before a deadline sidecar restart: that intent is consumed here, so
-    // the reload comes up pinned instead of erasing the pause (F5-6/F8-2).
-    const keepPaused = this.pauseIntent;
-    this.pauseIntent = false;
-    this.paused = keepPaused;
     void this.sendCommand([
       MPV_COMMANDS.setProperty,
       MPV_PROPERTY_ARGS.pause,
@@ -691,6 +702,7 @@ export class MpvAudioController {
     // (no-op, or a resume command into the same broken engine) instead of
     // reloading. All other callers set it before surfacing already.
     this.playbackFinished = true;
+    this.playing = false;
     this.logError(`${where}: ${describeError(e)}`);
     // Why (S4): a failed command means no ticks will ever confirm progress —
     // never leave the spinner hanging on a dead path.
@@ -703,7 +715,6 @@ export class MpvAudioController {
       },
       trackIdOverride,
     );
-    usePlayerStore.getState().setIsPlaying(false);
   }
 
   public async playTrack(track: Track, startTime?: number): Promise<void> {
@@ -897,6 +908,7 @@ export class MpvAudioController {
     this.currentTrackId = null;
     this.playbackFinished = true;
     this.paused = false;
+    this.playing = false;
     this.pauseIntent = false;
     this.failureSurfacedForAttempt = false;
     this.currentTime = 0;

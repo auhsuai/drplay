@@ -17,20 +17,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
@@ -94,7 +80,6 @@ describe("MpvAudioController — stream_proxy_start timeout (D8)", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
   });
@@ -127,7 +112,6 @@ describe("MpvAudioController — stream_proxy_start timeout (D8)", () => {
     // Bounded failure: the attempt settled on its own instead of hanging.
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("network_interrupted");
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
     expect(mpvCommands().some((cmd) => cmd[0] === "loadfile")).toBe(false);
     await expect(play).resolves.toBeUndefined();
 

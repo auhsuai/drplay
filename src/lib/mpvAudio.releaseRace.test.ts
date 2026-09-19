@@ -15,20 +15,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
@@ -193,7 +179,6 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     loadfileGate = null;
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     vi.mocked(captureError).mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
@@ -415,7 +400,6 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
       return Promise.resolve(undefined);
     });
 
-    storeMocks.isPlaying = true; // mirror the store flip pause=false performs
     fireProperty("pause", false); // arms the watchdog + interpolator
     await vi.advanceTimersByTimeAsync(2 * WATCHDOG_INTERVAL_MS);
     expect(tauriMocks.invoke).toHaveBeenCalledWith("mpv_get_property", {
@@ -444,7 +428,6 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
     await expect(stale).resolves.toBeUndefined();
 
     expect(errors).toEqual([]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
     expect(vi.mocked(captureError)).not.toHaveBeenCalledWith(
       expect.objectContaining({ level: "error" }),
     );

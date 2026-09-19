@@ -6,7 +6,8 @@
  *   rejecting is the reachable case).
  * - F8-6: a crash mid-loadfile fires both onEngineClosed and the
  *   command-rejection catch — one terminal event must surface exactly ONE
- *   failure (error + setIsPlaying(false)), never two.
+ *   failure fact (error), never two. R3.2: the isPlaying projection of that
+ *   fact is the policy adapter's job (usePlayerPlaybackPolicy.test.ts).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../types";
@@ -18,20 +19,6 @@ const tauriMocks = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
-
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
 
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
@@ -121,7 +108,6 @@ describe("MpvAudioController — terminal failure semantics (F8-5/F8-6)", () => 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
     errors = [];
@@ -209,8 +195,6 @@ describe("MpvAudioController — terminal failure semantics (F8-5/F8-6)", () => 
 
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("network_interrupted");
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledTimes(1);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
   it("(F8-6) the command rejection lands first: the later engine-closed event is suppressed, retry still reloads", async () => {

@@ -9,20 +9,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
@@ -82,8 +68,6 @@ describe("MpvAudioController — timer registry + release invariant (R1.5)", () 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockReset();
-    storeMocks.isPlaying = false;
     attachMocks();
     ctrl = new MpvAudioController();
   });
@@ -118,7 +102,6 @@ describe("MpvAudioController — timer registry + release invariant (R1.5)", () 
   it("every group (watchdog, reconciler, interpolator, seek failsafe, buffering) is registered, and release drains them all", async () => {
     await ctrl.playTrack(trackA);
     fireMpvEvent("file-loaded");
-    storeMocks.isPlaying = true;
     fireProperty("pause", false);
     fireProperty("time-pos", 0.5);
     fireProperty("time-pos", 1); // two changed ticks settle the track spinner

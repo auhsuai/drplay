@@ -27,6 +27,12 @@ export interface PlayerPlaybackPolicyOptions {
  * at app level (usePlayer), so the policy no longer depends on a mounted (or
  * even rendered) PlayerBar.
  *
+ * R3.2: it is also the single projection adapter engine-fact → store. The
+ * engine emits facts (`play`/`pause` property pushes, the terminal error of
+ * playbackFailure) and no longer imports the store; every isPlaying
+ * transition the engine used to write directly is committed here through
+ * `commitIsPlaying("engine", …)`.
+ *
  * Every handler replicates the former PlayerBar handler verbatim: same
  * conditions, same order of side effects, same store values. Identity
  * filtering (R2.1) and the play-event guard reset are preserved. Manual
@@ -88,6 +94,15 @@ export function usePlayerPlaybackPolicy({
       usePlayerStore
         .getState()
         .setErrorInfo({ code: err.code, message: err.message });
+      // R3.2: the engine's terminal playbackFailure fact (retryable transport
+      // failure) used to flip isPlaying=false itself. Project it here, after
+      // the UI surface, exactly where the engine's write landed. A
+      // format_error deliberately does NOT stop playback state: the engine's
+      // `ended` follows and the advance/repeat-one/storm policy below owns
+      // what happens next.
+      if (err.code === "network_interrupted") {
+        commitIsPlaying("engine", false);
+      }
     });
     // A `play` event is the native "playback actually resumed" signal — it
     // fires after a successful auto-retry, so the stale error banner (and its
@@ -97,6 +112,14 @@ export function usePlayerPlaybackPolicy({
       if (isForeign(identity)) return;
       resetAdvanceGuard();
       usePlayerStore.getState().setErrorInfo(null);
+      // R3.2: engine play fact → store (the engine used to write this after
+      // emitting, i.e. once every handler returned).
+      commitIsPlaying("engine", true);
+    });
+    // R3.2: engine pause fact → store (same timing as the old engine write).
+    const unsubPause = audio.on("pause", (identity) => {
+      if (isForeign(identity)) return;
+      commitIsPlaying("engine", false);
     });
     const unsubEnded = audio.on("ended", (identity) => {
       if (isForeign(identity)) return;
@@ -137,6 +160,7 @@ export function usePlayerPlaybackPolicy({
     return () => {
       unsubErr();
       unsubPlay();
+      unsubPause();
       unsubEnded();
     };
   }, [audio]);

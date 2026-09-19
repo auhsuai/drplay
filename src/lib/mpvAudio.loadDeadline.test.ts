@@ -19,20 +19,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
@@ -117,6 +103,7 @@ const trackB: Track = {
 describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
   let ctrl: MpvAudioController;
   let errors: { message: string; code: string }[];
+  let plays: unknown[];
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -124,21 +111,17 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
-    storeMocks.isPlaying = false;
     attachMocks();
     ctrl = new MpvAudioController();
     errors = [];
     ctrl.on("error", (payload) => {
       errors.push(payload);
+    });
+    // R3.2: the store projection moved to the policy adapter — the no-forced-
+    // play assertions below lock the missing engine `play` fact instead.
+    plays = [];
+    ctrl.on("play", (payload) => {
+      plays.push(payload);
     });
   });
 
@@ -165,7 +148,6 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
     ]);
     // The restart is internal: no error may surface while it is being tried.
     expect(errors).toEqual([]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
   });
 
   it("(H1) the reload missing its own deadline too surfaces a bounded error instead of restarting forever", async () => {
@@ -179,7 +161,6 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
     expect(errors).toEqual([
       expect.objectContaining({ code: "network_interrupted" }),
     ]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
   it("(H1) a reload command that itself fails surfaces the bounded error (no unhandled rejection)", async () => {
@@ -199,7 +180,6 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
     expect(errors).toEqual([
       expect.objectContaining({ code: "network_interrupted" }),
     ]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
   it("(H1) a hung restart IPC is bounded: the load ends in the bounded error, not a second silent wedge", async () => {
@@ -217,12 +197,14 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
     expect(errors).toEqual([
       expect.objectContaining({ code: "network_interrupted" }),
     ]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
   it("a healthy load (file-loaded in time) never restarts the sidecar", async () => {
     await ctrl.playTrack(trackA);
-    fireMpvEvent("file-loaded");
+    fireMpvEvent("file-loaded"); // the load completed — clears the load deadline
+    // R3.2: a loaded track arms the backfill machines engine-side; park it
+    // paused so only a (wrongly) surviving deadline could issue IPC here.
+    fireProperty("pause", true);
     tauriMocks.invoke.mockClear();
 
     await vi.advanceTimersByTimeAsync(3 * LOADFILE_DEADLINE_MS);
@@ -287,7 +269,7 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       ["set_property", "pause", "yes"],
     ]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(true);
+    expect(plays).toEqual([]);
 
     tauriMocks.invoke.mockClear();
     await ctrl.playTrack(trackA); // explicit play resumes — no reload
@@ -312,9 +294,9 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
       // what dragged the store back to playing after the restart.
       ["set_property", "pause", "yes"],
     ]);
-    // A real mpv answers the pin with pause=true: the store must stay false.
+    // A real mpv answers the pin with pause=true: no play fact may surface.
     fireProperty("pause", true);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(true);
+    expect(plays).toEqual([]);
   });
 });
 
@@ -327,7 +309,6 @@ describe("MpvAudioController — switch clears mpv's pause flag without a pause 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
     attachMocks();
     ctrl = new MpvAudioController();
   });
@@ -379,16 +360,6 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
-    storeMocks.isPlaying = false;
     attachMocks();
     ctrl = new MpvAudioController();
     errors = [];
@@ -446,7 +417,6 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
       ["set_property", "pause", "no"],
     ]);
     expect(errors).toEqual([]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
   });
 
   it("(F8-1) a switch between shutdown and spawn is not clobbered either", async () => {
@@ -535,7 +505,6 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
     expect(commandNames()).not.toContain("mpv_spawn");
     expect(mpvCommands()).toEqual([]);
     expect(errors).toEqual([]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
   });
 
   it("(regression) a track switch parked on the swap is not booted after a release during the wait", async () => {
@@ -558,6 +527,5 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
     expect(commandNames()).not.toContain("mpv_spawn");
     expect(mpvCommands()).toEqual([]);
     expect(errors).toEqual([]);
-    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
   });
 });

@@ -24,20 +24,6 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 
-const storeMocks = vi.hoisted(() => ({
-  setIsPlaying: vi.fn(),
-  isPlaying: false,
-}));
-
-vi.mock("../store/playerStore", () => ({
-  usePlayerStore: {
-    getState: vi.fn(() => ({
-      setIsPlaying: storeMocks.setIsPlaying,
-      isPlaying: storeMocks.isPlaying,
-    })),
-  },
-}));
-
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
@@ -151,18 +137,6 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
     tauriListeners.clear();
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset();
-    storeMocks.setIsPlaying.mockClear();
-    // Mirror the real store: setIsPlaying flips the isPlaying the reconciler
-    // and watchdog read.
-    storeMocks.setIsPlaying.mockImplementation(
-      (playing: boolean | ((prev: boolean) => boolean)) => {
-        storeMocks.isPlaying =
-          typeof playing === "function"
-            ? playing(storeMocks.isPlaying)
-            : playing;
-      },
-    );
-    storeMocks.isPlaying = false;
     resetWarnThrottleForTest(); // module-level warn rate limit: isolate per test
     vi.mocked(captureError).mockClear();
     attachMocks();
@@ -229,7 +203,6 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
     expect(errors).toEqual([
       expect.objectContaining({ code: "network_interrupted" }),
     ]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
 
     // Replay of the same track after the exhausted error must reload.
     tauriMocks.invoke.mockClear();
@@ -309,6 +282,5 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
     expect(errors).toEqual([
       expect.objectContaining({ code: "network_interrupted" }),
     ]);
-    expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
   });
 });
