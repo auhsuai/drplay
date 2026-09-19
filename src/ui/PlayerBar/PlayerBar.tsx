@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { List } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
+import { commitIsPlaying } from "../../store/playbackCommit";
 import { consumeRestoreResume } from "../../hooks/player/restoreResume";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
@@ -117,7 +118,7 @@ function PlayerBarImpl({
       // track-completion `ended` (no format_error in between) never trips the
       // guard — the counter only grows from the error subscription.
       if (!guardAllowsAutoAdvance(Date.now())) {
-        usePlayerStore.getState().setIsPlaying(false);
+        commitIsPlaying("policy", false);
         return;
       }
       // Repeat-one parity: the mpv engine has no loop property and

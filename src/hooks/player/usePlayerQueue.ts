@@ -4,6 +4,7 @@ import { captureError } from "../../utils/errorLog";
 import { MY_DRIVE_TAB, type TabKey } from "../../utils/driveConstants";
 import { ensureQueueItemId, resolveNextTrack, sameTrack } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
+import { commitIsPlaying } from "../../store/playbackCommit";
 import { persistQueue } from "../../store/queueOps";
 
 export interface QueueDriveItem {
@@ -84,7 +85,7 @@ export function usePlayerQueue(
     // by the queue length (wrapping once for repeat-all/shuffle), so a
     // fully-broken queue resolves to null instead of looping. Tracks are
     // un-marked by updateQueueContext when the user explicitly plays one.
-    const { brokenTrackIds, setIsPlaying } = usePlayerStore.getState();
+    const { brokenTrackIds } = usePlayerStore.getState();
     const target = resolveNextTrack(
       playbackQueue,
       currentTrack,
@@ -99,7 +100,7 @@ export function usePlayerQueue(
       // broken) — deterministic terminal state: always park the store at
       // isPlaying=false instead of leaving it stuck true. Repeat-one never
       // reaches this branch: PlayerBar replays the track directly.
-      setIsPlaying(false);
+      commitIsPlaying("policy", false);
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
 
