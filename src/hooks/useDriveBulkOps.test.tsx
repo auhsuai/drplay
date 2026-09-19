@@ -21,6 +21,7 @@ const createFolderMock = vi.hoisted(() => vi.fn());
 const captureErrorMock = vi.hoisted(() => vi.fn());
 const showErrorToastMock = vi.hoisted(() => vi.fn());
 const stopPlaybackIfTrackMock = vi.hoisted(() => vi.fn());
+const removeTracksByDriveIdsMock = vi.hoisted(() => vi.fn());
 
 // Mock the network layer only; keep real Dexie (fake-indexeddb) so the
 // local-mirror write path is exercised for real.
@@ -37,6 +38,9 @@ vi.mock("../utils/simpleToast", () => ({
 }));
 vi.mock("../utils/stopPlayback", () => ({
   stopPlaybackIfTrack: stopPlaybackIfTrackMock,
+}));
+vi.mock("../store/queueOps", () => ({
+  removeTracksByDriveIds: removeTracksByDriveIdsMock,
 }));
 vi.mock("i18next", () => ({ t: (key: string) => key }));
 
@@ -226,5 +230,62 @@ describe("useDriveBulkOps bounded concurrency (B11-5)", () => {
     expect(onRemoveItem).toHaveBeenCalledTimes(10);
     expect(captureErrorMock).not.toHaveBeenCalled();
     expect(showErrorToastMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDriveBulkOps queue eviction (F7-8)", () => {
+  it("delete thành công hết → evict 1 lần với đủ các id", async () => {
+    const { result } = renderBulkOps(["ok1", "ok2"]);
+
+    await act(async () => {
+      await result.current.handleBulkDelete(vi.fn());
+    });
+
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledTimes(1);
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledWith(["ok1", "ok2"]);
+  });
+
+  it("có id fail → chỉ evict các id delete thành công", async () => {
+    deleteFileMock.mockImplementation((_token, fileId) =>
+      fileId === "bad"
+        ? Promise.reject(new Error("Drive 404"))
+        : Promise.resolve(undefined),
+    );
+    const { result } = renderBulkOps(["bad", "ok1", "ok2"]);
+
+    await act(async () => {
+      await result.current.handleBulkDelete(vi.fn());
+    });
+
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledTimes(1);
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledWith(["ok1", "ok2"]);
+  });
+
+  it("mirror bulkDelete fail → vẫn evict (Drive là source of truth)", async () => {
+    const bulkDeleteSpy = vi
+      .spyOn(db.files, "bulkDelete")
+      .mockRejectedValueOnce(new Error("idb down"));
+    try {
+      const { result } = renderBulkOps(["m1", "m2"]);
+
+      await act(async () => {
+        await result.current.handleBulkDelete(vi.fn());
+      });
+
+      expect(removeTracksByDriveIdsMock).toHaveBeenCalledWith(["m1", "m2"]);
+    } finally {
+      bulkDeleteSpy.mockRestore();
+    }
+  });
+
+  it("không id nào delete thành công → không evict", async () => {
+    deleteFileMock.mockRejectedValue(new Error("Drive 500"));
+    const { result } = renderBulkOps(["bad1", "bad2"]);
+
+    await act(async () => {
+      await result.current.handleBulkDelete(vi.fn());
+    });
+
+    expect(removeTracksByDriveIdsMock).not.toHaveBeenCalled();
   });
 });

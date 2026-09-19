@@ -9,6 +9,7 @@ import {
   FOLDER_MIME,
 } from "../utils/driveApi";
 import { stopPlaybackIfTrack } from "../utils/stopPlayback";
+import { removeTracksByDriveIds } from "../store/queueOps";
 import { showErrorToast } from "../utils/simpleToast";
 import { createSemaphore } from "../utils/asyncLimit";
 import { t } from "i18next";
@@ -170,6 +171,12 @@ export function useDriveBulkOps({
             message: `local-mirror-delete-failed count=${String(deletedIds.length)}: ${e instanceof Error ? e.message : String(e)}`,
           });
         }
+        // Queue eviction (both layers + persisted queueKv) for every Drive
+        // delete that succeeded — one call for the whole batch, addressed by
+        // Drive id (the file itself or a deleted folder's members). Same
+        // independence as the mirror write above: Drive is the source of
+        // truth, so a local failure must not skip the eviction.
+        removeTracksByDriveIds(deletedIds);
         if (onRemoveItem)
           deletedIds.forEach((id) => {
             onRemoveItem(id);

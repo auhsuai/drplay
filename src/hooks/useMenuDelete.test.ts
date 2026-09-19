@@ -17,6 +17,11 @@ vi.mock("../utils/stopPlayback", () => ({
   stopPlaybackIfTrack: stopPlaybackIfTrackMock,
 }));
 
+const removeTracksByDriveIdsMock = vi.hoisted(() => vi.fn());
+vi.mock("../store/queueOps", () => ({
+  removeTracksByDriveIds: removeTracksByDriveIdsMock,
+}));
+
 const showErrorToastMock = vi.hoisted(() => vi.fn());
 vi.mock("../utils/simpleToast", () => ({
   showErrorToast: showErrorToastMock,
@@ -95,5 +100,70 @@ describe("useMenuDelete double-click race guard", () => {
 
     expect(deleteFileMock).toHaveBeenCalledTimes(2);
     expect(stopPlaybackIfTrackMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useMenuDelete queue eviction (F7-8)", () => {
+  it("delete file thành công → evict queue theo Drive id, SAU stopPlaybackIfTrack", async () => {
+    const { result } = renderHook(() => useMenuDelete(t));
+    act(() => {
+      result.current.openDeleteConfirm(makeItem());
+    });
+
+    await act(async () => {
+      await result.current.handleDelete("tok", vi.fn());
+    });
+
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledTimes(1);
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledWith(["file-1"]);
+    expect(stopPlaybackIfTrackMock).toHaveBeenCalledWith("file-1");
+    expect(stopPlaybackIfTrackMock.mock.invocationCallOrder[0]).toBeLessThan(
+      removeTracksByDriveIdsMock.mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("delete folder thành công → evict cùng helper theo folder id", async () => {
+    const { result } = renderHook(() => useMenuDelete(t));
+    act(() => {
+      result.current.openDeleteConfirm(
+        makeItem({ id: "folder-9", isFolder: true }),
+      );
+    });
+
+    await act(async () => {
+      await result.current.handleDelete("tok", vi.fn());
+    });
+
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledTimes(1);
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledWith(["folder-9"]);
+  });
+
+  it("delete Drive thất bại → KHÔNG evict queue", async () => {
+    deleteFileMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    const { result } = renderHook(() => useMenuDelete(t));
+    act(() => {
+      result.current.openDeleteConfirm(makeItem());
+    });
+
+    await act(async () => {
+      await result.current.handleDelete("tok", vi.fn());
+    });
+
+    expect(removeTracksByDriveIdsMock).not.toHaveBeenCalled();
+  });
+
+  it("Drive delete thành công nhưng mirror delete fail → vẫn evict (Drive là source of truth)", async () => {
+    dbMock.files.delete.mockRejectedValueOnce(new Error("idb down"));
+    const { result } = renderHook(() => useMenuDelete(t));
+    act(() => {
+      result.current.openDeleteConfirm(makeItem());
+    });
+
+    await act(async () => {
+      await result.current.handleDelete("tok", vi.fn());
+    });
+
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledWith(["file-1"]);
   });
 });

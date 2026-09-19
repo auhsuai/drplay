@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { deleteFile } from "../utils/driveApi";
 import { db } from "../db/db";
 import { stopPlaybackIfTrack } from "../utils/stopPlayback";
+import { removeTracksByDriveIds } from "../store/queueOps";
 import { showErrorToast } from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
 import { getCurrentUserEmail } from "../utils/storageKeys";
@@ -38,6 +39,11 @@ export function useMenuDelete(t: TFunction) {
       // away — never keep playing audio that no longer exists. Only after a
       // successful Drive delete (a failed delete falls to catch, no stop).
       stopPlaybackIfTrack(deleteDriveItem.id);
+      // Evict the deleted item from both queue layers + persisted queueKv —
+      // the file itself, or (folder delete) every entry that came from it.
+      // Runs after stopPlaybackIfTrack on purpose: the deleted current track
+      // is already cleared from the store, so its entry goes too.
+      removeTracksByDriveIds([deleteDriveItem.id]);
       // Compound PK (schema v10): [userEmail, id].
       await db.files.delete([getCurrentUserEmail(), deleteDriveItem.id]);
       setShowDeleteConfirm(false);

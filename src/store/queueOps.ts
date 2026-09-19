@@ -77,6 +77,38 @@ export function removeTracksFromQueue(itemIds: readonly string[]): number {
 }
 
 /**
+ * Remove every queue entry that came from the given Drive items — the Drive
+ * delete path addresses items by Drive file/folder id, while queue entries
+ * are keyed by queueItemId (one per duplicate; the id survives shuffling).
+ * An entry matches when the deleted id is:
+ * - the entry's own Drive id (file deleted), or
+ * - its `folderGroupId` (root folder added via "add folder to queue"), or
+ * - its `parentId` (direct child of a deleted folder).
+ * Matching keys are mapped to trackKey and delegated to
+ * removeTracksFromQueue so both layers, the current-track protection and the
+ * single persist write stay single-sourced. Callers run stopPlaybackIfTrack
+ * first, so a deleted CURRENT track is already cleared from the store and its
+ * entry is evicted too — never left behind as a dead id.
+ */
+export function removeTracksByDriveIds(driveIds: readonly string[]): number {
+  if (driveIds.length === 0) return 0;
+
+  const ids = new Set(driveIds);
+  const { originalQueue, playbackQueue } = usePlayerStore.getState();
+  const keys = new Set<string>();
+  for (const track of [...originalQueue, ...playbackQueue]) {
+    if (
+      ids.has(track.id) ||
+      (track.folderGroupId !== undefined && ids.has(track.folderGroupId)) ||
+      (track.parentId !== undefined && ids.has(track.parentId))
+    ) {
+      keys.add(trackKey(track));
+    }
+  }
+  return removeTracksFromQueue([...keys]);
+}
+
+/**
  * Remove every entry that came from the given Drive folder (excluding the
  * currently playing track). Matches BOTH:
  * - folderGroupId: a root folder added via "add folder to queue", whose

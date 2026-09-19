@@ -40,6 +40,11 @@ vi.mock("../db/db", () => ({
   db: { files: { bulkDelete: mocks.bulkDelete } },
 }));
 
+const removeTracksByDriveIdsMock = vi.hoisted(() => vi.fn());
+vi.mock("../store/queueOps", () => ({
+  removeTracksByDriveIds: removeTracksByDriveIdsMock,
+}));
+
 import { stopPlaybackIfTrack } from "./stopPlayback";
 import { useDriveBulkOps } from "../hooks/useDriveBulkOps";
 
@@ -53,6 +58,7 @@ beforeEach(() => {
   mocks.deleteFile.mockReset();
   mocks.showErrorToast.mockClear();
   mocks.bulkDelete.mockClear();
+  removeTracksByDriveIdsMock.mockClear();
 });
 
 describe("stopPlaybackIfTrack", () => {
@@ -137,6 +143,10 @@ describe("useDriveBulkOps.handleBulkDelete with stopPlayback", () => {
     expect(mocks.store.setCurrentTrack).toHaveBeenCalledWith(null);
     expect(mocks.store.setIsPlaying).toHaveBeenCalledWith(false);
     expect(onRemoveItem).toHaveBeenCalledTimes(2);
+    expect(removeTracksByDriveIdsMock).toHaveBeenCalledWith([
+      "track-1",
+      "other-1",
+    ]);
     expect(mocks.bulkDelete).toHaveBeenCalledWith([
       ["default", "track-1"],
       ["default", "other-1"],

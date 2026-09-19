@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTracksToQueue,
   persistQueue,
+  removeTracksByDriveIds,
   removeTracksByFolderFromQueue,
   removeTracksFromQueue,
 } from "./queueOps";
@@ -220,6 +221,108 @@ describe("removeTracksFromQueue", () => {
     const state = usePlayerStore.getState();
     expect(state.originalQueue.map((t) => t.id)).toEqual(["b"]);
     expect(state.playbackQueue.map((t) => t.id)).toEqual(["b"]);
+  });
+});
+
+describe("removeTracksByDriveIds", () => {
+  it("entry có queueItemId → xoá theo drive id ở CẢ 2 queue, persist queue mới, return số xoá", () => {
+    const a = makeTrack("drive-a", { queueItemId: "q-a" });
+    const b = makeTrack("drive-b", { queueItemId: "q-b" });
+    const c = makeTrack("drive-c", { queueItemId: "q-c" });
+    seed({ originalQueue: [a, b, c], playbackQueue: [c, a, b] });
+
+    expect(removeTracksByDriveIds(["drive-b"])).toBe(1);
+
+    const state = usePlayerStore.getState();
+    expect(state.originalQueue.map((t) => t.id)).toEqual([
+      "drive-a",
+      "drive-c",
+    ]);
+    expect(state.playbackQueue.map((t) => t.id)).toEqual([
+      "drive-c",
+      "drive-a",
+    ]);
+    expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
+      SESSION_CLEANUP_KEYS.queueKv,
+      state.originalQueue,
+    );
+  });
+
+  it("cùng drive id xuất hiện 2 entry (khác queueItemId) → xoá cả 2", () => {
+    const dup1 = makeTrack("same-file", { queueItemId: "q-1" });
+    const dup2 = makeTrack("same-file", { queueItemId: "q-2" });
+    const other = makeTrack("other", { queueItemId: "q-o" });
+    seed({
+      originalQueue: [dup1, other, dup2],
+      playbackQueue: [dup2, dup1, other],
+    });
+
+    expect(removeTracksByDriveIds(["same-file"])).toBe(2);
+
+    const state = usePlayerStore.getState();
+    expect(state.originalQueue.map((t) => t.queueItemId)).toEqual(["q-o"]);
+    expect(state.playbackQueue.map((t) => t.queueItemId)).toEqual(["q-o"]);
+  });
+
+  it("drive id là folder bị xoá → xoá member theo folderGroupId và parentId", () => {
+    const grouped = makeTrack("g1", {
+      folderGroupId: "folder-1",
+      parentId: "sub",
+      queueItemId: "q-g1",
+    });
+    const direct = makeTrack("d1", {
+      parentId: "folder-1",
+      queueItemId: "q-d1",
+    });
+    const other = makeTrack("o1", {
+      parentId: "folder-2",
+      queueItemId: "q-o1",
+    });
+    seed({
+      originalQueue: [grouped, direct, other],
+      playbackQueue: [direct, grouped, other],
+    });
+
+    expect(removeTracksByDriveIds(["folder-1"])).toBe(2);
+
+    const state = usePlayerStore.getState();
+    expect(state.originalQueue.map((t) => t.id)).toEqual(["o1"]);
+    expect(state.playbackQueue.map((t) => t.id)).toEqual(["o1"]);
+  });
+
+  it("delete flow: current đã bị clear (stopPlaybackIfTrack chạy trước) → entry của current cũng bị xoá", () => {
+    const cur = makeTrack("cur-file", { queueItemId: "q-cur" });
+    const other = makeTrack("other", { queueItemId: "q-o" });
+    seed({
+      originalQueue: [cur, other],
+      playbackQueue: [cur, other],
+      currentTrack: null,
+    });
+
+    expect(removeTracksByDriveIds(["cur-file"])).toBe(1);
+
+    expect(usePlayerStore.getState().originalQueue.map((t) => t.id)).toEqual([
+      "other",
+    ]);
+  });
+
+  it("legacy entry (không có queueItemId) → match theo track.id", () => {
+    const legacy = makeTrack("legacy-file");
+    seed({ originalQueue: [legacy], playbackQueue: [legacy] });
+
+    expect(removeTracksByDriveIds(["legacy-file"])).toBe(1);
+
+    expect(usePlayerStore.getState().originalQueue).toEqual([]);
+    expect(usePlayerStore.getState().playbackQueue).toEqual([]);
+  });
+
+  it("ids rỗng hoặc không match → return 0, không persist", () => {
+    seed({ originalQueue: [makeTrack("a", { queueItemId: "q-a" })] });
+
+    expect(removeTracksByDriveIds([])).toBe(0);
+    expect(removeTracksByDriveIds(["nope"])).toBe(0);
+
+    expect(vi.mocked(idbSet)).not.toHaveBeenCalled();
   });
 });
 
