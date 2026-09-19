@@ -1,5 +1,6 @@
 import { AudioController } from "../lib/AudioController";
 import { usePlayerStore } from "../store/playerStore";
+import { commitIsPlaying } from "../store/playbackCommit";
 
 /**
  * Stop playback immediately when a file is deleted from Drive while it is the
@@ -17,5 +18,5 @@ export function stopPlaybackIfTrack(fileId: string): void {
   AudioController.getInstance().release();
   usePlayerStore.getState().setIsDownloading(false);
   usePlayerStore.getState().setCurrentTrack(null);
-  usePlayerStore.getState().setIsPlaying(false);
+  commitIsPlaying("teardown", false);
 }
