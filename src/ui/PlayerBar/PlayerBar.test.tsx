@@ -122,6 +122,7 @@ const { fakeController } = vi.hoisted(() => {
     playTrack: vi.fn(),
     pause: vi.fn(),
     setVolume: vi.fn(),
+    getVolume: vi.fn(() => 1),
     toggleMute: vi.fn(),
     isMuted: vi.fn(() => false),
     _handlers: {} as Record<string, Handler[]>,
@@ -230,6 +231,8 @@ beforeEach(() => {
   setBuffered([]);
   fakeController._handlers = {};
   fakeController.setVolume.mockClear();
+  fakeController.getVolume.mockReset();
+  fakeController.getVolume.mockImplementation(() => 1);
   fakeController.toggleMute.mockReset();
   fakeController.isMuted.mockReset();
   fakeController.isMuted.mockImplementation(() => false);
@@ -2448,6 +2451,22 @@ describe("PlayerBar volume drag + mute (P2-01-3, P2-01-4)", () => {
       fireEvent.pointerUp(window, { clientX: 150, pointerId: 1 });
     });
     expect(fakeController.setVolume.mock.calls.length).toBe(calls);
+  });
+
+  it("R1.4: remount rehydrates volume/mute from the engine (logout→login)", () => {
+    // Engine keeps volume/mute across release(); the slider must read them
+    // back at mount instead of resetting to its 1/false defaults.
+    fakeController.getVolume.mockReturnValue(0.4);
+    fakeController.isMuted.mockReturnValue(true);
+    const first = renderPlayer();
+    const fill = (): HTMLElement =>
+      screen.getByTestId("volume-bar").firstElementChild as HTMLElement;
+    expect(fill().style.width).toBe("0%"); // muted engine → empty bar
+
+    first.unmount();
+    fakeController.isMuted.mockReturnValue(false); // re-login: engine still at 0.4
+    renderPlayer();
+    expect(fill().style.width).toBe("40%");
   });
 
   it("BUG regression: unmounting mid-drag removes the volume drag's window listeners (no leak)", () => {

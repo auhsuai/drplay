@@ -14,8 +14,11 @@ export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
   // Volume UI state is owned here: it only feeds this component's icon +
   // bar width, so updates stay local instead of re-rendering the whole
   // PlayerBar tree (render-critical isolation).
-  const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
+  // Rehydrate from the engine (source of truth): release() keeps the engine's
+  // volume/mute, so a remount (logout→login) must show the engine's current
+  // level, not the 1/false defaults (D3/R1.4).
+  const [volume, setVolume] = useState(() => audio.getVolume());
+  const [isMuted, setIsMuted] = useState(() => audio.isMuted());
   const [isVolumeActive, setIsVolumeActive] = useState(false);
   const volumeBarRef = useRef<HTMLDivElement>(null);
   // Window drag handlers are mirrored into refs so the unmount cleanup below
