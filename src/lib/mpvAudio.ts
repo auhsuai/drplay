@@ -83,6 +83,11 @@ export class MpvAudioController {
   // isPlaying=false with no user pause, and a retry (retryCurrentTrack) must
   // still start playing, not resume pinned.
   private pauseIntent = false;
+  // Why (F8-6): a crash mid-loadfile fires BOTH onEngineClosed and the
+  // command-rejection catch — this latch keeps a single terminal failure
+  // surface (error/log/store) per load attempt. Reset at every new attempt
+  // (playTrack entry / a deadline restart / beginTrack) and on release.
+  private failureSurfacedForAttempt = false;
   private currentTime = 0;
   private duration = 0;
   private cacheRanges: MpvRange[] = [];
@@ -262,6 +267,8 @@ export class MpvAudioController {
       this.watchdog.stop();
       this.reconciler.stop();
       this.interpolator.reset();
+      // playbackFailure dedupes (F8-6): if the command-rejection catch
+      // surfaced this same crash already, this call is the no-op duplicate.
       this.playbackFailure("mpv-engine-closed", cause);
     },
     onMalformed: (detail) => {
@@ -500,6 +507,8 @@ export class MpvAudioController {
     this.lastTrack = track;
     this.currentTrackId = track.id;
     this.playbackFinished = false;
+    // A live track starts its own failure scope (F8-6).
+    this.failureSurfacedForAttempt = false;
     // A new stream resets the proxy-error signal: an event from the previous
     // track must never classify THIS track's end-file (R05).
     this.lastProxyError = null;
@@ -551,6 +560,16 @@ export class MpvAudioController {
   }
 
   private playbackFailure(where: string, e: unknown): void {
+    // Why (F8-6): one failure surface per attempt — a crash mid-loadfile
+    // fires both onEngineClosed and the command-rejection catch, and only
+    // the first may surface (log/error/store), whichever order they land in.
+    if (this.failureSurfacedForAttempt) return;
+    this.failureSurfacedForAttempt = true;
+    // Why (F8-5): a failed load/command is terminal — without this flag a
+    // later playTrack of the same track took the same-track resume branch
+    // (no-op, or a resume command into the same broken engine) instead of
+    // reloading. All other callers set it before surfacing already.
+    this.playbackFinished = true;
     this.logError(`${where}: ${describeError(e)}`);
     // Why (S4): a failed command means no ticks will ever confirm progress —
     // never leave the spinner hanging on a dead path.
@@ -567,6 +586,8 @@ export class MpvAudioController {
     // Any explicit play request supersedes a pending pause intent — including
     // a retry after a failure, where the store is false without a user pause.
     this.pauseIntent = false;
+    // A fresh attempt owns a fresh failure surface (F8-6).
+    this.failureSurfacedForAttempt = false;
     try {
       if (this.currentTrackId === track.id && !this.playbackFinished) {
         // Same-track replay: paused -> resume only; playing -> no-op (web parity).
@@ -715,6 +736,7 @@ export class MpvAudioController {
     this.playbackFinished = true;
     this.paused = false;
     this.pauseIntent = false;
+    this.failureSurfacedForAttempt = false;
     this.currentTime = 0;
     this.duration = 0;
     this.cacheRanges = [];
@@ -899,6 +921,9 @@ export class MpvAudioController {
     if (this.isStale(epoch)) return;
     if (this.currentTrackId !== trackId) return;
     if (this.playbackFinished) return;
+    // The deadline restart is a fresh load sub-attempt: its own failure
+    // surface (F8-6) — e.g. a restart whose reload rejects must still report.
+    this.failureSurfacedForAttempt = false;
     if (this.loadRestarts >= LOADFILE_RESTART_MAX_ATTEMPTS) {
       this.failTerminal(
         "load-deadline-exhausted",
