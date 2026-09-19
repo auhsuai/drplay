@@ -6,6 +6,7 @@ import { ensureQueueItemId, resolveNextTrack, sameTrack } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
 import { commitIsPlaying } from "../../store/playbackCommit";
 import { persistQueue } from "../../store/queueOps";
+import { beginIntent } from "./playbackIntent";
 
 export interface QueueDriveItem {
   isFolder?: boolean;
@@ -85,22 +86,32 @@ export function usePlayerQueue(
     // by the queue length (wrapping once for repeat-all/shuffle), so a
     // fully-broken queue resolves to null instead of looping. Tracks are
     // un-marked by updateQueueContext when the user explicitly plays one.
-    const { brokenTrackIds } = usePlayerStore.getState();
-    const target = resolveNextTrack(
-      playbackQueue,
-      currentTrack,
-      playMode,
-      brokenTrackIds,
-    );
+    //
+    // R3.1a: a manual next is a USER intent — beginning it supersedes any
+    // in-flight user intent, so a stale play/resume token continuation can no
+    // longer commit after the user changed tracks (audit B5-4, "user wins").
+    // The play intent raised by handlePlayTrack then supersedes this one.
+    const intent = beginIntent("next");
+    try {
+      const { brokenTrackIds } = usePlayerStore.getState();
+      const target = resolveNextTrack(
+        playbackQueue,
+        currentTrack,
+        playMode,
+        brokenTrackIds,
+      );
 
-    if (target) {
-      handlePlayTrack(target, undefined, true);
-    } else {
-      // Nothing playable left in the queue (end of queue, or every candidate
-      // broken) — deterministic terminal state: always park the store at
-      // isPlaying=false instead of leaving it stuck true. Repeat-one never
-      // reaches this branch: PlayerBar replays the track directly.
-      commitIsPlaying("policy", false);
+      if (target) {
+        handlePlayTrack(target, undefined, true);
+      } else {
+        // Nothing playable left in the queue (end of queue, or every candidate
+        // broken) — deterministic terminal state: always park the store at
+        // isPlaying=false instead of leaving it stuck true. Repeat-one never
+        // reaches this branch: PlayerBar replays the track directly.
+        commitIsPlaying("policy", false);
+      }
+    } finally {
+      intent.end();
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
 
@@ -125,19 +136,27 @@ export function usePlayerQueue(
     // backward for the first track NOT marked broken (wrapping once for
     // repeat-all/shuffle, bounded by the queue length). No candidate → silent
     // no-op, preserving the old end-of-queue parity.
-    const wraps = playMode === "repeat-all" || playMode === "shuffle";
-    const { brokenTrackIds } = usePlayerStore.getState();
-    for (let step = 1; step <= playbackQueue.length; step++) {
-      let index = currentIndex - step;
-      if (index < 0) {
-        if (!wraps) break;
-        index += playbackQueue.length;
+    //
+    // R3.1a: same user-intent ownership as handleNextTrack — a manual prev
+    // supersedes any in-flight user intent.
+    const intent = beginIntent("prev");
+    try {
+      const wraps = playMode === "repeat-all" || playMode === "shuffle";
+      const { brokenTrackIds } = usePlayerStore.getState();
+      for (let step = 1; step <= playbackQueue.length; step++) {
+        let index = currentIndex - step;
+        if (index < 0) {
+          if (!wraps) break;
+          index += playbackQueue.length;
+        }
+        const candidate = playbackQueue[index];
+        if (candidate !== undefined && !brokenTrackIds.includes(candidate.id)) {
+          handlePlayTrack(candidate, undefined, true);
+          return;
+        }
       }
-      const candidate = playbackQueue[index];
-      if (candidate !== undefined && !brokenTrackIds.includes(candidate.id)) {
-        handlePlayTrack(candidate, undefined, true);
-        return;
-      }
+    } finally {
+      intent.end();
     }
   }, [currentTrack, playbackQueue, playMode, handlePlayTrack]);
 

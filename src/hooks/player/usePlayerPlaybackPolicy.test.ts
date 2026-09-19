@@ -8,6 +8,7 @@ import {
   guardAllowsAutoAdvance,
   resetAdvanceGuard,
 } from "../../utils/playerError";
+import { __resetPlaybackIntentForTests, beginIntent } from "./playbackIntent";
 
 // R2.3: these are the policy tests MOVED out of PlayerBar.test.tsx —
 // mark-broken, storm guard, repeat-one replay, errorInfo writes, storm banner
@@ -75,6 +76,7 @@ beforeEach(() => {
   fakeController.playTrack.mockClear();
   installFakeOn();
   fakeController._handlers = {};
+  __resetPlaybackIntentForTests();
   usePlayerStore.setState({
     currentTrack: makeTrack(),
     isPlaying: true,
@@ -528,5 +530,22 @@ describe("usePlayerPlaybackPolicy event identity filtering (R2.1 — stale-track
     });
 
     expect(onNextTrack).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("usePlayerPlaybackPolicy auto-advance system guard (R3.1a — contract (a))", () => {
+  it("ended while a user intent is in flight → auto-advance is blocked (user wins, no next)", () => {
+    const { onNextTrack } = renderPolicy();
+    const user = beginIntent("play");
+
+    act(() => {
+      fakeController._emit("ended");
+    });
+
+    expect(onNextTrack).not.toHaveBeenCalled();
+    expect(user.isCurrent()).toBe(true);
+    expect(user.abortSignal.aborted).toBe(false);
+
+    user.end();
   });
 });

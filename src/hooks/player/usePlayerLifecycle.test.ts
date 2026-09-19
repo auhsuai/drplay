@@ -20,6 +20,7 @@ import {
   clearRestoreResume,
   consumeRestoreResume,
 } from "./restoreResume";
+import { __resetPlaybackIntentForTests, beginIntent } from "./playbackIntent";
 
 vi.mock("tauri-plugin-keepawake-api", () => ({
   start: vi.fn(() => Promise.resolve()),
@@ -66,6 +67,7 @@ const flush = async (): Promise<void> => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetPlaybackIntentForTests();
   usePlayerStore.setState({ isDownloading: false });
   clearRestoreResume();
 });
@@ -214,6 +216,24 @@ describe("usePlayerLifecycle player-stop hard reset", () => {
     });
 
     expect(consumeRestoreResume("t1")).toBeUndefined();
+
+    unmount();
+  });
+
+  it("UPL-6 (R3.1a): player-stop bumps the session epoch — in-flight intent bị vô hiệu + abort", () => {
+    const intent = beginIntent("play");
+
+    const deps = makeDeps(false);
+    const { unmount } = renderHook(() => {
+      usePlayerLifecycle(deps);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event(PLAYER_STOP_EVENT));
+    });
+
+    expect(intent.isCurrent()).toBe(false);
+    expect(intent.abortSignal.aborted).toBe(true);
 
     unmount();
   });

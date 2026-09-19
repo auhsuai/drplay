@@ -9,6 +9,7 @@ import {
   resetAdvanceGuard,
   STORM_COOLDOWN_MS,
 } from "../../utils/playerError";
+import { beginIntent } from "./playbackIntent";
 
 export interface PlayerPlaybackPolicyOptions {
   /**
@@ -120,7 +121,17 @@ export function usePlayerPlaybackPolicy({
         void audio.playTrack(cur, 0);
         return;
       }
-      onNextTrackRef.current();
+      // R3.1a: auto-advance is a SYSTEM intent. While a user intent is in
+      // flight (e.g. a click awaiting its token), it must not invalidate it —
+      // the user's track commits when the token resolves (contract (a),
+      // audit B5-4). The controller refuses the handle in that window.
+      const intent = beginIntent("auto-advance");
+      if (!intent.isCurrent()) return;
+      try {
+        onNextTrackRef.current();
+      } finally {
+        intent.end();
+      }
     });
 
     return () => {

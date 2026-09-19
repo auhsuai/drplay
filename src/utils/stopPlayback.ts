@@ -1,6 +1,7 @@
 import { AudioController } from "../lib/AudioController";
 import { usePlayerStore } from "../store/playerStore";
 import { commitIsPlaying } from "../store/playbackCommit";
+import { bumpSessionEpoch } from "../hooks/player/playbackIntent";
 
 /**
  * Stop playback immediately when a file is deleted from Drive while it is the
@@ -15,6 +16,11 @@ import { commitIsPlaying } from "../store/playbackCommit";
  */
 export function stopPlaybackIfTrack(fileId: string): void {
   if (usePlayerStore.getState().currentTrack?.id !== fileId) return;
+  // R3.1a (SC3): invalidate + abort every in-flight intent BEFORE the engine
+  // is released — a play attempt still awaiting its token must not resurrect
+  // the deleted file (commitIfCurrent is dead from here on), and the engine
+  // must not receive a loadfile for a file that no longer exists.
+  bumpSessionEpoch();
   AudioController.getInstance().release();
   usePlayerStore.getState().setIsDownloading(false);
   usePlayerStore.getState().setCurrentTrack(null);

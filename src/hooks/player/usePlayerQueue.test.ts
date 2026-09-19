@@ -11,6 +11,7 @@ import type { PlayMode, Track } from "../../types";
 import { set as idbSet } from "../../db/kv";
 import { PLAYER_PERSISTENCE_KEYS } from "../../utils/playerPersistence";
 import { usePlayerStore } from "../../store/playerStore";
+import { __resetPlaybackIntentForTests, beginIntent } from "./playbackIntent";
 
 vi.mock("../../db/kv", () => ({
   set: vi.fn(() => Promise.resolve()),
@@ -19,6 +20,12 @@ vi.mock("../../db/kv", () => ({
 vi.mock("../../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
+
+// Playback intents are process-global state (like playerError) — reset them
+// between tests so a leaked in-flight intent cannot guard-block the next test.
+beforeEach(() => {
+  __resetPlaybackIntentForTests();
+});
 
 const baseTrack: Track = {
   id: "t1",
@@ -887,5 +894,64 @@ describe("handleNextTrack end-of-queue terminal state (A4)", () => {
     expect(handlePlayTrack).toHaveBeenCalledTimes(1);
     expect(handlePlayTrack.mock.calls[0]?.[0]).toMatchObject({ id: "t2" });
     expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+});
+
+describe("R3.1a user next/prev intent ownership", () => {
+  const setup = (currentTrack: Track | null, playbackQueue: Track[]) => {
+    const setPlaybackQueue = vi.fn();
+    const setOriginalQueue = vi.fn();
+    const setPlayMode = vi.fn();
+    const handlePlayTrack = vi.fn();
+
+    const { result } = renderHook(() =>
+      usePlayerQueue(
+        currentTrack,
+        playbackQueue,
+        playbackQueue,
+        "normal",
+        setPlaybackQueue,
+        setOriginalQueue,
+        setPlayMode,
+        handlePlayTrack,
+      ),
+    );
+    return { result, handlePlayTrack };
+  };
+
+  it("user next supersedes an in-flight user intent — stale play continuation cannot commit", () => {
+    const queue = [makeTrack("t1"), makeTrack("t2")];
+    const current = queue[0];
+    if (current === undefined) throw new Error("expected track at index 0");
+    const { result, handlePlayTrack } = setup(current, queue);
+
+    const stale = beginIntent("play");
+    act(() => {
+      result.current.handleNextTrack();
+    });
+
+    expect(stale.isCurrent()).toBe(false);
+    expect(stale.abortSignal.aborted).toBe(true);
+    expect(handlePlayTrack).toHaveBeenCalledWith(queue[1], undefined, true);
+  });
+
+  it("user prev supersedes an in-flight user intent too", () => {
+    const queue = [
+      makeTrack("t1"),
+      makeTrack("t2"),
+      makeTrack("t3", { queueItemId: "q-t3" }),
+    ];
+    const current = queue[2];
+    if (current === undefined) throw new Error("expected track at index 2");
+    const { result, handlePlayTrack } = setup(current, queue);
+
+    const stale = beginIntent("play");
+    act(() => {
+      result.current.handlePrevTrack();
+    });
+
+    expect(stale.isCurrent()).toBe(false);
+    expect(stale.abortSignal.aborted).toBe(true);
+    expect(handlePlayTrack).toHaveBeenCalledWith(queue[1], undefined, true);
   });
 });

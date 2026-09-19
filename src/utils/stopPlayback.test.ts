@@ -47,8 +47,13 @@ vi.mock("../store/queueOps", () => ({
 
 import { stopPlaybackIfTrack } from "./stopPlayback";
 import { useDriveBulkOps } from "../hooks/useDriveBulkOps";
+import {
+  __resetPlaybackIntentForTests,
+  beginIntent,
+} from "../hooks/player/playbackIntent";
 
 beforeEach(() => {
+  __resetPlaybackIntentForTests();
   mocks.store.currentTrack = null;
   mocks.store.isDownloading = false;
   mocks.store.setCurrentTrack.mockClear();
@@ -104,6 +109,29 @@ describe("stopPlaybackIfTrack", () => {
     expect(mocks.store.setCurrentTrack).not.toHaveBeenCalled();
     expect(mocks.store.setIsPlaying).not.toHaveBeenCalled();
     expect(mocks.store.setIsDownloading).not.toHaveBeenCalled();
+  });
+});
+
+describe("stopPlaybackIfTrack — R3.1a session epoch (SC3)", () => {
+  it("invalidates + aborts every in-flight intent before clearing the store", () => {
+    mocks.store.currentTrack = { id: "track-1" };
+    const intent = beginIntent("play");
+
+    stopPlaybackIfTrack("track-1");
+
+    expect(intent.isCurrent()).toBe(false);
+    expect(intent.abortSignal.aborted).toBe(true);
+  });
+
+  it("no-op delete (another file) leaves in-flight intents alive", () => {
+    mocks.store.currentTrack = { id: "track-1" };
+    const intent = beginIntent("play");
+
+    stopPlaybackIfTrack("other-1");
+
+    expect(intent.isCurrent()).toBe(true);
+    expect(intent.abortSignal.aborted).toBe(false);
+    intent.end();
   });
 });
 

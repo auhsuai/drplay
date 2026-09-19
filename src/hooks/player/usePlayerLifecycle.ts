@@ -10,6 +10,7 @@ import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
 import { resetAdvanceGuard } from "../../utils/playerError";
 import { clearRestoreResume } from "./restoreResume";
+import { bumpSessionEpoch } from "./playbackIntent";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
@@ -85,6 +86,12 @@ export function usePlayerLifecycle({
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
+      // R3.1a (SC1-adjacent): logout/teardown invalidates EVERY in-flight
+      // intent (play/resume token awaits included) before the store is
+      // cleared — a stale continuation must not commit into the next session.
+      // R2.4a's restore-stop guard stays intact (usePlayerSession listens to
+      // the same event).
+      bumpSessionEpoch();
       // F8-4: the storm guard is module-scope state — a fresh session must
       // not inherit the previous session's block/counter (the store is
       // reset below, the guard would otherwise survive the logout).
