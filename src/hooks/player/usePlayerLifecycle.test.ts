@@ -15,6 +15,11 @@ import {
   noteFormatError,
   resetAdvanceGuard,
 } from "../../utils/playerError";
+import {
+  armRestoreResume,
+  clearRestoreResume,
+  consumeRestoreResume,
+} from "./restoreResume";
 
 vi.mock("tauri-plugin-keepawake-api", () => ({
   start: vi.fn(() => Promise.resolve()),
@@ -62,6 +67,7 @@ const flush = async (): Promise<void> => {
 beforeEach(() => {
   vi.clearAllMocks();
   usePlayerStore.setState({ isDownloading: false });
+  clearRestoreResume();
 });
 
 afterEach(() => {
@@ -191,6 +197,23 @@ describe("usePlayerLifecycle player-stop hard reset", () => {
     });
 
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+
+    unmount();
+  });
+
+  it("UPL-5 (F7-6): player-stop clears the one-shot restore hint — session sau không resume về vị trí cũ", () => {
+    armRestoreResume("t1", 12);
+
+    const deps = makeDeps(false);
+    const { unmount } = renderHook(() => {
+      usePlayerLifecycle(deps);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event(PLAYER_STOP_EVENT));
+    });
+
+    expect(consumeRestoreResume("t1")).toBeUndefined();
 
     unmount();
   });

@@ -10,6 +10,7 @@ import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
 import { resetAdvanceGuard } from "../../utils/playerError";
+import { clearRestoreResume } from "./restoreResume";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
@@ -89,6 +90,9 @@ export function usePlayerLifecycle({
       // not inherit the previous session's block/counter (the store is
       // reset below, the guard would otherwise survive the logout).
       resetAdvanceGuard();
+      // F7-6: same for the one-shot restore hint — an armed-but-unconsumed
+      // position must not leak into the next session and resume a track there.
+      clearRestoreResume();
       // B3: release the real audio elements (buffers, src, pending retry)
       // before clearing the store state.
       AudioController.getInstance().release();
