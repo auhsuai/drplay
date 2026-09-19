@@ -1521,7 +1521,8 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
       return cmd?.[0] === "set_property" && cmd[1] === "pause";
     });
     expect(pauseIndex).toBeGreaterThanOrEqual(0);
-    const pauseOrder = tauriMocks.invoke.mock.invocationCallOrder[pauseIndex];
+    const pauseOrder =
+      tauriMocks.invoke.mock.invocationCallOrder[pauseIndex] ?? 0;
     expect(watchdogStop.mock.invocationCallOrder[0]).toBeLessThan(pauseOrder);
     expect(resetForTrack.mock.invocationCallOrder[0]).toBeLessThan(pauseOrder);
   });
