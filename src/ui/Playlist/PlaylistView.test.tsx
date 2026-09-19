@@ -30,10 +30,13 @@ vi.mock("react-i18next", () => {
     }
     return typeof acc === "string" ? acc : undefined;
   };
+  // Stable identity, like the real react-i18next (useTranslation returns a
+  // memoized t): PlaylistView's loadPlaylist useCallback depends on t, so a
+  // per-render t here would re-run the load effect after every state update
+  // and clobber optimistic updates with the fixture.
+  const t = (key: string): string => resolveKey(key) ?? key;
   return {
-    useTranslation: () => ({
-      t: (key: string) => resolveKey(key) ?? key,
-    }),
+    useTranslation: () => ({ t }),
   };
 });
 
@@ -54,6 +57,8 @@ vi.mock("lucide-react", () => {
     // Queue selection building blocks
     "Check",
     "Square",
+    // Arrange mode drag handle
+    "GripVertical",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
@@ -142,6 +147,24 @@ const TRACK_3 = {
   parentName: "Folder Three",
 };
 
+const TRACK_4 = {
+  id: "t4",
+  title: "Track 4",
+  artist: "Artist 4",
+  streamUrl: "https://example.com/t4.mp3",
+  parentId: "parent-4",
+  parentName: "Folder Four",
+};
+
+const TRACK_5 = {
+  id: "t5",
+  title: "Track 5",
+  artist: "Artist 5",
+  streamUrl: "https://example.com/t5.mp3",
+  parentId: "parent-5",
+  parentName: "Folder Five",
+};
+
 const FULL_PLAYLIST: Playlist = {
   id: "pl-1",
   userEmail: "u@example.com",
@@ -158,6 +181,11 @@ const TWO_TRACK_PLAYLIST: Playlist = {
 const THREE_TRACK_PLAYLIST: Playlist = {
   ...FULL_PLAYLIST,
   tracks: [TRACK, TRACK_2, TRACK_3],
+};
+
+const FIVE_TRACK_PLAYLIST: Playlist = {
+  ...FULL_PLAYLIST,
+  tracks: [TRACK, TRACK_2, TRACK_3, TRACK_4, TRACK_5],
 };
 
 function dispatchPlaylistEmpty() {
@@ -682,5 +710,325 @@ describe("PlaylistView hover-reveal row menu control (P2-13a-7)", () => {
     const reveal = trigger.closest('[class*="focus-within:opacity-100"]');
     expect(reveal).not.toBeNull();
     expect(reveal?.className).toContain("opacity-0");
+  });
+});
+
+// Phase 4 — Arrange mode: group drag reorder. Pointer-based (no native DnD
+// API): pointerdown on a selected row, threshold move, pointerup commits.
+// jsdom's getBoundingClientRect is all zeros, so pointer clientY maps 1:1 to
+// the list content Y used by the pure math in arrangeReorder.ts.
+describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
+  beforeEach(() => {
+    mocks.getPlaylists.mockResolvedValue([]);
+    // updatePlaylist resolves the updated playlist on success, null on failure.
+    mocks.updatePlaylist.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function rowButton(title: string): HTMLElement {
+    const row = screen.getByText(title).closest("div[role='button']");
+    if (row === null) throw new Error(`expected row button for ${title}`);
+    return row as HTMLElement;
+  }
+
+  function renderedTitles(): (string | null)[] {
+    return [...document.querySelectorAll("h4")].map((el) => el.textContent);
+  }
+
+  function dragRow(title: string, toY: number): void {
+    const row = rowButton(title);
+    fireEvent.pointerDown(row, { pointerId: 1, button: 0, clientY: 100 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientY: toY });
+    fireEvent.pointerUp(window, { pointerId: 1, clientY: toY });
+  }
+
+  async function enterArrange(...selectTitles: string[]): Promise<void> {
+    await screen.findByText("Track 1");
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    for (const title of selectTitles) {
+      fireEvent.click(screen.getByRole("checkbox", { name: title }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+  }
+
+  it("Arrange disabled khi 0 selected; enabled khi có selection; 0 selected không vào được arrange mode (Case 8)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(TWO_TRACK_PLAYLIST);
+    renderView();
+    await screen.findByText("Track 1");
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    const arrange = screen.getByRole("button", { name: "Arrange" });
+    expect(arrange).toBeDisabled();
+    fireEvent.click(arrange);
+    expect(screen.queryByText("Arrange mode")).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Track 1" }));
+    expect(screen.getByRole("button", { name: "Arrange" })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.getByTestId("playlist-arrange-toolbar")).not.toBeNull();
+    // Giữ nguyên selection khi vào arrange mode.
+    expect(screen.getByRole("checkbox", { name: "Track 1" })).toBeChecked();
+  });
+
+  it("kéo group rời rạc (T2,T4) xuống cuối: giữ thứ tự nội bộ, persist đúng 1 lần/drop, không play (Case 3/4/15)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    const onPlay = vi.fn();
+    render(
+      <PlaylistView playlistId="pl-1" onPlay={onPlay} onDelete={vi.fn()} />,
+    );
+    await enterArrange("Track 2", "Track 4");
+
+    dragRow("Track 2", 300);
+
+    await waitFor(() => {
+      expect(mocks.updatePlaylist).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.updatePlaylist).toHaveBeenCalledWith("pl-1", {
+      tracks: [TRACK, TRACK_3, TRACK_5, TRACK_2, TRACK_4],
+    });
+    await waitFor(() => {
+      expect(renderedTitles()).toEqual([
+        "Track 1",
+        "Track 3",
+        "Track 5",
+        "Track 2",
+        "Track 4",
+      ]);
+    });
+    // Vẫn ở arrange mode, indicator đã sạch, playback không bị đụng.
+    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.queryByTestId("playlist-drop-indicator")).toBeNull();
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("kéo block liên tiếp (T3,T4) lên đầu (Case 2/5)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 3", "Track 4");
+
+    dragRow("Track 3", 10);
+
+    await waitFor(() => {
+      expect(mocks.updatePlaylist).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.updatePlaylist).toHaveBeenCalledWith("pl-1", {
+      tracks: [TRACK_3, TRACK_4, TRACK, TRACK_2, TRACK_5],
+    });
+    await waitFor(() => {
+      expect(renderedTitles()).toEqual([
+        "Track 3",
+        "Track 4",
+        "Track 1",
+        "Track 2",
+        "Track 5",
+      ]);
+    });
+  });
+
+  it("drop vào chính vùng group: không persist, không đổi order, giữ arrange mode + selection (Case 6/§9.2)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 2", "Track 3");
+
+    // remaining = T1(0) T4(3) T5(4); pointer 100 → insertion 1 → T1 [T2 T3] T4 T5 = order cũ.
+    dragRow("Track 2", 100);
+
+    expect(mocks.updatePlaylist).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(renderedTitles()).toEqual([
+        "Track 1",
+        "Track 2",
+        "Track 3",
+        "Track 4",
+        "Track 5",
+      ]);
+    });
+    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Track 2" })).toBeChecked();
+  });
+
+  it("indicator hiện trong lúc kéo tại đúng vị trí chèn và biến mất sau drop", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 2");
+
+    fireEvent.pointerDown(rowButton("Track 2"), {
+      pointerId: 1,
+      button: 0,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(window, { pointerId: 1, clientY: 300 });
+
+    const indicator = screen.getByTestId("playlist-drop-indicator");
+    // remaining T1(0) T3(2) T4(3) T5(4); pointer 300 → chèn cuối → line ở đáy row T5 = 5*56.
+    expect(indicator.style.top).toBe("280px");
+    expect(indicator.className).toContain("pointer-events-none");
+
+    fireEvent.pointerUp(window, { pointerId: 1, clientY: 300 });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("playlist-drop-indicator")).toBeNull();
+    });
+  });
+
+  it("select-all: kéo không crash, không persist (không còn gì để chèn quanh) (Case 7)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 1", "Track 2", "Track 3", "Track 4", "Track 5");
+
+    dragRow("Track 3", 300);
+
+    expect(screen.queryByTestId("playlist-drop-indicator")).toBeNull();
+    expect(mocks.updatePlaylist).not.toHaveBeenCalled();
+    expect(renderedTitles()).toEqual([
+      "Track 1",
+      "Track 2",
+      "Track 3",
+      "Track 4",
+      "Track 5",
+    ]);
+  });
+
+  it("playlist 1 item: arrange mode không crash, không persist (Case 9)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    renderView();
+    await enterArrange("Track 1");
+
+    dragRow("Track 1", 300);
+
+    expect(mocks.updatePlaylist).not.toHaveBeenCalled();
+    expect(renderedTitles()).toEqual(["Track 1"]);
+    expect(screen.getByText("Arrange mode")).not.toBeNull();
+  });
+
+  it("kéo từ row không nằm trong group → không có drag, không persist", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 2");
+
+    dragRow("Track 4", 300);
+
+    expect(screen.queryByTestId("playlist-drop-indicator")).toBeNull();
+    expect(mocks.updatePlaylist).not.toHaveBeenCalled();
+    expect(renderedTitles()).toEqual([
+      "Track 1",
+      "Track 2",
+      "Track 3",
+      "Track 4",
+      "Track 5",
+    ]);
+  });
+
+  it("Done: thoát arrange mode, giữ selection, không còn indicator/placeholder (§13)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(screen.queryByText("Arrange mode")).toBeNull();
+    expect(screen.queryByTestId("playlist-arrange-toolbar")).toBeNull();
+    // Về select mode, selection giữ nguyên (convention: user có thể Remove/Arrange tiếp).
+    expect(screen.getByTestId("queue-selection-toolbar")).not.toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Track 2" })).toBeChecked();
+    expect(screen.queryByTestId("playlist-drop-indicator")).toBeNull();
+  });
+
+  it("Cancel: thoát arrange mode VÀ thoát selection mode (bỏ thao tác batch)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 2");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByTestId("playlist-arrange-toolbar")).toBeNull();
+    expect(screen.queryByTestId("queue-selection-toolbar")).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Track 2" })).toBeNull();
+    // Normal mode trở lại (nút play-all + Select).
+    expect(document.querySelector("button.w-14.h-14")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Select" })).not.toBeNull();
+  });
+
+  it("persist fail: rollback về order cũ, không fake success, giữ selection để retry (§11/§22)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    mocks.updatePlaylist.mockResolvedValue(null);
+    renderView();
+    await enterArrange("Track 2");
+
+    dragRow("Track 2", 300);
+
+    await waitFor(() => {
+      expect(mocks.updatePlaylist).toHaveBeenCalledTimes(1);
+    });
+    expect(renderedTitles()).toEqual([
+      "Track 1",
+      "Track 2",
+      "Track 3",
+      "Track 4",
+      "Track 5",
+    ]);
+    expect(screen.getByRole("checkbox", { name: "Track 2" })).toBeChecked();
+    expect(screen.getByText("Arrange mode")).not.toBeNull();
+  });
+
+  it("order mới sống sót qua reload (playlists-updated) (Case 12)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 2");
+
+    dragRow("Track 2", 300);
+    await waitFor(() => {
+      expect(renderedTitles()).toEqual([
+        "Track 1",
+        "Track 3",
+        "Track 4",
+        "Track 5",
+        "Track 2",
+      ]);
+    });
+
+    // Reload như data layer thật: row đã persist order mới.
+    mocks.getPlaylistById.mockResolvedValue({
+      ...FIVE_TRACK_PLAYLIST,
+      tracks: [TRACK, TRACK_3, TRACK_4, TRACK_5, TRACK_2],
+    });
+    act(() => {
+      window.dispatchEvent(new CustomEvent("playlists-updated"));
+    });
+
+    await waitFor(() => {
+      expect(renderedTitles()).toEqual([
+        "Track 1",
+        "Track 3",
+        "Track 4",
+        "Track 5",
+        "Track 2",
+      ]);
+    });
+  });
+
+  it("checkboxes vẫn toggle được trong arrange mode (group = selection hiện tại)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
+    renderView();
+    await enterArrange("Track 2");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Track 4" }));
+
+    expect(screen.getByRole("checkbox", { name: "Track 2" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Track 4" })).toBeChecked();
+
+    // Group mới T2,T4 kéo xuống cuối → cả 2 di chuyển như một block.
+    dragRow("Track 4", 300);
+    await waitFor(() => {
+      expect(mocks.updatePlaylist).toHaveBeenCalledWith("pl-1", {
+        tracks: [TRACK, TRACK_3, TRACK_5, TRACK_2, TRACK_4],
+      });
+    });
   });
 });

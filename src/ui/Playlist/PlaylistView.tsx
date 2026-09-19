@@ -1,6 +1,13 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Track } from "../../types";
-import { Music, Play, Trash2, Camera, SquareCheckBig } from "lucide-react";
+import {
+  Music,
+  Play,
+  Trash2,
+  Camera,
+  SquareCheckBig,
+  GripVertical,
+} from "lucide-react";
 import type { Playlist } from "../../utils/playlists";
 import {
   getPlaylistById,
@@ -19,8 +26,31 @@ import { showErrorToast } from "../../utils/simpleToast";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
+import { applyArrangeDrop, resolveArrangeDrop } from "./arrangeReorder";
 
 const PLAYLIST_VIEW_MODULE = "PlaylistView";
+
+// Same threshold convention as useHorizontalScroll: a gesture only becomes a
+// drag after this much movement, so the pointerup still fires the row's click.
+const ARRANGE_DRAG_THRESHOLD_PX = 5;
+
+// Pointer-drag session for Arrange mode. The tracks/selection snapshots are
+// taken at gesture start: the drop must resolve against exactly the list the
+// user saw when the drag began (persist happens once, on drop, §21/§22).
+interface ArrangeDragState {
+  pointerId: number;
+  startY: number;
+  isDragging: boolean;
+  insertionIndex: number | null;
+  captureEl: HTMLElement;
+  tracksSnapshot: Track[];
+  selectedSnapshot: Set<string>;
+}
+
+interface ArrangeDragPreview {
+  active: boolean;
+  indicatorY: number | null;
+}
 
 interface PlaylistViewProps {
   playlistId: string;
@@ -49,6 +79,20 @@ export function PlaylistView({
   } | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [arrangeMode, setArrangeMode] = useState(false);
+  const [dragPreview, setDragPreview] = useState<ArrangeDragPreview>({
+    active: false,
+    indicatorY: null,
+  });
+  const listRef = useRef<HTMLDivElement>(null);
+  // Set on drag end so the pointerup's synthetic click cannot toggle the row
+  // that was just dragged; cleared on the next pointerdown.
+  const suppressRowClickRef = useRef(false);
+  const dragRef = useRef<ArrangeDragState | null>(null);
+  const dragHandlersRef = useRef<{
+    move: (event: PointerEvent) => void;
+    end: (event: PointerEvent) => void;
+  } | null>(null);
 
   const loadPlaylist = useCallback(async () => {
     try {
@@ -119,6 +163,20 @@ export function PlaylistView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once debug listener; re-subscribing on playlistId change would only matter after a direct playlist-to-playlist switch (no remount), and the real load effect overwrites the fake on that switch anyway.
   }, []);
 
+  useEffect(() => {
+    return () => {
+      // Unmount mid-drag must not leave window listeners behind. Uses the ref
+      // directly (the drag helpers below are not initialized on the
+      // early-return path above).
+      const handlers = dragHandlersRef.current;
+      if (handlers === null) return;
+      window.removeEventListener("pointermove", handlers.move);
+      window.removeEventListener("pointerup", handlers.end);
+      window.removeEventListener("pointercancel", handlers.end);
+      dragHandlersRef.current = null;
+    };
+  }, []);
+
   const tracks = playlist?.tracks ?? [];
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
@@ -179,6 +237,7 @@ export function PlaylistView({
 
   const exitSelection = () => {
     setSelectionMode(false);
+    setArrangeMode(false);
     setSelected(new Set());
   };
 
@@ -203,6 +262,173 @@ export function PlaylistView({
       }
       return next;
     });
+  };
+
+  // Arrange mode is only reachable with a non-empty selection (§4.1/Case 8);
+  // entering keeps the current selection, which IS the dragged group (§7.1).
+  const enterArrangeMode = () => {
+    if (selected.size === 0) return;
+    setArrangeMode(true);
+  };
+
+  // Done: leave arrange, stay in select mode with the selection kept — the
+  // user can continue with Remove/Arrange (the plan's §13 "keep" branch).
+  const handleArrangeDone = () => {
+    setArrangeMode(false);
+  };
+
+  // Cancel: abandon the whole batch flow (arrange + select mode), mirroring
+  // the toolbar X — the order already persisted per drop is NOT reverted.
+  const handleArrangeCancel = () => {
+    exitSelection();
+  };
+
+  const detachDragListeners = () => {
+    const handlers = dragHandlersRef.current;
+    if (handlers === null) return;
+    window.removeEventListener("pointermove", handlers.move);
+    window.removeEventListener("pointerup", handlers.end);
+    window.removeEventListener("pointercancel", handlers.end);
+    dragHandlersRef.current = null;
+  };
+
+  // Optimistic local order, then ONE persist per drop (§21/#22). On failure
+  // the local order rolls back to the pre-drop snapshot so the UI never shows
+  // an order the data layer does not have; the data layer already toasted.
+  const persistArrangeOrder = async (
+    previousTracks: Track[],
+    nextTracks: Track[],
+  ) => {
+    setPlaylist((prev) => (prev ? { ...prev, tracks: nextTracks } : prev));
+    const rollback = () => {
+      setPlaylist((prev) =>
+        prev && prev.tracks === nextTracks
+          ? { ...prev, tracks: previousTracks }
+          : prev,
+      );
+    };
+    try {
+      const updated = await updatePlaylist(playlistId, {
+        tracks: nextTracks,
+      });
+      if (updated === null) rollback();
+    } catch (err) {
+      rollback();
+      void captureError({
+        level: "error",
+        source: PLAYLIST_VIEW_MODULE,
+        message: `arrange-persist-failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      showErrorToast(t("playlist.update_error"));
+    }
+  };
+
+  const commitArrangeDrop = (
+    drag: ArrangeDragState,
+    insertionIndex: number,
+  ) => {
+    const next = applyArrangeDrop(
+      drag.tracksSnapshot,
+      drag.selectedSnapshot,
+      insertionIndex,
+    );
+    // Same reference → the drop resolves to the current order (dropped inside
+    // the group's own region, §9.2): no mutation, no persist, arrange stays.
+    if (next === drag.tracksSnapshot) return;
+    void persistArrangeOrder(drag.tracksSnapshot, next);
+  };
+
+  const handleRowPointerDown = (
+    event: React.PointerEvent<HTMLDivElement>,
+    trackId: string,
+  ) => {
+    suppressRowClickRef.current = false;
+    if (!arrangeMode) return;
+    if (event.button !== 0) return;
+    if (!selected.has(trackId)) return;
+    // Nested controls (checkbox) own their gestures.
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("input,button,a")) {
+      return;
+    }
+
+    const drag: ArrangeDragState = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      isDragging: false,
+      insertionIndex: null,
+      captureEl: event.currentTarget,
+      tracksSnapshot: tracks,
+      selectedSnapshot: selected,
+    };
+    dragRef.current = drag;
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const state = dragRef.current;
+      if (state === null || state.pointerId !== moveEvent.pointerId) return;
+      if (!state.isDragging) {
+        if (
+          Math.abs(moveEvent.clientY - state.startY) <=
+          ARRANGE_DRAG_THRESHOLD_PX
+        )
+          return;
+        state.isDragging = true;
+        try {
+          state.captureEl.setPointerCapture(state.pointerId);
+        } catch (err) {
+          void captureError({
+            level: "warn",
+            source: PLAYLIST_VIEW_MODULE,
+            message: `arrange-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+      const listTop = listRef.current?.getBoundingClientRect().top ?? 0;
+      const drop = resolveArrangeDrop(
+        state.tracksSnapshot,
+        state.selectedSnapshot,
+        moveEvent.clientY - listTop,
+      );
+      state.insertionIndex = drop?.insertionIndex ?? null;
+      const indicatorY = drop?.indicatorY ?? null;
+      // Light update: a pointermove inside the same boundary is a no-op
+      // (no re-render per pixel, §21).
+      setDragPreview((prev) =>
+        prev.active && prev.indicatorY === indicatorY
+          ? prev
+          : { active: true, indicatorY },
+      );
+    };
+
+    const onEnd = (endEvent: PointerEvent) => {
+      const state = dragRef.current;
+      if (state === null || state.pointerId !== endEvent.pointerId) return;
+      detachDragListeners();
+      dragRef.current = null;
+      try {
+        if (state.captureEl.hasPointerCapture(state.pointerId)) {
+          state.captureEl.releasePointerCapture(state.pointerId);
+        }
+      } catch (err) {
+        void captureError({
+          level: "warn",
+          source: PLAYLIST_VIEW_MODULE,
+          message: `arrange-release-failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      setDragPreview({ active: false, indicatorY: null });
+      if (state.isDragging) {
+        suppressRowClickRef.current = true;
+        if (state.insertionIndex !== null) {
+          commitArrangeDrop(state, state.insertionIndex);
+        }
+      }
+    };
+
+    dragHandlersRef.current = { move: onMove, end: onEnd };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onEnd);
+    window.addEventListener("pointercancel", onEnd);
   };
 
   const handleBulkRemove = async () => {
@@ -367,16 +593,50 @@ export function PlaylistView({
         {tracks.length > 0 && (
           <div className="mb-8 flex-shrink-0">
             {selectionMode ? (
-              <QueueSelectionToolbar
-                selectedCount={selected.size}
-                allSelected={allSelected}
-                onToggleSelectAll={toggleSelectAll}
-                onRemove={() => {
-                  void handleBulkRemove();
-                }}
-                onExit={exitSelection}
-                removeLabel={t("remove_from_playlist")}
-              />
+              arrangeMode ? (
+                <div
+                  data-testid="playlist-arrange-toolbar"
+                  className="flex min-w-0 flex-col gap-2 animate-in fade-in duration-300"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleArrangeCancel}
+                      className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
+                    >
+                      {t("playlist.arrange_cancel")}
+                    </button>
+                    <span className="min-w-0 truncate px-2 py-1 font-semibold text-lg text-gray-900 dark:text-white">
+                      {t("playlist.arrange_mode")}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      {t("playlist.arrange_hint")}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleArrangeDone}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-brand-primary hover:bg-blue-600 rounded-lg transition-colors shadow-sm active:scale-95"
+                    >
+                      {t("playlist.arrange_done")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <QueueSelectionToolbar
+                  selectedCount={selected.size}
+                  allSelected={allSelected}
+                  onToggleSelectAll={toggleSelectAll}
+                  onRemove={() => {
+                    void handleBulkRemove();
+                  }}
+                  onExit={exitSelection}
+                  removeLabel={t("remove_from_playlist")}
+                  onArrange={enterArrangeMode}
+                  arrangeLabel={t("playlist.arrange")}
+                />
+              )
             ) : (
               <div className="flex items-center gap-3">
                 <button
@@ -414,17 +674,29 @@ export function PlaylistView({
           </div>
         ) : (
           <div
-            className="flex flex-col relative w-full"
+            ref={listRef}
+            data-testid="playlist-track-list"
+            className={`flex flex-col relative w-full ${arrangeMode ? "select-none" : ""}`}
             style={{
               height: `${String(rowVirtualizer.getTotalSize())}px`,
               contain: "strict",
             }}
           >
+            {arrangeMode && dragPreview.indicatorY !== null && (
+              <div
+                data-testid="playlist-drop-indicator"
+                aria-hidden="true"
+                className="absolute left-0 right-0 h-0.5 bg-brand-primary z-20 pointer-events-none rounded-full"
+                style={{ top: `${String(dragPreview.indicatorY)}px` }}
+              />
+            )}
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const track = tracks[virtualRow.index];
               if (track === undefined) return null;
               const isContextTarget =
                 contextMenu !== null && contextMenu.index === virtualRow.index;
+              const isSelected = selected.has(track.id);
+              const isDragGhost = dragPreview.active && isSelected;
               return (
                 <div
                   key={virtualRow.key}
@@ -440,8 +712,16 @@ export function PlaylistView({
                     role="button"
                     tabIndex={0}
                     onClick={() => {
+                      // A completed drag must not fall through to the click.
+                      if (suppressRowClickRef.current) {
+                        suppressRowClickRef.current = false;
+                        return;
+                      }
                       if (selectionMode) toggleSelected(track.id);
                       else onPlay(track, tracks);
+                    }}
+                    onPointerDown={(e) => {
+                      handleRowPointerDown(e, track.id);
                     }}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" && e.key !== " ") return;
@@ -461,7 +741,11 @@ export function PlaylistView({
                         y: e.clientY,
                       });
                     }}
-                    className="flex items-center gap-4 p-2 rounded-lg group cursor-pointer transition-all active:scale-[0.99]"
+                    className={`flex items-center gap-4 p-2 rounded-lg group transition-all active:scale-[0.99] ${
+                      arrangeMode && isSelected
+                        ? "cursor-grab touch-none"
+                        : "cursor-pointer"
+                    } ${isDragGhost ? "opacity-50" : ""}`}
                   >
                     <div
                       className={`w-8 text-center text-sm ${selectionMode ? "flex items-center justify-center" : currentTrack?.id === track.id ? "text-brand-text hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
@@ -487,6 +771,15 @@ export function PlaylistView({
                         <Play
                           className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white"}`}
                           fill="currentColor"
+                        />
+                      )}
+                      {/* Arrange mode: grip marks the draggable (selected)
+                          group items; non-selected keep the slot empty so the
+                          row layout never shifts (§7.2). */}
+                      {arrangeMode && isSelected && (
+                        <GripVertical
+                          aria-hidden="true"
+                          className="w-4 h-4 text-gray-400 dark:text-gray-500"
                         />
                       )}
                     </div>

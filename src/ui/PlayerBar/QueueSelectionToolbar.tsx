@@ -11,6 +11,10 @@ export interface QueueSelectionToolbarProps {
   // from Playlist" instead of the queue's "Remove selected (N)"). Absent ->
   // queue copy, so the queue panel call site is unchanged.
   removeLabel?: string | undefined;
+  // Playlist-only entry into Arrange mode. Absent -> the button is not
+  // rendered at all, so the queue panel keeps its exact current toolbar.
+  onArrange?: (() => void) | undefined;
+  arrangeLabel?: string | undefined;
 }
 
 /** Bulk-selection actions shown only while selection mode is active. */
@@ -21,6 +25,8 @@ export function QueueSelectionToolbar({
   onRemove,
   onExit,
   removeLabel,
+  onArrange,
+  arrangeLabel,
 }: QueueSelectionToolbarProps) {
   const { t } = useTranslation();
 
@@ -77,6 +83,18 @@ export function QueueSelectionToolbar({
               t("queue.remove_selected", { count: selectedCount })}
           </span>
         </button>
+
+        {onArrange && (
+          <button
+            type="button"
+            data-testid="queue-arrange-selected"
+            onClick={onArrange}
+            disabled={selectedCount === 0}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span>{arrangeLabel ?? t("playlist.arrange")}</span>
+          </button>
+        )}
       </div>
     </div>
   );
