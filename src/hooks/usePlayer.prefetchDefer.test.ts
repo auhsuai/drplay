@@ -77,6 +77,7 @@ const audioMock = vi.hoisted(() => {
     getDuration: vi.fn(() => 0),
     seek: vi.fn(),
     pause: vi.fn(),
+    playTrack: vi.fn(),
     togglePlay: vi.fn(),
     on: vi.fn((event: string, handler: Handler) => {
       let set = handlers.get(event);

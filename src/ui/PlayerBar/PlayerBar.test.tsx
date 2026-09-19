@@ -24,10 +24,6 @@ import {
   noteFormatError,
   resetAdvanceGuard,
 } from "../../utils/playerError";
-import {
-  armRestoreResume,
-  clearRestoreResume,
-} from "../../hooks/player/restoreResume";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -843,17 +839,21 @@ describe("PlayerBar manual transport actions reset the storm guard (Fix I parity
   });
 });
 
-describe("PlayerBar restore resume is one-shot (F7-6/F8-8)", () => {
-  // The bridge is the only production caller that turns the session restore
-  // position into an engine start time: it consumes the one-shot hint armed by
-  // usePlayerSession. Track.restoreTime stays on the object (SeekBar display)
-  // but must never drive a later load.
-  const bridgeProps = (
+describe("R3.5 — PlayerBar is observe-only (bridge effect removed)", () => {
+  // The old bridge turned isPlaying/currentTrack/loadNonce prop changes into
+  // engine commands. It is gone: every engine command now originates from the
+  // intent layer at its commit point (usePlayerTrackPlayback / usePlayer).
+  // These rerenders prove the UI no longer issues a second playTrack/pause per
+  // flow (double-invocation guard) — restore-resume hint coverage moved to the
+  // intent-layer tests.
+  const props = (
     isPlaying: boolean,
     currentTrack: Track,
+    loadNonce?: number,
   ): PlayerBarProps => ({
     currentTrack,
     isPlaying,
+    ...(loadNonce !== undefined ? { loadNonce } : {}),
     onTogglePlay: vi.fn(),
     onNextTrack: vi.fn(),
     onPrevTrack: vi.fn(),
@@ -866,60 +866,20 @@ describe("PlayerBar restore resume is one-shot (F7-6/F8-8)", () => {
   });
 
   beforeEach(() => {
-    clearRestoreResume();
     fakeController.playTrack.mockClear();
+    fakeController.pause.mockClear();
   });
 
-  afterEach(() => {
-    clearRestoreResume();
-  });
-
-  it("(a) first play after restore consumes the armed position", () => {
+  it("isPlaying/currentTrack/loadNonce changes never issue engine commands", () => {
     const track = makeTrack();
-    armRestoreResume(track.id, 12);
+    const { rerender } = render(<PlayerBar {...props(false, track)} />);
 
-    const { rerender } = render(<PlayerBar {...bridgeProps(false, track)} />);
+    rerender(<PlayerBar {...props(true, track, 1)} />);
+    rerender(<PlayerBar {...props(false, track, 2)} />);
+    rerender(<PlayerBar {...props(true, makeTrack({ id: "track-2" }), 3)} />);
+
     expect(fakeController.playTrack).not.toHaveBeenCalled();
-
-    rerender(<PlayerBar {...bridgeProps(true, track)} />);
-
-    expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
-    expect(fakeController.playTrack).toHaveBeenCalledWith(track, 12);
-  });
-
-  it("(b) replay after EOF does not reuse the stale position (track object still carries it)", () => {
-    const track = makeTrack({ restoreTime: 12 });
-    armRestoreResume(track.id, 12);
-
-    const { rerender } = render(<PlayerBar {...bridgeProps(true, track)} />);
-    expect(fakeController.playTrack).toHaveBeenLastCalledWith(track, 12);
-
-    rerender(<PlayerBar {...bridgeProps(false, track)} />); // pause / EOF
-    rerender(<PlayerBar {...bridgeProps(true, track)} />); // replay
-
-    expect(fakeController.playTrack).toHaveBeenCalledTimes(2);
-    expect(fakeController.playTrack).toHaveBeenLastCalledWith(track, undefined);
-  });
-
-  it("(b2) a track carrying restoreTime with no armed hint never seeks to it", () => {
-    const track = makeTrack({ restoreTime: 40 });
-
-    render(<PlayerBar {...bridgeProps(true, track)} />);
-
-    expect(fakeController.playTrack).toHaveBeenCalledWith(track, undefined);
-  });
-
-  it("(a2) playing another track first leaves the restored track's hint armed", () => {
-    const restored = makeTrack({ id: "track-1" });
-    const other = makeTrack({ id: "track-2" });
-    armRestoreResume(restored.id, 12);
-
-    const { rerender } = render(<PlayerBar {...bridgeProps(true, other)} />);
-    expect(fakeController.playTrack).toHaveBeenLastCalledWith(other, undefined);
-
-    rerender(<PlayerBar {...bridgeProps(true, restored)} />);
-
-    expect(fakeController.playTrack).toHaveBeenLastCalledWith(restored, 12);
+    expect(fakeController.pause).not.toHaveBeenCalled();
   });
 });
 

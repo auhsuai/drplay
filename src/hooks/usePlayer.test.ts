@@ -14,6 +14,7 @@ import {
   resetAdvanceGuard,
 } from "../utils/playerError";
 import { __resetPlaybackIntentForTests } from "./player/playbackIntent";
+import { armRestoreResume, clearRestoreResume } from "./player/restoreResume";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -78,6 +79,7 @@ const audioMock = vi.hoisted(() => ({
   getDuration: vi.fn(() => 0),
   seek: vi.fn(),
   pause: vi.fn(),
+  playTrack: vi.fn(),
   togglePlay: vi.fn(),
   on: vi.fn(() => vi.fn()),
   release: vi.fn(),
@@ -125,6 +127,7 @@ function tripAdvanceGuard(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetPlaybackIntentForTests();
+  clearRestoreResume();
   usePlayerStore.setState({
     currentTrack: null,
     loadNonce: 0,
@@ -554,5 +557,97 @@ describe("usePlayer resume intent ownership (R5b/RC-6) — user pause aborts in-
     expect(usePlayerStore.getState().isPlaying).toBe(true);
     expect(usePlayerStore.getState().isDownloading).toBe(false);
     unmount();
+  });
+});
+
+describe("usePlayer — R3.5 engine commands at the resume/pause intent commit", () => {
+  const resumeTrack = (id: string): Track => ({
+    ...makeTrack(id),
+    streamUrl: "",
+  });
+
+  it("resume commit (token path) → playTrack exactly once with the committed track, no startTime", async () => {
+    usePlayerStore.setState({
+      currentTrack: resumeTrack("r3-5a"),
+      isPlaying: false,
+    });
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handleTogglePlay();
+    });
+
+    expect(audioMock.playTrack).toHaveBeenCalledTimes(1);
+    expect(audioMock.playTrack).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "r3-5a",
+        streamUrl: "/drive-stream/r3-5a",
+      }),
+      undefined,
+    );
+  });
+
+  it("restore hint: first resume after restore passes the armed position once, never again", async () => {
+    armRestoreResume("r3-5b", 30);
+    usePlayerStore.setState({
+      currentTrack: resumeTrack("r3-5b"),
+      isPlaying: false,
+    });
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    await act(async () => {
+      await result.current.handleTogglePlay();
+    });
+    expect(audioMock.playTrack).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "r3-5b" }),
+      30,
+    );
+
+    // pause then resume again → the one-shot hint is gone (start at 0 /
+    // engine position, never the stale restore position).
+    act(() => {
+      void result.current.handleTogglePlay();
+    });
+    await act(async () => {
+      await result.current.handleTogglePlay();
+    });
+    expect(audioMock.pause).toHaveBeenCalledTimes(1);
+    expect(audioMock.playTrack).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "r3-5b" }),
+      undefined,
+    );
+  });
+
+  it("pause commit → engine.pause exactly once, never playTrack", () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack("r3-5c"),
+      isPlaying: true,
+    });
+    const { result } = renderHook(() => usePlayer("test-token"));
+
+    act(() => {
+      void result.current.handleTogglePlay();
+    });
+
+    expect(audioMock.pause).toHaveBeenCalledTimes(1);
+    expect(audioMock.playTrack).not.toHaveBeenCalled();
+  });
+
+  it("SMTC play (media controls path) → the same intent commit drives the engine once", () => {
+    usePlayerStore.setState({
+      currentTrack: makeTrack("r3-5d"),
+      isPlaying: false,
+    });
+    renderHook(() => usePlayer("test-token"));
+
+    act(() => {
+      mediaControlsMock.options?.onTogglePlay();
+    });
+
+    expect(audioMock.playTrack).toHaveBeenCalledTimes(1);
+    expect(audioMock.playTrack).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "r3-5d" }),
+      undefined,
+    );
   });
 });

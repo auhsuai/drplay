@@ -14,6 +14,7 @@ import {
   beginIntent,
   hasActiveUserIntent,
 } from "./playbackIntent";
+import { armRestoreResume, clearRestoreResume } from "./restoreResume";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -60,10 +61,14 @@ vi.mock("../../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
 
+const audioMock = vi.hoisted(() => ({
+  on: vi.fn(() => () => {}),
+  release: vi.fn(),
+  playTrack: vi.fn(),
+}));
+
 vi.mock("../../lib/AudioController", () => ({
-  AudioController: {
-    getInstance: () => ({ on: vi.fn(() => () => {}), release: vi.fn() }),
-  },
+  AudioController: { getInstance: () => audioMock },
 }));
 
 function deferred<T>() {
@@ -107,6 +112,7 @@ function beginPlay(
 beforeEach(() => {
   vi.clearAllMocks();
   __resetPlaybackIntentForTests();
+  clearRestoreResume();
   vi.mocked(getValidToken).mockResolvedValue("test-token");
   usePlayerStore.setState({
     currentTrack: null,
@@ -353,5 +359,78 @@ describe("usePlayerTrackPlayback — R3.1a intent controller (contracts a/b)", (
     expect(state.isDownloading).toBe(false);
     expect(recordPlay).not.toHaveBeenCalled();
     expect(hasActiveUserIntent()).toBe(false);
+  });
+});
+
+describe("usePlayerTrackPlayback — R3.5 engine command at the play intent commit", () => {
+  it("commits the engine exactly once with the committed track and no start time", async () => {
+    const { result } = renderPlayback();
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t1"));
+    });
+
+    expect(audioMock.playTrack).toHaveBeenCalledTimes(1);
+    expect(audioMock.playTrack).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t1", streamUrl: "/drive-stream/t1" }),
+      undefined,
+    );
+  });
+
+  it("consumes the armed restore hint on the first play, then never again", async () => {
+    armRestoreResume("t1", 12);
+    const { result } = renderPlayback();
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t1"));
+    });
+    expect(audioMock.playTrack).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t1" }),
+      12,
+    );
+
+    // Same-track click while paused = the engine's resume lane; the one-shot
+    // hint was already consumed by the first play above.
+    act(() => {
+      usePlayerStore.setState({ isPlaying: false });
+    });
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t1"));
+    });
+
+    expect(audioMock.playTrack).toHaveBeenCalledTimes(2);
+    expect(audioMock.playTrack).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t1" }),
+      undefined,
+    );
+  });
+
+  it("a superseded attempt never reaches the engine", async () => {
+    const token = deferred<string | null>();
+    vi.mocked(getValidToken).mockReturnValue(token.promise);
+    const { result } = renderPlayback();
+
+    const playPromise = beginPlay(result, makeTrack("t1"));
+    act(() => {
+      result.current.createAbortSignal();
+    });
+
+    await act(async () => {
+      token.resolve("fresh-token");
+      await playPromise;
+    });
+
+    expect(audioMock.playTrack).not.toHaveBeenCalled();
+  });
+
+  it("a failed token refresh never reaches the engine", async () => {
+    vi.mocked(getValidToken).mockResolvedValue(null);
+    const { result } = renderPlayback();
+
+    await act(async () => {
+      await result.current.handlePlayTrack(makeTrack("t1"));
+    });
+
+    expect(audioMock.playTrack).not.toHaveBeenCalled();
   });
 });

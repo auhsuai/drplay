@@ -2,10 +2,11 @@
 /**
  * INVESTIGATION-ONLY test for Bug B, hook-level window: `handlePlayTrack`
  * turns `isDownloading` OFF (usePlayer.ts:292) as soon as the stream URL is
- * set — before the audio engine has even been asked to load the track (the
- * PlayerBar effect on isPlaying drives `audio.playTrack`, and only then does
- * `buffering.request()` run + a 250ms display delay). During that window the
- * exact UI gates
+ * set — before the audio engine has even been asked to load the track.
+ * (R3.5: the engine command moved from the PlayerBar bridge to the play
+ * intent's commit point; this harness mocks the engine, so it emits no
+ * buffering transitions — the pre-load window shape is unchanged.)
+ * During that window the exact UI gates
  *   TransportControls.tsx:58  isDownloading || (isBuffering && isPlaying && !hasError)
  *   NowPlayingControls.tsx:54 isDownloading || (isBuffering && isPlaying)
  * are BOTH false → no spinner while the new track has zero audio.
@@ -85,6 +86,7 @@ const audioMock = vi.hoisted(() => {
     getDuration: vi.fn(() => 0),
     seek: vi.fn(),
     pause: vi.fn(),
+    playTrack: vi.fn(),
     togglePlay: vi.fn(),
     on: vi.fn((event: string, handler: Handler) => {
       let set = handlers.get(event);
@@ -148,8 +150,8 @@ afterEach(() => {
 describe("Bug B investigation — play-intent spinner window", () => {
   it("B3 (RED today): no spinner source survives handlePlayTrack while the new track has zero audio", async () => {
     // Track every engine buffering transition — none can happen in this
-    // harness because the real `audio.playTrack` is driven by PlayerBar's
-    // effect (not mounted here), exactly like the app's pre-load window.
+    // harness because the engine is a mock (playTrack is a spy): exactly like
+    // the app's pre-load window, no buffering fact has arrived yet.
     const bufferingEvents: boolean[] = [];
     audioMock.on("buffering", (payload) => {
       const p = payload as { isBuffering: boolean } | undefined;
