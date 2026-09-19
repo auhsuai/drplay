@@ -145,8 +145,19 @@ pub(crate) fn invalidate_all_covers() {
 
 type CoverResult = Result<(String, Bytes, &'static str), CoverError>;
 
-static IN_FLIGHT: LazyLock<std::sync::Mutex<HashMap<String, Vec<oneshot::Sender<CoverResult>>>>> =
+type InFlightMap = HashMap<String, Vec<oneshot::Sender<CoverResult>>>;
+
+static IN_FLIGHT: LazyLock<std::sync::Mutex<InFlightMap>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Recover from poisoning instead of panicking: the map only holds waiter
+/// senders, so a mid-operation panic cannot break an invariant. Without the
+/// recovery, one panic while the lock was held would make every later cover
+/// request panic too, breaking covers until an app restart (same policy as
+/// `mpv/ipc.rs`).
+fn lock_in_flight() -> std::sync::MutexGuard<'static, InFlightMap> {
+    IN_FLIGHT.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 struct InFlightGuard {
     cache_key: String,
@@ -154,9 +165,10 @@ struct InFlightGuard {
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        if let Ok(mut in_flight) = IN_FLIGHT.lock() {
-            in_flight.remove(&self.cache_key);
-        }
+        // Recover-policy lock so cleanup still runs when the mutex is
+        // poisoned; otherwise the stale entry + its waiters would block this
+        // key forever.
+        lock_in_flight().remove(&self.cache_key);
     }
 }
 
@@ -188,7 +200,7 @@ pub async fn handle_cover_get(
     // cache_key, wait on its result instead of duplicating the work.
     // The MutexGuard is scoped to NOT span the .await point (it is !Send).
     let subscribe_rx = {
-        let mut in_flight = IN_FLIGHT.lock().unwrap();
+        let mut in_flight = lock_in_flight();
         if let Some(waiters) = in_flight.get_mut(&cache_key) {
             if waiters.len() < MAX_WAITERS_PER_KEY {
                 let (tx, rx) = oneshot::channel();
@@ -218,7 +230,7 @@ pub async fn handle_cover_get(
                 eprintln!("[PERF] handle_cover_get {} source=IN_FLIGHT_RETRY", raw_id);
                 // Re-assert leadership for future waiters without clobbering a
                 // concurrent retry's fresh entry (remove+insert would).
-                let mut in_flight = IN_FLIGHT.lock().unwrap();
+                let mut in_flight = lock_in_flight();
                 in_flight.entry(cache_key.clone()).or_default();
             }
         }
@@ -272,7 +284,7 @@ pub async fn handle_cover_get(
     // Must happen AFTER the COVER_CACHE insert so that subsequent requests to
     // this key hit the cache instead of joining IN_FLIGHT.
     {
-        let mut in_flight = IN_FLIGHT.lock().unwrap();
+        let mut in_flight = lock_in_flight();
         if let Some(waiters) = in_flight.remove(&cache_key) {
             for tx in waiters {
                 let _ = tx.send(result.clone());
@@ -714,6 +726,17 @@ pub async fn handle_cover_post(
 mod tests {
     use super::*;
 
+    /// Poison the global `IN_FLIGHT` mutex: a thread panics while holding the
+    /// lock. `join()` returns the panic as `Err` — expected and ignored; the
+    /// mutex stays poisoned for the rest of the process.
+    fn poison_in_flight() {
+        let _ = std::thread::spawn(|| {
+            let _guard = IN_FLIGHT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("intentional IN_FLIGHT poison for the poison-recovery tests");
+        })
+        .join();
+    }
+
     #[tokio::test]
     async fn cover_cache_stores_and_fetches_by_key() {
         let cache: Cache<String, (String, Bytes)> = Cache::builder()
@@ -779,11 +802,11 @@ mod tests {
         const KEY_ID: &str = "cap_test";
         let key = cover_cache_key(KEY_ID, false);
         COVER_CACHE.invalidate(&key).await;
-        IN_FLIGHT.lock().unwrap().remove(&key);
+        lock_in_flight().remove(&key);
 
         // Simulate a leader that is still fetching: a waiter Vec already at
         // the cap, holding live senders so the Vec stays alive.
-        IN_FLIGHT.lock().unwrap().insert(
+        lock_in_flight().insert(
             key.clone(),
             (0..MAX_WAITERS_PER_KEY).map(|_| oneshot::channel().0).collect(),
         );
@@ -799,7 +822,7 @@ mod tests {
         let mut beyond_cap = false;
         for _ in 0..100 {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            let len = IN_FLIGHT.lock().unwrap().get(&key).map_or(0, Vec::len);
+            let len = lock_in_flight().get(&key).map_or(0, Vec::len);
             observed = observed.max(len);
             if len > MAX_WAITERS_PER_KEY {
                 beyond_cap = true;
@@ -818,7 +841,7 @@ mod tests {
 
         // Cleanup: drop the fake leader's entry so any still-waiting request is
         // woken (its oneshot sender is dropped -> Err -> retry -> self-serve).
-        IN_FLIGHT.lock().unwrap().remove(&key);
+        lock_in_flight().remove(&key);
         let finished = tokio::time::timeout(Duration::from_secs(5), task).await;
         assert!(finished.is_ok(), "request must not hang after the leader dies");
     }
@@ -828,11 +851,11 @@ mod tests {
         const KEY_ID: &str = "burst_test";
         let key = cover_cache_key(KEY_ID, false);
         COVER_CACHE.invalidate(&key).await;
-        IN_FLIGHT.lock().unwrap().remove(&key);
+        lock_in_flight().remove(&key);
 
         // Fake in-flight leader: an empty waiter Vec that no real fetch ever
         // resolves, so every request either waits (up to the cap) or self-serves.
-        IN_FLIGHT.lock().unwrap().insert(key.clone(), Vec::new());
+        lock_in_flight().insert(key.clone(), Vec::new());
 
         let handles: Vec<_> = (0..256usize)
             .map(|_| {
@@ -849,7 +872,7 @@ mod tests {
         let mut stable = 0;
         for _ in 0..250 {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            let len = IN_FLIGHT.lock().unwrap().get(&key).map_or(0, Vec::len);
+            let len = lock_in_flight().get(&key).map_or(0, Vec::len);
             max_len = max_len.max(len);
             if len == last {
                 stable += 1;
@@ -869,10 +892,96 @@ mod tests {
         );
 
         // Drop the fake leader so any still-waiting tasks wake up and finish.
-        IN_FLIGHT.lock().unwrap().remove(&key);
+        lock_in_flight().remove(&key);
         for h in handles {
             let _ = tokio::time::timeout(Duration::from_secs(5), h).await;
         }
+    }
+
+    // --- A16: a poisoned IN_FLIGHT must not break cover requests forever ----
+
+    /// A panic while `IN_FLIGHT` is locked poisons the mutex; every later
+    /// request used to panic at the same `unwrap()` until an app restart. With
+    /// the recovery policy the request must complete normally instead.
+    #[tokio::test]
+    async fn poisoned_in_flight_recovers_instead_of_panicking() {
+        const KEY_ID: &str = "poison_recovery_test";
+        let key = cover_cache_key(KEY_ID, false);
+        COVER_CACHE.invalidate(&key).await;
+        lock_in_flight().remove(&key);
+
+        poison_in_flight();
+        assert!(IN_FLIGHT.lock().is_err(), "fixture: IN_FLIGHT must be poisoned");
+
+        // Pre-fix this panicked with PoisonError at the first IN_FLIGHT lock.
+        let first = handle_cover_get(KEY_ID, false).await;
+        assert!(first.is_err(), "an uncached id must resolve to an error, not panic: {first:?}");
+        assert!(
+            !lock_in_flight().contains_key(&key),
+            "a completed request must leave no in-flight entry behind"
+        );
+
+        // And a second request after the poison must still be served.
+        let second = handle_cover_get(KEY_ID, false).await;
+        assert!(second.is_err(), "the request after poisoning must still be served: {second:?}");
+    }
+
+    /// The stale-waiter retry branch (rx Err -> re-assert leadership) also
+    /// locks IN_FLIGHT; it must recover from poisoning the same way.
+    #[tokio::test]
+    async fn poisoned_in_flight_stale_waiter_retry_recovers() {
+        const KEY_ID: &str = "poison_retry_test";
+        let key = cover_cache_key(KEY_ID, false);
+        COVER_CACHE.invalidate(&key).await;
+
+        poison_in_flight();
+        assert!(IN_FLIGHT.lock().is_err(), "fixture: IN_FLIGHT must be poisoned");
+
+        // Fake leader owns the key with an empty waiter Vec; the request under
+        // test subscribes to it and parks.
+        lock_in_flight().insert(key.clone(), Vec::new());
+        let task = tokio::spawn(async move { handle_cover_get(KEY_ID, false).await });
+
+        let mut queued = false;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if lock_in_flight().get(&key).is_some_and(|waiters| waiters.len() == 1) {
+                queued = true;
+                break;
+            }
+            if task.is_finished() {
+                break;
+            }
+        }
+        assert!(queued, "fixture: the request must queue as a waiter of the fake leader");
+
+        // Drop the fake leader: the parked request wakes with a channel error
+        // and takes the IN_FLIGHT_RETRY branch (the third poison-sensitive lock
+        // site) before self-serving.
+        lock_in_flight().remove(&key);
+        let result = task.await.expect("the retry branch must not panic on a poisoned mutex");
+        assert!(result.is_err(), "the self-served request must resolve to an error: {result:?}");
+        assert!(
+            !lock_in_flight().contains_key(&key),
+            "the retry branch must clean its entry up"
+        );
+    }
+
+    /// `InFlightGuard::drop` is the last line of defense for IN_FLIGHT cleanup
+    /// (panic/cancellation); it must remove its entry even when the mutex is
+    /// poisoned, or the stale entry + its waiters would block the key forever.
+    #[test]
+    fn in_flight_guard_drop_cleans_up_under_poisoned_mutex() {
+        let key = cover_cache_key("poison_guard_test", false);
+        poison_in_flight();
+        assert!(IN_FLIGHT.lock().is_err(), "fixture: IN_FLIGHT must be poisoned");
+
+        lock_in_flight().insert(key.clone(), Vec::new());
+        drop(InFlightGuard { cache_key: key.clone() });
+        assert!(
+            !lock_in_flight().contains_key(&key),
+            "Drop must remove its entry even when the mutex is poisoned"
+        );
     }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
