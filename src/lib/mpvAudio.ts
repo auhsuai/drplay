@@ -67,6 +67,14 @@ export class MpvAudioController {
   // tag (`load_epoch`). Events below the latest loadfile reply's epoch belong
   // to the previous track and must not drive the new one.
   private engineEpoch = 0;
+  // Why (R2.2): the epoch counter is per connection — a fresh sidecar restarts
+  // it at 0 (Fix B3), so an in-flight event of the REPLACED connection can sit
+  // above the new base and pass the epoch filter (B1), and release() resetting
+  // the base to 0 lets late events drive a torn-down engine (RC-1). Rust mints
+  // a process-wide monotonic `conn` per connection and tags every event with
+  // it; the engine adopts it from the `mpv_spawn` reply and drops every event
+  // of another connection. `null` = no live connection (pre-spawn / released).
+  private engineConn: number | null = null;
   /** Shared in-flight spawn attempt — concurrent playTrack calls join it. */
   private startPromise: Promise<boolean> | null = null;
   /** Shared in-flight sidecar swap of a load-deadline restart (F8-1): every
@@ -280,6 +288,9 @@ export class MpvAudioController {
       // engine; reset lifecycle so the next playTrack respawns via mpv_spawn.
       this.logError(`mpv engine closed: ${cause}`);
       this.started = false;
+      // R2.2: the connection is gone — any further event tagged with its id is
+      // late by definition and must not drive the engine.
+      this.engineConn = null;
       this.clearLoadDeadline();
       this.detachListeners(this.unlistenFns);
       this.unlistenFns = [];
@@ -414,13 +425,32 @@ export class MpvAudioController {
     return invoke(TAURI_COMMANDS.mpvCommand, { cmd });
   }
 
-  /** True when a tagged event payload predates the latest loadfile reply
-   *  (Fix B3). Robust by contract: a payload without a numeric `epoch` field
-   *  passes, so an older sender stays compatible. */
+  /** True when a tagged event payload cannot drive THIS engine (Fix B3 +
+   *  R2.2): its connection is not the live one, or it predates the latest
+   *  loadfile reply. Robust by contract: a payload missing the tag passes, so
+   *  an older sender stays compatible. */
   private isStaleEnginePayload(payload: unknown): boolean {
     if (!isRecord(payload)) return false;
+    const conn = payload["conn"];
+    if (
+      typeof conn === "number" &&
+      (this.engineConn === null || conn !== this.engineConn)
+    ) {
+      // A tagged event of a replaced (or absent) connection: its epoch base
+      // was reset by the respawn/release, so it must never drive this engine.
+      return true;
+    }
     const epoch = payload["epoch"];
     return typeof epoch === "number" && epoch < this.engineEpoch;
+  }
+
+  /** Adopt the connection identity of an `mpv_spawn` reply (R2.2). Idempotent
+   *  for the spawn no-op path (running sidecar answers with its own id); a
+   *  malformed/legacy reply without a numeric `conn` is a no-op. */
+  private noteSpawnReply(reply: unknown): void {
+    if (!isRecord(reply)) return;
+    const conn = reply["conn"];
+    if (typeof conn === "number") this.engineConn = conn;
   }
 
   /** Adopt the load epoch of a `loadfile` reply (Rust returns
@@ -506,12 +536,15 @@ export class MpvAudioController {
         }),
       );
       if (this.isStale(epoch)) return this.disposeStaleStart(attached);
-      await invoke(TAURI_COMMANDS.mpvSpawn);
+      const reply = await invoke(TAURI_COMMANDS.mpvSpawn);
       if (this.isStale(epoch)) return this.disposeStaleStart(attached);
       // Fix B3: a fresh sidecar's load epoch restarts at 0 (the Rust counter
       // is per connection) — adopting that base keeps its events from being
       // dropped below a previous track's epoch after a crash respawn.
       this.engineEpoch = 0;
+      // R2.2: adopt the new connection's identity so its events — and only
+      // its — are accepted from here on.
+      this.noteSpawnReply(reply);
     } catch (e: unknown) {
       this.detachListeners(attached);
       throw e;
@@ -826,6 +859,9 @@ export class MpvAudioController {
     this.started = false;
     // Fix B3: a torn-down sidecar owns no epoch — the next spawn starts fresh.
     this.engineEpoch = 0;
+    // R2.2: and no connection — late events of the torn-down sidecar (already
+    // queued in the bridge) must not revive timers/state (RC-1).
+    this.engineConn = null;
     this.proxyPort = null;
     this.lastProxyError = null;
     this.lastTrack = null;
@@ -1023,7 +1059,7 @@ export class MpvAudioController {
       LOADFILE_RESTART_TIMEOUT_MS,
     );
     if (this.isStale(epoch)) return;
-    await withStallQueryTimeout(
+    const reply = await withStallQueryTimeout(
       invoke(TAURI_COMMANDS.mpvSpawn),
       LOADFILE_RESTART_TIMEOUT_MS,
     );
@@ -1031,6 +1067,9 @@ export class MpvAudioController {
     // Fix B3: the replacement sidecar's epoch counter restarts at 0 — a stale
     // engineEpoch would drop every event of whatever loads next.
     this.engineEpoch = 0;
+    // R2.2: the replacement is a new connection — the old id's events (its
+    // epoch base reset above) must never pass again.
+    this.noteSpawnReply(reply);
     // A fresh mpv starts at volume 100 — re-apply the facade volume.
     this.applyVolume();
   }
