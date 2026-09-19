@@ -28,7 +28,7 @@ export function ImageCropperModal({
 }: ImageCropperModalProps) {
   const { t } = useTranslation();
   const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(2);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -187,7 +187,7 @@ export function ImageCropperModal({
                   ></div>
                 </div>
                 <div
-                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none opacity-0 scale-75 transition-[opacity,transform,translate,scale] duration-150 group-hover/zoom:opacity-100 group-hover/zoom:scale-100 group-active/zoom:opacity-100 group-active/zoom:scale-100"
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none"
                   style={{
                     left: `clamp(${String(THUMB_HALF_PX)}px, ${String(zoomPercent)}%, calc(100% - ${String(THUMB_HALF_PX)}px))`,
                   }}
