@@ -152,6 +152,11 @@ export function maxRangeEnd(ranges: MpvRange[]): number | null {
   return max;
 }
 
+/** Single source of truth for a track's local stream-proxy URL. */
+export function buildProxyStreamUrl(trackId: string, port: number): string {
+  return `${PROXY_ORIGIN}:${String(port)}${STREAM_PATH}${trackId}`;
+}
+
 /** Bound one promisified mpv IPC call to `timeoutMs` (default:
  *  STALL_QUERY_TIMEOUT_MS). The wrapped promise always gets a handler
  *  attached, so a late reply/rejection after the timeout fired is never an
@@ -197,6 +202,18 @@ export function asNumber(value: unknown): number | null {
 
 export function asBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+/** Narrow one `stream-proxy-error` payload (R05: {fileId,status}); null when
+ *  malformed. Status memory only — never a display channel. */
+export function parseProxyError(
+  payload: unknown,
+): { fileId: string; status: number } | null {
+  if (!isRecord(payload)) return null;
+  const fileId = asString(payload["fileId"]);
+  const status = asNumber(payload["status"]);
+  if (fileId === null || status === null) return null;
+  return { fileId, status };
 }
 
 const WARN_THROTTLE_MS = 30000;

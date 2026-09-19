@@ -11,7 +11,7 @@ import type {
 import {
   asBoolean,
   asNumber,
-  asString,
+  buildProxyStreamUrl,
   classifyEndFileError,
   describeError,
   dispatchMpvEvent,
@@ -27,12 +27,11 @@ import {
   MPV_COMMANDS,
   MPV_PROPERTY_ARGS,
   MPV_PROPERTIES,
-  PROXY_ORIGIN,
+  parseProxyError,
   PROXY_START_TIMEOUT_MS,
   SEEK_ACK_TIMEOUT_MS,
   SEEK_ACK_TOLERANCE_SECS,
   STALL_MIN_RESUME_SECS,
-  STREAM_PATH,
   TAURI_COMMANDS,
   TAURI_EVENTS,
   THROTTLE_MS,
@@ -405,17 +404,12 @@ export class MpvAudioController {
 
   /** Record one `stream-proxy-error` payload (R05): status memory only. */
   private noteProxyError(payload: unknown): void {
-    if (!isRecord(payload)) {
+    const parsed = parseProxyError(payload);
+    if (parsed === null) {
       this.logWarn("stream-proxy-error payload malformed (skipped)");
       return;
     }
-    const fileId = asString(payload["fileId"]);
-    const status = asNumber(payload["status"]);
-    if (fileId === null || status === null) {
-      this.logWarn("stream-proxy-error payload malformed (skipped)");
-      return;
-    }
-    this.lastProxyError = { fileId, status };
+    this.lastProxyError = parsed;
   }
 
   /** The proxy status usable for THIS stream only — a stale event (other
@@ -775,7 +769,7 @@ export class MpvAudioController {
     if (this.isStale(epoch)) return;
     const reply = await this.sendCommand([
       MPV_COMMANDS.loadfile,
-      this.streamUrl(track.id, port),
+      buildProxyStreamUrl(track.id, port),
       MPV_COMMANDS.replace,
     ]);
     this.noteLoadEpoch(reply);
@@ -989,11 +983,6 @@ export class MpvAudioController {
     this.sendSeek(target);
   }
 
-  /** Single source of truth for a track's local stream-proxy URL. */
-  private streamUrl(trackId: string, port: number): string {
-    return `${PROXY_ORIGIN}:${String(port)}${STREAM_PATH}${trackId}`;
-  }
-
   /** Polled mpv truth for one reconcile round (each query bounded). */
   private async queryStallTruth(): Promise<StallTruth> {
     const [timePosRaw, bufferingRaw, cacheRaw] = await Promise.all([
@@ -1036,7 +1025,7 @@ export class MpvAudioController {
     this.pendingSeek = pinnedTime > STALL_MIN_RESUME_SECS ? pinnedTime : null;
     void this.sendCommand([
       MPV_COMMANDS.loadfile,
-      this.streamUrl(trackId, port),
+      buildProxyStreamUrl(trackId, port),
       MPV_COMMANDS.replace,
     ])
       .then((reply) => {
