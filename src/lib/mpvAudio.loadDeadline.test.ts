@@ -351,3 +351,213 @@ describe("MpvAudioController — switch clears mpv's pause flag without a pause 
     ]);
   });
 });
+
+interface SwapGate {
+  promise: Promise<void>;
+  resolve: () => void;
+}
+
+function swapGate(): SwapGate {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function flushMicrotasks(times = 50): Promise<void> {
+  for (let i = 0; i < times; i++) await Promise.resolve();
+}
+
+describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", () => {
+  let ctrl: MpvAudioController;
+  let errors: { message: string; code: string }[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000);
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    storeMocks.setIsPlaying.mockClear();
+    storeMocks.setIsPlaying.mockImplementation(
+      (playing: boolean | ((prev: boolean) => boolean)) => {
+        storeMocks.isPlaying =
+          typeof playing === "function"
+            ? playing(storeMocks.isPlaying)
+            : playing;
+      },
+    );
+    storeMocks.isPlaying = false;
+    attachMocks();
+    ctrl = new MpvAudioController();
+    errors = [];
+    ctrl.on("error", (payload) => {
+      errors.push(payload);
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Holds the load-deadline restart mid-swap so a user switch can land. */
+  function holdSidecarSwap(): { shutdown: SwapGate; spawn: SwapGate } {
+    const shutdown = swapGate();
+    const spawn = swapGate();
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "stream_proxy_start") return Promise.resolve(PROXY_PORT);
+      if (command === "mpv_shutdown") return shutdown.promise;
+      if (command === "mpv_spawn") return spawn.promise;
+      return Promise.resolve(undefined);
+    });
+    return { shutdown, spawn };
+  }
+
+  it("(F8-1) a switch during the restart's shutdown await is never clobbered by the stale reload", async () => {
+    await ctrl.playTrack(trackA); // wedge: no file-loaded ever arrives
+    tauriMocks.invoke.mockClear();
+    const gates = holdSidecarSwap();
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS);
+    expect(commandNames()).toEqual(["mpv_shutdown"]); // swap awaiting its reply
+
+    const switched = ctrl.playTrack(trackB); // user clicks B during the swap
+    await flushMicrotasks();
+    // B must not race a dying sidecar: no loadfile until the swap settles.
+    expect(mpvCommands()).toEqual([]);
+
+    gates.shutdown.resolve();
+    await flushMicrotasks();
+    expect(commandNames().filter((name) => name !== "mpv_command")).toEqual([
+      "mpv_shutdown",
+      "mpv_spawn",
+    ]);
+    expect(mpvCommands()).toEqual([]); // still parked — replacement not up
+
+    gates.spawn.resolve();
+    await switched;
+
+    // B loads on the replacement sidecar; A's stale reload never happens.
+    expect(mpvCommands()).toEqual([
+      ["set_property", "volume", "100"],
+      ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
+      ["set_property", "pause", "no"],
+    ]);
+    expect(errors).toEqual([]);
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
+  });
+
+  it("(F8-1) a switch between shutdown and spawn is not clobbered either", async () => {
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+    const gates = holdSidecarSwap();
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS);
+    gates.shutdown.resolve();
+    await flushMicrotasks();
+    expect(commandNames().filter((name) => name !== "mpv_command")).toEqual([
+      "mpv_shutdown",
+      "mpv_spawn",
+    ]);
+
+    const switched = ctrl.playTrack(trackB);
+    await flushMicrotasks();
+    expect(mpvCommands()).toEqual([]); // parked until the new sidecar is up
+
+    gates.spawn.resolve();
+    await switched;
+
+    expect(mpvCommands()).toEqual([
+      ["set_property", "volume", "100"],
+      ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
+      ["set_property", "pause", "no"],
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it("(F3-9) the deadline restart replays the original startTime (resume position)", async () => {
+    await ctrl.playTrack(trackA, 42);
+    tauriMocks.invoke.mockClear();
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS); // restart + reload
+
+    expect(mpvCommands()).toContainEqual([
+      "loadfile",
+      `${PROXY_URL_PREFIX}A`,
+      "replace",
+    ]);
+    expect(mpvCommands().some((cmd) => cmd[0] === "seek")).toBe(false);
+
+    fireMpvEvent("file-loaded");
+
+    // The recovery resumes at the position queued before the wedge instead of
+    // restarting the track from the top.
+    expect(mpvCommands()).toContainEqual(["seek", "42", "absolute"]);
+    expect(ctrl.getCurrentTime()).toBe(42);
+  });
+
+  it("(F8-1) a same-track re-click during the restart does not cancel the recovery reload", async () => {
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+    const gates = holdSidecarSwap();
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS);
+    const again = ctrl.playTrack(trackA); // impatient re-click of the same track
+    gates.shutdown.resolve();
+    gates.spawn.resolve();
+    await again;
+    await flushMicrotasks();
+
+    // The restart's own reload still cures the wedge — the no-op click must
+    // not be mistaken for a supersede.
+    expect(mpvCommands()).toEqual([
+      ["set_property", "volume", "100"],
+      ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+      ["set_property", "pause", "no"],
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it("(regression) release() while the restart is swapping stays silent: no spawn, no reload", async () => {
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+    const gates = holdSidecarSwap();
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS);
+    expect(commandNames()).toEqual(["mpv_shutdown"]);
+
+    ctrl.release();
+    gates.shutdown.resolve();
+    await flushMicrotasks();
+
+    expect(commandNames()).not.toContain("mpv_spawn");
+    expect(mpvCommands()).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
+  });
+
+  it("(regression) a track switch parked on the swap is not booted after a release during the wait", async () => {
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+    const gates = holdSidecarSwap();
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS);
+    const switched = ctrl.playTrack(trackB); // parked on the sidecar swap
+    await flushMicrotasks();
+    expect(mpvCommands()).toEqual([]);
+
+    ctrl.release(); // teardown while the switch is still parked
+    gates.shutdown.resolve();
+    gates.spawn.resolve();
+    await switched;
+
+    // The parked request is stale: it must not resurrect a fresh engine or
+    // issue any loadfile for the torn-down lifecycle.
+    expect(commandNames()).not.toContain("mpv_spawn");
+    expect(mpvCommands()).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(false);
+  });
+});

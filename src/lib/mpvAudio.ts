@@ -65,6 +65,15 @@ export class MpvAudioController {
   private engineEpoch = 0;
   /** Shared in-flight spawn attempt — concurrent playTrack calls join it. */
   private startPromise: Promise<boolean> | null = null;
+  /** Shared in-flight sidecar swap of a load-deadline restart (F8-1): every
+   *  new load request parks on it (ensureStarted) instead of issuing a
+   *  loadfile into the dying process. */
+  private restartInFlight: Promise<void> | null = null;
+  /** Monotonic id of the latest load request that supersedes the current
+   *  playback (a track switch, never a same-track no-op/resume click). A
+   *  deadline restart captured the id it belongs to and must never reload a
+   *  superseded track over the newcomer (F8-1). */
+  private loadRequestSeq = 0;
   private proxyPort: number | null = null;
   /** Latest `stream-proxy-error` for the current stream (R05) — state only,
    *  never a display channel: mpv's end-file is the single place an error
@@ -409,7 +418,23 @@ export class MpvAudioController {
     }
   }
 
-  private async ensureStarted(): Promise<boolean> {
+  private async ensureStarted(epoch: number): Promise<boolean> {
+    // Why (F8-1): a load-deadline restart swaps the sidecar internally — the
+    // old mpv is going away and its replacement is not up yet, so issuing a
+    // loadfile now would race a dying process (and the restart's own reload
+    // would then clobber the newcomer). Park the request until the swap
+    // settles; `started` deliberately stays true across it. A failed swap
+    // resolves the wait and lets the request surface its own bounded failure.
+    if (this.restartInFlight) {
+      try {
+        await this.restartInFlight;
+      } catch {
+        // onLoadDeadline owns the swap's single failure surface (F8-6 dedupe).
+      }
+      // Release during the wait: this request belongs to a torn-down
+      // lifecycle — it must not boot a fresh engine (no resurrection).
+      if (this.isStale(epoch)) return false;
+    }
     if (this.started) return true;
     // Why: dedupe concurrent playTrack calls — one spawn attempt wins, the
     // rest join it instead of attaching a second listener set.
@@ -476,6 +501,23 @@ export class MpvAudioController {
   private disposeStaleStart(attached: UnlistenFn[]): boolean {
     this.detachListeners(attached);
     return false;
+  }
+
+  /** Why (F8-1): true when a load-deadline's load was superseded while the
+   *  restart awaited — released, a newer track request, or a terminal outcome.
+   *  A method (not inline field reads) so TypeScript's flow narrowing cannot
+   *  freeze the fields across the restart's awaits. */
+  private deadlineSuperseded(
+    epoch: number,
+    trackId: string,
+    seq: number,
+  ): boolean {
+    return (
+      this.isStale(epoch) ||
+      this.playbackFinished ||
+      this.currentTrackId !== trackId ||
+      this.loadRequestSeq !== seq
+    );
   }
 
   private async ensureProxyPort(): Promise<number> {
@@ -600,7 +642,12 @@ export class MpvAudioController {
         }
         return;
       }
-      if (!(await this.ensureStarted())) return;
+      // Why (F8-1): only a request that actually changes the track supersedes
+      // an in-flight deadline restart of the previous one. Same-track
+      // no-op/resume clicks deliberately do not bump: the restart's reload is
+      // still the cure for the track they refer to.
+      this.loadRequestSeq += 1;
+      if (!(await this.ensureStarted(epoch))) return;
       // Why: release() mid-start must abort silently — no loadfile into a
       // shutdown mpv and no state resurrection after the teardown.
       if (this.isStale(epoch)) return;
@@ -623,6 +670,7 @@ export class MpvAudioController {
     track: Track,
     startTime: number | undefined,
     epoch: number,
+    requestSeq?: number,
   ): Promise<void> {
     const port = await this.ensureProxyPort();
     if (this.isStale(epoch)) return;
@@ -633,6 +681,11 @@ export class MpvAudioController {
     ]);
     this.noteLoadEpoch(reply);
     if (this.isStale(epoch)) return;
+    // Why (F8-1): a deadline restart's reload must not begin the stale track
+    // if a newer load request landed while the loadfile reply was in flight —
+    // the loadfile itself predates the switch, but the newcomer owns the
+    // engine state and must not be superseded by beginTrack(track).
+    if (requestSeq !== undefined && this.loadRequestSeq !== requestSeq) return;
     this.beginTrack(track, startTime);
     // v3 (S2): a new track promotes the spinner immediately — waiting for
     // the 250ms display delay left a no-source gap between first-audio and
@@ -724,6 +777,7 @@ export class MpvAudioController {
     // loadfile) observes the teardown at its next await boundary and aborts.
     this.lifecycleEpoch += 1;
     this.startPromise = null;
+    this.restartInFlight = null;
     this.detachListeners(this.unlistenFns);
     this.unlistenFns = [];
     this.started = false;
@@ -915,6 +969,29 @@ export class MpvAudioController {
     }
   }
 
+  /** One load-deadline sidecar swap (F8-1): shutdown the wedged mpv, spawn
+   *  the replacement, then re-base the per-connection state (Fix B3 epoch,
+   *  facade volume). Shared through `restartInFlight` so concurrent load
+   *  requests wait it out instead of racing a dying process. Each IPC call is
+   *  bounded; a release mid-swap aborts at the next await boundary. */
+  private async swapSidecar(epoch: number): Promise<void> {
+    await withStallQueryTimeout(
+      invoke(TAURI_COMMANDS.mpvShutdown),
+      LOADFILE_RESTART_TIMEOUT_MS,
+    );
+    if (this.isStale(epoch)) return;
+    await withStallQueryTimeout(
+      invoke(TAURI_COMMANDS.mpvSpawn),
+      LOADFILE_RESTART_TIMEOUT_MS,
+    );
+    if (this.isStale(epoch)) return;
+    // Fix B3: the replacement sidecar's epoch counter restarts at 0 — a stale
+    // engineEpoch would drop every event of whatever loads next.
+    this.engineEpoch = 0;
+    // A fresh mpv starts at volume 100 — re-apply the facade volume.
+    this.applyVolume();
+  }
+
   private async onLoadDeadline(trackId: string, epoch: number): Promise<void> {
     // Stale (release/teardown) or superseded (another track loading, or a
     // terminal outcome already decided): this deadline has nothing to cure.
@@ -937,34 +1014,30 @@ export class MpvAudioController {
     );
     const track = this.lastTrack;
     if (track === null) return;
+    // Why (F8-1): the load request this deadline belongs to. A newer request
+    // must never be clobbered by the stale reload below.
+    const seq = this.loadRequestSeq;
+    const swap = this.swapSidecar(epoch);
+    this.restartInFlight = swap;
     try {
-      // Why: a fresh mpv process is the only cure for a wedged chain (an app
-      // restart used to be the user's only way out). The Rust side reports a
-      // commanded shutdown as expected, so the listeners and engine state
-      // survive the swap untouched. Both calls are bounded: a hung Rust reply
-      // must end in the bounded error, never in a second silent wedge.
-      await withStallQueryTimeout(
-        invoke(TAURI_COMMANDS.mpvShutdown),
-        LOADFILE_RESTART_TIMEOUT_MS,
-      );
-      if (this.isStale(epoch)) return;
-      await withStallQueryTimeout(
-        invoke(TAURI_COMMANDS.mpvSpawn),
-        LOADFILE_RESTART_TIMEOUT_MS,
-      );
-      if (this.isStale(epoch)) return;
-      // Fix B3: the replacement sidecar's epoch counter restarts at 0 — a
-      // stale engineEpoch would drop every event of the reloaded track.
-      this.engineEpoch = 0;
-      // A fresh mpv starts at volume 100 — re-apply the facade volume, then
-      // load the same track once more (beginTrack re-arms its own deadline).
-      this.applyVolume();
-      await this.loadTrack(track, undefined, epoch);
+      await swap;
+      // Superseded while the sidecar swapped (user switched, release, or a
+      // terminal outcome landed): the newer request owns playback and loads
+      // through its own path on the fresh sidecar. Reloading the stale track
+      // here is exactly the F8-1 clobber.
+      if (this.deadlineSuperseded(epoch, trackId, seq)) return;
+      // Why (F3-9): the wedged load never reached file-loaded, so its pending
+      // resume position (the playTrack startTime) is still queued — replay it
+      // after the recovery instead of restarting the track from the top.
+      const resumeAt = this.pendingSeek;
+      await this.loadTrack(track, resumeAt ?? undefined, epoch, seq);
     } catch (e: unknown) {
       if (this.isStale(epoch)) return;
       // Why (per 0/6): a failed restart or reload is terminal for this load —
       // surface the bounded error instead of retrying the sidecar forever.
       this.failTerminal("load-deadline-restart-failed", e);
+    } finally {
+      if (this.restartInFlight === swap) this.restartInFlight = null;
     }
   }
 }
