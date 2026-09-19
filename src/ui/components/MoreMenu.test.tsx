@@ -18,6 +18,7 @@ import { getContextMenuStyle } from "./MoreMenu/menuPositioning";
 import en from "../../locales/en/translation.json";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
+import type { Playlist } from "../../utils/playlists";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 
 const mocks = vi.hoisted(() => ({
@@ -88,6 +89,17 @@ function makeDriveItem(over: Partial<DriveItem> = {}): DriveItem {
     isFolder: false,
     size: 1000,
     trackInfo: makeTrack(),
+    ...over,
+  };
+}
+
+function makePlaylist(over: Partial<Playlist> = {}): Playlist {
+  return {
+    id: "pl-1",
+    userEmail: "u@example.com",
+    name: "Chill",
+    createdAt: 0,
+    tracks: [],
     ...over,
   };
 }
@@ -387,6 +399,56 @@ describe("MoreMenu playlist variant", () => {
       within(menuEl()).getByRole("menuitem", { name: "Remove from Playlist" }),
     );
     expect(onRemoveFromPlaylist).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalled();
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  });
+});
+
+describe("MoreMenu sidebarPlaylist variant", () => {
+  it("shows exactly Delete / Rename / Pin to top and no track-scoped or Add to Playlist items", () => {
+    render(<MoreMenu variant="sidebarPlaylist" playlist={makePlaylist()} />);
+    openTrigger();
+    expect(menuItemNames()).toEqual(["Delete", "Rename", "Pin to top"]);
+    for (const absent of [
+      "Add to Playlist",
+      "Add to queue",
+      "Download Song",
+      "Locate File",
+      "Move to...",
+      "Remove from Playlist",
+      "Select multiple items",
+    ]) {
+      expect(
+        within(menuEl()).queryByRole("menuitem", { name: absent }),
+      ).toBeNull();
+    }
+  });
+
+  it("shows Unpin from top instead of Pin to top for a pinned playlist", () => {
+    render(
+      <MoreMenu
+        variant="sidebarPlaylist"
+        playlist={makePlaylist({ pinned: true })}
+      />,
+    );
+    openTrigger();
+    expect(menuItemNames()).toEqual(["Delete", "Rename", "Unpin from top"]);
+  });
+
+  it("Delete click -> onDeletePlaylist + menu closes", () => {
+    const onDeletePlaylist = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MoreMenu
+        variant="sidebarPlaylist"
+        playlist={makePlaylist()}
+        onDeletePlaylist={onDeletePlaylist}
+        onClose={onClose}
+      />,
+    );
+    openTrigger();
+    fireEvent.click(within(menuEl()).getByRole("menuitem", { name: "Delete" }));
+    expect(onDeletePlaylist).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalled();
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
   });

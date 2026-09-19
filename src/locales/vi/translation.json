@@ -127,8 +127,11 @@
     "cover_too_large": "Ảnh phải nhỏ hơn hoặc bằng 5 MB",
     "cover_read_error": "Không thể đọc ảnh đã chọn. Vui lòng thử lại."
   },
-  "confirm_delete_playlist": "Xóa danh sách phát này?",
+  "confirm_delete_playlist": "Xóa danh sách phát này? Chỉ danh sách phát bị xóa. Các tệp nhạc của bạn không bị xóa.",
   "delete": "Xóa",
+  "rename": "Đổi tên",
+  "pin_to_top": "Ghim lên đầu",
+  "unpin_from_top": "Bỏ ghim",
   "remove_from_playlist": "Bỏ khỏi danh sách",
   "player": {
     "no_track": "Chưa có bài hát nào",

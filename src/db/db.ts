@@ -40,6 +40,8 @@ export interface PlaylistRow {
   createdAt: number;
   tracks: Track[];
   coverImage?: string | undefined;
+  // Pinned playlists sort first in the sidebar (display-only flag, no index).
+  pinned?: boolean | undefined;
   userEmail: string;
 }
 export interface RecentTrackRow {

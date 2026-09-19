@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,6 +46,12 @@ vi.mock("lucide-react", () => {
     "ListMusic",
     "LogOut",
     "Gauge",
+    // Pulled in by the playlist row MoreMenu (trigger + sidebarPlaylist items).
+    "Ellipsis",
+    "Trash2",
+    "Pencil",
+    "Pin",
+    "PinOff",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));
@@ -53,6 +60,8 @@ vi.mock("lucide-react", () => {
 const mocks = vi.hoisted(() => ({
   getPlaylists: vi.fn(),
   createPlaylist: vi.fn(),
+  deletePlaylist: vi.fn(),
+  updatePlaylist: vi.fn(),
   getDriveStorageQuota: vi.fn(),
   captureError: vi.fn(),
   showErrorToast: vi.fn(),
@@ -61,13 +70,18 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../utils/playlists", () => ({
   getPlaylists: mocks.getPlaylists,
   createPlaylist: mocks.createPlaylist,
+  deletePlaylist: mocks.deletePlaylist,
+  updatePlaylist: mocks.updatePlaylist,
 }));
 vi.mock("../../utils/driveApi", () => ({
   getDriveStorageQuota: mocks.getDriveStorageQuota,
+  // Imported (not called) by the MoreMenu delete hook.
+  deleteFile: vi.fn(),
 }));
 vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
 vi.mock("../../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
+  showSuccessToast: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
@@ -716,5 +730,267 @@ describe("Sidebar playlist row + button alignment", () => {
       }
     }
     expect(btn.className).toContain("ml-3");
+  });
+});
+
+describe("Sidebar playlist more menu", () => {
+  const ALPHA = {
+    id: "pl-1",
+    name: "Alpha",
+    userEmail: "u",
+    createdAt: 1,
+    tracks: [],
+  };
+  const BETA = {
+    id: "pl-2",
+    name: "Beta",
+    userEmail: "u",
+    createdAt: 2,
+    tracks: [],
+  };
+
+  beforeEach(() => {
+    mocks.getPlaylists.mockResolvedValue([ALPHA, BETA]);
+    mocks.deletePlaylist.mockReset();
+    mocks.updatePlaylist.mockReset();
+    mocks.getDriveStorageQuota.mockResolvedValue(makeQuota());
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function playlistMenu(): HTMLElement {
+    const menu = document.body.querySelector<HTMLElement>('[role="menu"]');
+    if (!menu) throw new Error("playlist menu not found");
+    return menu;
+  }
+
+  function menuItemNames(menu: HTMLElement): string[] {
+    return within(menu)
+      .getAllByRole("menuitem")
+      .map((b) => b.textContent?.trim() ?? "");
+  }
+
+  function openMenuByRightClick(name: string): HTMLElement {
+    fireEvent.contextMenu(screen.getByText(name));
+    return playlistMenu();
+  }
+
+  it("renders one More actions trigger per playlist only while the sidebar is expanded", async () => {
+    const { rerender } = render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+    expect(
+      screen.getAllByRole("button", { name: "More actions" }),
+    ).toHaveLength(2);
+
+    rerender(<Sidebar {...baseProps({ isSidebarOpen: false })} />);
+    // Collapsed: no trigger, no invisible hit area left behind.
+    expect(
+      screen.queryAllByRole("button", { name: "More actions" }),
+    ).toHaveLength(0);
+  });
+
+  it("keeps playlist rows selectable when collapsed and opens no menu on right-click", async () => {
+    const onTabChange = vi.fn();
+    render(<Sidebar {...baseProps({ isSidebarOpen: false, onTabChange })} />);
+    await screen.findByText("Alpha");
+
+    fireEvent.click(screen.getByText("Alpha"));
+    expect(onTabChange).toHaveBeenCalledWith("playlist_pl-1");
+
+    fireEvent.contextMenu(screen.getByText("Beta"));
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("opens the playlist menu on right-click (Delete/Rename/Pin), never the track menu", async () => {
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    const menu = openMenuByRightClick("Beta");
+    expect(menuItemNames(menu)).toEqual(["Delete", "Rename", "Pin to top"]);
+    for (const absent of [
+      "Remove from Playlist",
+      "Locate File",
+      "Select multiple items",
+      "Add to queue",
+      "Move to...",
+      "Download Song",
+    ]) {
+      expect(within(menu).queryByRole("menuitem", { name: absent })).toBeNull();
+    }
+  });
+
+  it("keeps a single menu open when right-clicking two different playlists", async () => {
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    openMenuByRightClick("Alpha");
+    fireEvent.contextMenu(screen.getByText("Beta"));
+
+    expect(document.body.querySelectorAll('[role="menu"]')).toHaveLength(1);
+  });
+
+  it("opens the menu from the More actions trigger without selecting the playlist", async () => {
+    const onTabChange = vi.fn();
+    render(<Sidebar {...baseProps({ onTabChange })} />);
+    await screen.findByText("Alpha");
+
+    const firstTrigger = screen.getAllByRole("button", {
+      name: "More actions",
+    })[0];
+    if (!firstTrigger) throw new Error("trigger missing");
+    fireEvent.click(firstTrigger);
+
+    expect(onTabChange).not.toHaveBeenCalled();
+    expect(menuItemNames(playlistMenu())).toEqual([
+      "Delete",
+      "Rename",
+      "Pin to top",
+    ]);
+  });
+
+  it("Pin to top persists pinned=true and the pinned playlist sorts first (stable groups)", async () => {
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Beta")).getByRole("menuitem", {
+        name: "Pin to top",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(mocks.updatePlaylist).toHaveBeenCalledWith("pl-2", {
+        pinned: true,
+      });
+    });
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+
+    // The store write dispatches playlists-updated; the sidebar re-reads the
+    // data layer, so simulate the persisted pinned row.
+    mocks.getPlaylists.mockResolvedValue([{ ...BETA, pinned: true }, ALPHA]);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("playlists-updated"));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(/^(Alpha|Beta)$/).map((el) => el.textContent),
+      ).toEqual(["Beta", "Alpha"]);
+    });
+  });
+
+  it("Rename opens the inline input prefilled; Enter saves the trimmed name", async () => {
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Alpha")).getByRole("menuitem", {
+        name: "Rename",
+      }),
+    );
+
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    const input = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Rename",
+    });
+    expect(input.value).toBe("Alpha");
+
+    const user = userEvent.setup();
+    await user.clear(input);
+    await user.type(input, "  Alpha Renamed  {Enter}");
+
+    await waitFor(() => {
+      expect(mocks.updatePlaylist).toHaveBeenCalledWith("pl-1", {
+        name: "Alpha Renamed",
+      });
+    });
+    expect(mocks.createPlaylist).not.toHaveBeenCalled();
+  });
+
+  it("Rename cancel: unchanged name writes nothing and closes the input", async () => {
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Alpha")).getByRole("menuitem", {
+        name: "Rename",
+      }),
+    );
+    const input = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Rename",
+    });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("textbox", { name: "Rename" })).toBeNull();
+    });
+    expect(mocks.updatePlaylist).not.toHaveBeenCalled();
+  });
+
+  it("Delete confirms with playlist-only wording, removes the playlist and redirects the open tab", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onTabChange = vi.fn();
+    render(
+      <Sidebar {...baseProps({ activeTab: "playlist_pl-1", onTabChange })} />,
+    );
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Alpha")).getByRole("menuitem", {
+        name: "Delete",
+      }),
+    );
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "This removes the playlist only. Your music files are not deleted.",
+      ),
+    );
+    await waitFor(() => {
+      expect(mocks.deletePlaylist).toHaveBeenCalledWith("pl-1");
+    });
+    await waitFor(() => {
+      expect(onTabChange).toHaveBeenCalledWith("Home");
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it("Delete does nothing when the confirmation is dismissed", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Alpha")).getByRole("menuitem", {
+        name: "Delete",
+      }),
+    );
+
+    expect(mocks.deletePlaylist).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("deleting a playlist that is not the open tab does not redirect", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onTabChange = vi.fn();
+    render(
+      <Sidebar {...baseProps({ activeTab: "playlist_pl-1", onTabChange })} />,
+    );
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Beta")).getByRole("menuitem", {
+        name: "Delete",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(mocks.deletePlaylist).toHaveBeenCalledWith("pl-2");
+    });
+    expect(onTabChange).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

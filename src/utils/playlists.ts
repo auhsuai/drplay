@@ -12,6 +12,9 @@ export interface Playlist {
   createdAt: number;
   tracks: Track[];
   coverImage?: string | undefined;
+  // Pinned playlists sort first in the sidebar (display-only flag). Absent on
+  // rows written before the flag existed — absent means unpinned.
+  pinned?: boolean | undefined;
 }
 
 const PLAYLIST_MODULE = "playlists";
@@ -52,6 +55,7 @@ async function loadPlaylists(): Promise<Playlist[]> {
     createdAt: row.createdAt,
     tracks: getPlaylistTracks(row) ?? [],
     coverImage: row.coverImage,
+    pinned: row.pinned,
   }));
 }
 
@@ -247,6 +251,7 @@ export async function getPlaylistById(id: string): Promise<Playlist | null> {
       createdAt: row.createdAt,
       tracks: getPlaylistTracks(row) ?? [],
       coverImage: row.coverImage,
+      pinned: row.pinned,
     };
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);

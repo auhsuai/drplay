@@ -232,6 +232,26 @@ describe("playlists (Dexie-backed)", () => {
     expect(updated.name).toBe("Liked");
   });
 
+  it("updatePlaylist persists the pinned flag and getPlaylists surfaces it", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Pin me"), "playlist");
+    // Rows written before the flag existed read back as undefined (unpinned).
+    expect((await getPlaylists())[0]?.pinned).toBeUndefined();
+
+    const updated = nonNull(
+      await updatePlaylist(p.id, { pinned: true }),
+      "playlist",
+    );
+    expect(updated.pinned).toBe(true);
+    expect(store.get(p.id)?.pinned).toBe(true);
+    expect((await getPlaylists())[0]?.pinned).toBe(true);
+
+    // Unpin writes the flag back down (never deletes/recreates the row).
+    await updatePlaylist(p.id, { pinned: false });
+    expect((await getPlaylists())[0]?.pinned).toBe(false);
+    expect(await getPlaylists()).toHaveLength(1);
+  });
+
   it("deletePlaylist removes the row", async () => {
     setUser(EMAIL_A);
     const p = nonNull(await createPlaylist("Temp"), "playlist");

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
+import type { Playlist } from "../../utils/playlists";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import { FolderSelectionScreen } from "../FolderSelection/FolderSelectionScreen";
 import { useTranslation } from "react-i18next";
@@ -22,6 +23,7 @@ import { PlayerBarMenuItems } from "./MoreMenu/PlayerBarMenuItems";
 import { PlaylistMenuItems } from "./MoreMenu/PlaylistMenuItems";
 import { QueueMenuItems } from "./MoreMenu/QueueMenuItems";
 import { RecentMenuItems } from "./MoreMenu/RecentMenuItems";
+import { SidebarPlaylistMenuItems } from "./MoreMenu/SidebarPlaylistMenuItems";
 import { useMenuMove } from "./MoreMenu/useMenuMove";
 import { useMoreMenuEvents } from "./MoreMenu/useMoreMenuEvents";
 import {
@@ -57,6 +59,13 @@ export interface MoreMenuProps {
   onRemoveFolderFromQueue?: (() => void) | undefined;
   queueFolder?: { id: string; name: string } | undefined;
   onRemoveFromPlaylist?: (() => void) | undefined;
+  // Sidebar playlist menu (variant="sidebarPlaylist"): the playlist the menu
+  // manages. The actions receive no inferred context — the caller binds them
+  // to this exact object.
+  playlist?: Playlist | undefined;
+  onRenamePlaylist?: (() => void) | undefined;
+  onDeletePlaylist?: (() => void) | undefined;
+  onTogglePinPlaylist?: (() => void) | undefined;
 }
 
 export function MoreMenu({
@@ -83,6 +92,10 @@ export function MoreMenu({
   onRemoveFolderFromQueue,
   queueFolder,
   onRemoveFromPlaylist,
+  playlist,
+  onRenamePlaylist,
+  onDeletePlaylist,
+  onTogglePinPlaylist,
 }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -266,6 +279,16 @@ export function MoreMenu({
           onClose={onClose}
           t={t}
         />
+      ) : mode === "sidebarPlaylist" ? (
+        <SidebarPlaylistMenuItems
+          playlist={playlist}
+          onRename={onRenamePlaylist}
+          onDelete={onDeletePlaylist}
+          onTogglePin={onTogglePinPlaylist}
+          setIsOpen={setIsOpen}
+          onClose={onClose}
+          t={t}
+        />
       ) : mode === "playerbar" ? (
         <PlayerBarMenuItems
           track={track}
@@ -307,8 +330,9 @@ export function MoreMenu({
       )}
 
       {/* Playlist rows already belong to a playlist — adding them elsewhere
-          is not part of the playlist row menu. */}
-      {mode !== "playlist" && (
+          is not part of the playlist row menu. The sidebar playlist menu is
+          not track-scoped at all. */}
+      {mode !== "playlist" && mode !== "sidebarPlaylist" && (
         <AddToPlaylistItem
           track={track}
           showPlaylistsSubmenu={showPlaylistsSubmenu}

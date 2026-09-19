@@ -8,4 +8,4 @@ export const MENU_ITEM_DELETE_CLASS =
 export const MENU_ESTIMATED_HEIGHT_PX = 250; // estimated dropdown height used to decide open-up vs open-down
 
 export type MoreMenuVariant =
-  "default" | "playerbar" | "recent" | "queue" | "playlist";
+  "default" | "playerbar" | "recent" | "queue" | "playlist" | "sidebarPlaylist";

@@ -127,8 +127,11 @@
     "cover_too_large": "Image must be 5 MB or smaller",
     "cover_read_error": "Couldn't read the selected image. Try again."
   },
-  "confirm_delete_playlist": "Delete this playlist?",
+  "confirm_delete_playlist": "Delete this playlist? This removes the playlist only. Your music files are not deleted.",
   "delete": "Delete",
+  "rename": "Rename",
+  "pin_to_top": "Pin to top",
+  "unpin_from_top": "Unpin from top",
   "remove_from_playlist": "Remove from Playlist",
   "player": {
     "no_track": "No track playing",

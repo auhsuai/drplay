@@ -6,23 +6,32 @@ export function NavItem({
   active,
   onClick,
   isSidebarOpen,
+  action,
+  onContextMenu,
 }: {
   icon: ReactNode;
   label: string;
   active?: boolean;
   onClick: () => void;
   isSidebarOpen: boolean;
+  // Trailing row action (e.g. the playlist ⋯ menu). Rendered as-is; callers
+  // omit it entirely when the sidebar is collapsed so no invisible hit area
+  // or layout shift survives the collapse.
+  action?: ReactNode;
+  onContextMenu?: ((e: React.MouseEvent) => void) | undefined;
 }) {
   return (
     <div
       role="button"
       tabIndex={0}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
+        if (e.key !== "Enter" && e.key !== " ") return;
+        // Nested controls (the row action's ⋯ trigger) own their keys.
+        if (e.target !== e.currentTarget) return;
+        e.preventDefault();
+        onClick();
       }}
       title={!isSidebarOpen ? label : undefined}
       className={`group flex items-center px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-200 active:scale-[0.98] font-medium ${
@@ -43,6 +52,7 @@ export function NavItem({
           {label}
         </span>
       </div>
+      {action}
     </div>
   );
 }
