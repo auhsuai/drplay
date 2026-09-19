@@ -21,6 +21,7 @@ import { FAVORITES_UPDATED_EVENT } from "../../utils/favorites";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 import {
   guardAllowsAutoAdvance,
+  noteFormatError,
   resetAdvanceGuard,
 } from "../../utils/playerError";
 import {
@@ -628,68 +629,7 @@ describe("PlayerBar seek redraws buffer bar immediately (no empty blink)", () =>
   });
 });
 
-describe("PlayerBar error banner recovery", () => {
-  const NETWORK_ERROR_TEXT = en.player.network_interrupted;
-
-  it("BUG regression: shows the error banner when AudioController emits error", () => {
-    renderPlayer();
-    expect(screen.queryByText(NETWORK_ERROR_TEXT)).toBeNull();
-
-    act(() => {
-      fakeController._emit("error", {
-        message: "Mạng không ổn định, đang thử lại...",
-        code: "network_interrupted",
-      });
-    });
-
-    expect(screen.getByText(NETWORK_ERROR_TEXT)).toBeTruthy();
-  });
-
-  it("BUG regression: clears the error banner when playback recovers (play event)", () => {
-    renderPlayer();
-    act(() => {
-      fakeController._emit("error", {
-        message: "Mạng không ổn định, đang thử lại...",
-        code: "network_interrupted",
-      });
-    });
-    expect(screen.getByText(NETWORK_ERROR_TEXT)).toBeTruthy();
-
-    act(() => {
-      fakeController._emit("play");
-    });
-
-    expect(screen.queryByText(NETWORK_ERROR_TEXT)).toBeNull();
-  });
-
-  it("unsubscribes the play handler on unmount (no listener leak)", () => {
-    const { unmount } = renderPlayer();
-    expect(fakeController._handlers["play"] ?? []).toHaveLength(1);
-
-    unmount();
-
-    expect(fakeController._handlers["play"] ?? []).toHaveLength(0);
-  });
-});
-
 describe("PlayerBar error surface shared with the full-screen view (P2-12-6)", () => {
-  it("publishes an audio error to the shared player store (the source NowPlaying reads)", () => {
-    renderPlayer();
-    expect(usePlayerStore.getState().errorInfo).toBeNull();
-
-    act(() => {
-      fakeController._emit("error", {
-        message: "Mạng không ổn định, đang thử lại...",
-        code: "network_interrupted",
-      });
-    });
-
-    expect(usePlayerStore.getState().errorInfo).toEqual({
-      message: "Mạng không ổn định, đang thử lại...",
-      code: "network_interrupted",
-    });
-  });
-
   it("reads the shared store error back into the banner (debug/store writes surface identically)", () => {
     renderPlayer();
     expect(screen.queryByText(en.player.format_error)).toBeNull();
@@ -743,8 +683,7 @@ describe("PlayerBar debug player-error trigger (DEV only)", () => {
 
   it("format_error renders the banner WITHOUT marking the track broken or tripping the storm guard", () => {
     usePlayerStore.setState({ currentTrack: makeTrack(), brokenTrackIds: [] });
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
+    renderPlayer();
 
     const dispatchFormatError = () => {
       act(() => {
@@ -765,15 +704,12 @@ describe("PlayerBar debug player-error trigger (DEV only)", () => {
 
     // 3 format_error dispatches through the debug channel — the storm
     // threshold — must NOT block auto-advance: the debug listener only sets
-    // errorInfo, it never runs the storm-guard refs of audio.on("error").
+    // errorInfo, it never runs the audio.on("error") policy (now owned by
+    // usePlayerPlaybackPolicy — its suite exercises the advance decision).
     dispatchFormatError();
     dispatchFormatError();
     expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
-
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
     expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
   });
 
@@ -793,99 +729,19 @@ describe("PlayerBar debug player-error trigger (DEV only)", () => {
   });
 });
 
-describe("PlayerBar broken-track marking (Task D — repeat-all loop guard)", () => {
-  beforeEach(() => {
-    usePlayerStore.setState({ currentTrack: makeTrack(), brokenTrackIds: [] });
-  });
-
-  afterEach(() => {
-    usePlayerStore.setState({ currentTrack: null, brokenTrackIds: [] });
-  });
-
-  it("Task D regression: error format_error → đánh dấu track hiện tại broken (auto-advance sẽ skip)", () => {
-    renderPlayer();
-    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
-
-    act(() => {
-      fakeController._emit("error", {
-        message: "File lỗi định dạng, đang bỏ qua...",
-        code: "format_error",
-      });
-    });
-
-    expect(usePlayerStore.getState().brokenTrackIds).toContain("track-1");
-  });
-
-  it("Task D: error network_interrupted (retryable) → KHÔNG đánh dấu broken", () => {
-    renderPlayer();
-
-    act(() => {
-      fakeController._emit("error", {
-        message: "Mạng không ổn định, đang thử lại...",
-        code: "network_interrupted",
-      });
-    });
-
-    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
-  });
-
-  it("Task D: ended tự nhiên (không kèm error) → KHÔNG đánh dấu broken (auto-advance như cũ)", () => {
-    renderPlayer();
-
-    act(() => {
-      fakeController._emit("ended");
-    });
-
-    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
-  });
-
-  it("Task D: không có currentTrack → error format_error không crash, không đánh dấu", () => {
-    usePlayerStore.setState({ currentTrack: null });
-    renderPlayer({ currentTrack: null });
-
-    expect(() => {
-      act(() => {
-        fakeController._emit("error", {
-          message: "File lỗi định dạng, đang bỏ qua...",
-          code: "format_error",
-        });
-      });
-    }).not.toThrow();
-  });
-});
-
-describe("PlayerBar auto-advance storm guard (Fix I — queue cháy hết im lặng)", () => {
-  const FORMAT_ERROR = {
-    message: "File lỗi định dạng, đang bỏ qua...",
-    code: "format_error",
-  };
-  const NETWORK_ERROR = {
-    message: "Mạng không ổn định, đang thử lại...",
-    code: "network_interrupted",
-  };
-
-  function stormBlock(onNext: ReturnType<typeof vi.fn>) {
-    // 3 lần error format_error + ended liên tiếp → chạm ngưỡng storm
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(2);
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
-    act(() => {
-      fakeController._emit("ended");
-    });
+describe("PlayerBar manual transport actions reset the storm guard (Fix I parity)", () => {
+  // R2.3: the engine-event policy tests (mark-broken, storm counting, the
+  // advance decision, banner cooldown) moved to usePlayerPlaybackPolicy.test.ts.
+  // What stays here is the UI-side parity contract: every MANUAL transport
+  // entry point (button/keyboard) resets the shared guard at its wrapper, and
+  // the reset clears the storm banner immediately (resetAdvanceGuard owns
+  // that, shared with the moved policy).
+  function tripAdvanceGuard(): void {
+    resetAdvanceGuard();
+    const now = Date.now();
+    noteFormatError(now);
+    noteFormatError(now);
+    noteFormatError(now);
   }
 
   beforeEach(() => {
@@ -905,355 +761,85 @@ describe("PlayerBar auto-advance storm guard (Fix I — queue cháy hết im l�
     vi.useRealTimers();
   });
 
-  it("Fix I regression: 3 format_error liên tiếp trong window → ended thứ 3 KHÔNG gọi onNextTrack, dừng phát + hiện thông báo storm", () => {
+  it("Fix I: manual next (phím n) reset guard", () => {
     const onNext = vi.fn();
     renderPlayer({ onNextTrack: onNext });
 
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(2);
-
-    // Lỗi thứ 3 chạm ngưỡng STORM_ERRORS → thông báo rõ ràng thay vì toast
-    // format_error bị reset theo track (root cause: user không thấy gì).
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
-
-    // Ended kèm theo KHÔNG được auto-next — queue dừng đốt, playback dừng.
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(2);
-    expect(usePlayerStore.getState().isPlaying).toBe(false);
-  });
-
-  it("Fix I: 2 lỗi rồi window trôi (15s) → lỗi sau mở cửa sổ mới, ended vẫn next (không chặn nhầm)", () => {
-    vi.useFakeTimers();
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      vi.advanceTimersByTime(10_000);
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    // Window 15s đã trôi hẳn so với lỗi đầu → lỗi tiếp theo bắt đầu cửa sổ mới
-    act(() => {
-      vi.advanceTimersByTime(16_000);
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-
-    expect(onNext).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
-  });
-
-  it("Fix I: 'play' event (phát thành công) reset counter → 2 lỗi kế tiếp vẫn next, lỗi thứ 3 kể từ reset mới chặn", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(2);
-
-    // Phát thành công → guard reset (nếu không reset, lỗi kế tiếp đã chặn)
-    act(() => {
-      fakeController._emit("play");
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(4);
-
-    // Lỗi thứ 3 kể từ play → chặn như storm mới
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(4);
-    expect(usePlayerStore.getState().isPlaying).toBe(false);
-  });
-
-  it("Fix I: manual next (phím n) reset guard → auto-advance hoạt động lại", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    stormBlock(onNext);
-    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
 
     // Manual next = user chủ động → guard reset, không còn bị giữ
     act(() => {
       fireEvent.keyDown(window, { key: "n" });
     });
-    expect(onNext).toHaveBeenCalledTimes(3);
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(4);
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 
   it("Fix I: manual prev (phím p) reset guard", () => {
-    const onNext = vi.fn();
     const onPrev = vi.fn();
-    renderPlayer({ onNextTrack: onNext, onPrevTrack: onPrev });
+    renderPlayer({ onPrevTrack: onPrev });
 
-    stormBlock(onNext);
+    tripAdvanceGuard();
 
     act(() => {
       fireEvent.keyDown(window, { key: "p" });
     });
     expect(onPrev).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(3);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 
   it("Fix I: manual toggle play (phím cách) reset guard", () => {
-    const onNext = vi.fn();
     const onTogglePlay = vi.fn();
-    renderPlayer({ onNextTrack: onNext, onTogglePlay });
+    renderPlayer({ onTogglePlay });
 
-    stormBlock(onNext);
+    tripAdvanceGuard();
 
     act(() => {
       fireEvent.keyDown(window, { key: " " });
     });
     expect(onTogglePlay).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(3);
-  });
-
-  it("Fix I: manual retry (nút phát giữa khi đang có lỗi) reset guard", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    stormBlock(onNext);
-
-    // Nút trung tâm khi hasError → onRetry (replay restore time)
-    const centerButton = screen.getAllByRole("button")[3] as HTMLElement;
-    fireEvent.click(centerButton);
-    expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    expect(onNext).toHaveBeenCalledTimes(3);
-  });
-
-  it("Fix I: network_interrupted (retryable) KHÔNG đếm vào storm counter", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("error", NETWORK_ERROR);
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("error", FORMAT_ERROR);
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-
-    // Vẫn chặn sau đúng 3 format_error (network không cộng dồn)
-    expect(onNext).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
-  });
-
-  it("Fix I: ended phát hết bài tự nhiên (không có format_error trước) → luôn next, không bao giờ chặn", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-    act(() => {
-      fakeController._emit("ended");
-    });
-
-    expect(onNext).toHaveBeenCalledTimes(3);
-    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
-    expect(usePlayerStore.getState().isPlaying).toBe(true);
-  });
-
-  it("F8-3: hết cooldown 30s không có error mới → banner advance_stopped tự clear + guard re-arm", () => {
-    vi.useFakeTimers();
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    stormBlock(onNext);
-    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
-    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
-
-    act(() => {
-      vi.advanceTimersByTime(30_000);
-    });
-
-    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 
-  it("F8-3: error khác overwrite banner storm → hết cooldown KHÔNG clear lỗi khác", () => {
-    vi.useFakeTimers();
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    stormBlock(onNext);
-    act(() => {
-      fakeController._emit("error", NETWORK_ERROR);
+  it("Fix I: manual retry (nút phát giữa khi đang có lỗi) reset guard", () => {
+    usePlayerStore.setState({
+      errorInfo: { code: "format_error", message: "boom" },
     });
-    expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
+    renderPlayer();
 
-    act(() => {
-      vi.advanceTimersByTime(30_000);
-    });
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
 
-    expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
-    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
+    // Nút trung tâm khi hasError → onRetry (retryCurrentTrack — replay, không
+    // đọc lại restore time).
+    const centerButton = screen.getAllByRole("button")[3] as HTMLElement;
+    fireEvent.click(centerButton);
+    expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 
   it("F8-3: manual action reset guard → banner storm clear ngay, không đợi cooldown", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
+    renderPlayer();
 
-    stormBlock(onNext);
+    tripAdvanceGuard();
+    act(() => {
+      usePlayerStore.setState({
+        errorInfo: {
+          code: "advance_stopped",
+          message: "Drive is overloaded or locked — auto-playback paused.",
+        },
+      });
+    });
     expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
 
     act(() => {
       fireEvent.keyDown(window, { key: "n" });
     });
 
     expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
-  });
-
-  it("F8-3: unmount → timer storm được cleanup (không tự clear store sau khi bar gỡ)", () => {
-    vi.useFakeTimers();
-    const onNext = vi.fn();
-    const { unmount } = renderPlayer({ onNextTrack: onNext });
-
-    stormBlock(onNext);
-    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
-
-    unmount();
-    act(() => {
-      vi.advanceTimersByTime(30_000);
-    });
-
-    expect(usePlayerStore.getState().errorInfo?.code).toBe("advance_stopped");
-  });
-});
-
-describe("PlayerBar repeat-one ended replay (B16-3)", () => {
-  afterEach(() => {
-    usePlayerStore.setState({
-      currentTrack: null,
-      playMode: "normal",
-      isPlaying: false,
-    });
-  });
-
-  it("B16-3: ended + repeat-one → replay cùng track từ 0, KHÔNG next", () => {
-    const cur = makeTrack();
-    usePlayerStore.setState({ currentTrack: cur, playMode: "repeat-one" });
-    const onNext = vi.fn();
-    fakeController.playTrack.mockClear();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("ended");
-    });
-
-    expect(fakeController.playTrack).toHaveBeenCalledTimes(1);
-    expect(fakeController.playTrack).toHaveBeenCalledWith(cur, 0);
-    expect(onNext).not.toHaveBeenCalled();
-  });
-
-  it("B16-3 regression: ended + mode thường → onNextTrack(true), không replay", () => {
-    const cur = makeTrack();
-    usePlayerStore.setState({ currentTrack: cur, playMode: "normal" });
-    const onNext = vi.fn();
-    fakeController.playTrack.mockClear();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("ended");
-    });
-
-    expect(onNext).toHaveBeenCalledWith(true);
-    expect(fakeController.playTrack).not.toHaveBeenCalled();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 });
 
@@ -2566,15 +2152,18 @@ describe("PlayerBar seek rail is the top variant (edge-to-edge at the bar's top 
   });
 });
 
-describe("PlayerBar event identity filtering (R2.1 — stale-track misattribution)", () => {
+describe("PlayerBar buffering display identity (R2.1 — stale-track misattribution)", () => {
+  // R2.3: the error/ended/play identity cases moved to
+  // usePlayerPlaybackPolicy.test.ts together with the policy they guard; this
+  // component keeps the identity filter on its display-only buffering
+  // subscription.
   // Window under test: the store already points at the new track (B,
   // "track-1") while the engine is still finishing the old one (A,
-  // "stale-track"). A's terminal events must not mutate B's state.
+  // "stale-track"). A's buffering must not spin B's loader.
   const stalePayload = { trackId: "stale-track", attempt: 1 };
 
   beforeEach(() => {
     loaderIcon.mockClear();
-    fakeController.playTrack.mockClear();
     usePlayerStore.setState({
       currentTrack: makeTrack(),
       isPlaying: true,
@@ -2590,61 +2179,6 @@ describe("PlayerBar event identity filtering (R2.1 — stale-track misattributio
       brokenTrackIds: [],
       errorInfo: null,
       playMode: "normal",
-    });
-  });
-
-  it("error of another track: no broken mark, no banner for the current track", () => {
-    renderPlayer();
-
-    act(() => {
-      fakeController._emit("error", {
-        message: "File lỗi định dạng, đang bỏ qua...",
-        code: "format_error",
-        ...stalePayload,
-      });
-    });
-
-    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
-    expect(usePlayerStore.getState().errorInfo).toBeNull();
-    expect(screen.queryByText(en.player.format_error)).toBeNull();
-  });
-
-  it("ended of another track: never auto-advances the current track", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("ended", stalePayload);
-    });
-
-    expect(onNext).not.toHaveBeenCalled();
-  });
-
-  it("ended of another track: no repeat-one replay of the current track", () => {
-    usePlayerStore.setState({ playMode: "repeat-one" });
-    renderPlayer({ playMode: "repeat-one" });
-
-    act(() => {
-      fakeController._emit("ended", stalePayload);
-    });
-
-    expect(fakeController.playTrack).not.toHaveBeenCalled();
-  });
-
-  it("play of another track: keeps the current track's error banner", () => {
-    usePlayerStore.setState({
-      errorInfo: { code: "network_interrupted", message: "boom" },
-    });
-    renderPlayer();
-    expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
-
-    act(() => {
-      fakeController._emit("play", stalePayload);
-    });
-
-    expect(usePlayerStore.getState().errorInfo).toEqual({
-      code: "network_interrupted",
-      message: "boom",
     });
   });
 
@@ -2670,35 +2204,5 @@ describe("PlayerBar event identity filtering (R2.1 — stale-track misattributio
     });
 
     expect(loaderIcon).toHaveBeenCalled();
-  });
-
-  it("error of the current track: still marks it broken + shows the banner", () => {
-    renderPlayer();
-
-    act(() => {
-      fakeController._emit("error", {
-        message: "File lỗi định dạng, đang bỏ qua...",
-        code: "format_error",
-        trackId: "track-1",
-        attempt: 7,
-      });
-    });
-
-    expect(usePlayerStore.getState().brokenTrackIds).toContain("track-1");
-    expect(usePlayerStore.getState().errorInfo).toEqual({
-      code: "format_error",
-      message: "File lỗi định dạng, đang bỏ qua...",
-    });
-  });
-
-  it("ended of the current track: still auto-advances", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    act(() => {
-      fakeController._emit("ended", { trackId: "track-1", attempt: 7 });
-    });
-
-    expect(onNext).toHaveBeenCalledWith(true);
   });
 });

@@ -17,6 +17,7 @@ import {
 import { usePlayerTrackPlayback } from "./player/usePlayerTrackPlayback";
 import { usePlayerSession } from "./player/usePlayerSession";
 import { usePlayerQueue } from "./player/usePlayerQueue";
+import { usePlayerPlaybackPolicy } from "./player/usePlayerPlaybackPolicy";
 import type { QueueDriveItem } from "./player/usePlayerQueue";
 import type { TabKey } from "../utils/driveConstants";
 
@@ -124,6 +125,13 @@ export const usePlayer = (accessToken: string | null) => {
     setPlayMode,
     stableHandlePlayTrack,
   );
+
+  // R2.3 (RC-5): playback policy (error/ended/play handling, mark-broken,
+  // storm guard + banner cooldown, repeat-one replay) lives in the hook layer
+  // now. Mounted ONCE here at app level — PlayerBar no longer subscribes to
+  // these engine events. Auto-advance calls the same handleNextTrack App wires
+  // into the PlayerBar onNextTrack prop.
+  usePlayerPlaybackPolicy({ onNextTrack: handleNextTrack });
 
   usePlayerLifecycle({
     isPlaying,

@@ -4,7 +4,6 @@ import { List } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
 import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
 import { usePlayerStore } from "../../store/playerStore";
-import { commitIsPlaying } from "../../store/playbackCommit";
 import { consumeRestoreResume } from "../../hooks/player/restoreResume";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
@@ -14,13 +13,7 @@ import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
 import { ErrorToast } from "./ErrorToast";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
-import {
-  guardAllowsAutoAdvance,
-  noteFormatError,
-  resetAdvanceGuard,
-  retryCurrentTrack,
-  STORM_COOLDOWN_MS,
-} from "../../utils/playerError";
+import { resetAdvanceGuard, retryCurrentTrack } from "../../utils/playerError";
 
 function PlayerBarImpl({
   currentTrack,
@@ -45,16 +38,18 @@ function PlayerBarImpl({
   const [isBuffering, setIsBuffering] = useState(false);
 
   // The error surface is shared with the full-screen NowPlaying controls
-  // (P2-12-6): PlayerBar publishes/reads it through the store, the storm
-  // guard + manual retry live in utils/playerError.
+  // (P2-12-6): PlayerBar only RENDERS it from the store (the engine error
+  // policy writes it — usePlayerPlaybackPolicy, R2.3); the storm guard +
+  // manual retry live in utils/playerError.
   const errorInfo = usePlayerStore((state) => state.errorInfo);
   const setErrorInfo = usePlayerStore((state) => state.setErrorInfo);
 
   // Fix I: manual transport actions (buttons + keyboard) reset the guard
-  // before delegating to the App-level handlers. Auto-advance (the `ended`
-  // subscription) calls the RAW onNextTrack — it is the behavior being
-  // guarded and must never reset the counter. Retrying is a manual action
-  // too: utils/playerError.retryCurrentTrack resets the guard it shares.
+  // before delegating to the App-level handlers. Auto-advance
+  // (usePlayerPlaybackPolicy's ended handler) calls the RAW onNextTrack — it
+  // is the behavior being guarded and must never reset the counter. Retrying
+  // is a manual action too: utils/playerError.retryCurrentTrack resets the
+  // guard it shares.
   const handleManualNext = useCallback(() => {
     resetAdvanceGuard();
     onNextTrack(false);
@@ -72,11 +67,14 @@ function PlayerBarImpl({
 
   // Subscribe to AudioController Events (transport-relevant only — seek /
   // buffer-bar subscriptions live in SeekBar next to the DOM they own).
-  // R2.1: every handler reads the event's engine identity and drops events of
-  // a DIFFERENT track than the store's current one — in the switch window
-  // (store already on B, engine still emitting A's terminal events) the old
-  // track's error/ended/play/buffering must not mark B broken, advance past
-  // B, clear B's banner or spin B's loader. Untagged events (no identity)
+  // R2.3: the error/ended/play policy handlers (mark-broken, storm guard,
+  // advance decision, errorInfo writes, repeat-one replay) moved to
+  // usePlayerPlaybackPolicy — mounted ONCE by usePlayer at app level. This
+  // component keeps only its display subscriptions.
+  // R2.1: the buffering handler reads the event's engine identity and drops
+  // events of a DIFFERENT track than the store's current one — in the switch
+  // window (store already on B, engine still emitting A's events) the old
+  // track's buffering must not spin B's loader. Untagged events (no identity)
   // keep legacy behavior, as does a missing current track.
   useEffect(() => {
     const isForeign = (payload: { trackId?: string } | undefined) =>
@@ -85,98 +83,11 @@ function PlayerBarImpl({
       if (isForeign(identity)) return;
       setIsBuffering(isBuffering);
     });
-    const unsubErr = audio.on("error", (err) => {
-      if (isForeign(err)) return;
-      // Task D: an unrecoverable playback failure (format_error — broken
-      // format/decode or retry give-up) marks the current track broken so the
-      // auto-advance guard in usePlayerQueue skips it instead of looping it
-      // forever under repeat-all. AudioController emits `error` BEFORE
-      // `ended`, so the mark lands while the store still points at the failed
-      // track. Read the store rather than the prop: this subscription is
-      // memoized and must not close over a stale track.
-      if (err.code === "format_error") {
-        const { currentTrack: current, markTrackBroken } =
-          usePlayerStore.getState();
-        if (current) markTrackBroken(current.id);
-
-        // Fix I: count the failure against the shared storm window
-        // (utils/playerError). A tripped/blocked guard shows the clear storm
-        // banner instead of the per-track error, which the next track change
-        // would clear before it can be read.
-        if (noteFormatError(Date.now())) {
-          usePlayerStore.getState().setErrorInfo({
-            code: "advance_stopped",
-            message: "Drive is overloaded or locked — auto-playback paused.",
-          });
-          return;
-        }
-      }
-      // Store only the UI surface — the engine identity is not part of it.
-      usePlayerStore
-        .getState()
-        .setErrorInfo({ code: err.code, message: err.message });
-    });
-    // A `play` event is the native "playback actually resumed" signal — it
-    // fires after a successful auto-retry, so the stale error banner (and its
-    // RefreshCw button) must not outlive the recovery. Fix I: a successful
-    // play also proves the storm is over — reset the counter and unblock.
-    const unsubPlay = audio.on("play", (identity) => {
-      if (isForeign(identity)) return;
-      resetAdvanceGuard();
-      usePlayerStore.getState().setErrorInfo(null);
-    });
-    const unsubEnded = audio.on("ended", (identity) => {
-      if (isForeign(identity)) return;
-      // Fix I: while a format_error storm is blocked, an `ended` must NOT
-      // auto-advance — the next track would only fail again. Stop playback
-      // instead; the storm banner (set by the error handler) stays visible
-      // because the current track is no longer replaced. A natural
-      // track-completion `ended` (no format_error in between) never trips the
-      // guard — the counter only grows from the error subscription.
-      if (!guardAllowsAutoAdvance(Date.now())) {
-        commitIsPlaying("policy", false);
-        return;
-      }
-      // Repeat-one parity: the mpv engine has no loop property and
-      // resolveNextTrack never returns the current track for this mode, so the
-      // ended handler must replay the same track itself (playbackFinished is
-      // true after EOF, so playTrack falls through to a loadfile replace from
-      // 0 instead of the same-track no-op). Read the store, not the props: the
-      // subscription is memoized and must not close over a stale track/mode.
-      const { playMode, currentTrack: cur } = usePlayerStore.getState();
-      if (playMode === "repeat-one" && cur) {
-        void audio.playTrack(cur, 0);
-        return;
-      }
-      onNextTrack(true);
-    });
 
     return () => {
       unsubBuf();
-      unsubErr();
-      unsubPlay();
-      unsubEnded();
     };
-  }, [onNextTrack, audio]);
-
-  // F8-3: the storm banner must not outlive its cooldown. Arm one timer while
-  // the banner is up — a new storm error re-publishes errorInfo, which re-arms
-  // the timer, so the banner lives exactly STORM_COOLDOWN_MS since the last
-  // failure and then re-arms the guard (resetAdvanceGuard drops both the block
-  // and its banner). The cleanup cancels the timer whenever the banner goes
-  // away first (track change, successful play, another error) or on unmount,
-  // so a stale timer can never unblock/reset a newer storm.
-  useEffect(() => {
-    if (errorInfo?.code !== "advance_stopped") return;
-    const timer = setTimeout(() => {
-      if (usePlayerStore.getState().errorInfo?.code === "advance_stopped") {
-        resetAdvanceGuard();
-      }
-    }, STORM_COOLDOWN_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [errorInfo]);
+  }, [audio]);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel): renders the SAME error banner
   // as a real AudioController error via setErrorInfo only — it deliberately
