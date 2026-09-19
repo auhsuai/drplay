@@ -50,10 +50,20 @@ pub(crate) enum IpcMessage {
 }
 
 /// Callback invoked for every mpv event the reader task receives, together
-/// with the load epoch current at dispatch time. The epoch increments once
-/// per dispatched `loadfile` reply (see `IpcCore::dispatch`), so consumers
-/// can drop messages that predate the latest requested load.
-pub(crate) type EventSink = Arc<dyn Fn(IpcMessage, u64) + Send + Sync>;
+/// with the load epoch current at dispatch time AND the identity of the
+/// connection that produced it. The epoch increments once per dispatched
+/// `loadfile` reply (see `IpcCore::dispatch`), so consumers can drop messages
+/// that predate the latest requested load; the connection id is minted once
+/// per connection (never reset), so consumers can also drop every message of
+/// a replaced connection — the epoch base resets on respawn and would
+/// otherwise let old-connection events through (B1/RC-1).
+pub(crate) type EventSink = Arc<dyn Fn(IpcMessage, u64, u64) + Send + Sync>;
+
+/// Process-wide source of connection ids (R2.2). Starts at 1 and is never
+/// reset: every `MpvIpc` (one spawned sidecar's connection) gets a strictly
+/// greater id than all previous ones, so a restarted sidecar's events can
+/// never alias the replaced connection's identity.
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// One line received from mpv, classified.
 enum Incoming {
@@ -117,6 +127,9 @@ struct IpcCore {
     /// Monotonic per-connection load counter, attached to every dispatched
     /// event and returned by `mpv_command` (see `MpvIpc::current_epoch`).
     load_epoch: AtomicU64,
+    /// Identity of this connection (R2.2): attached to every dispatched
+    /// event next to the load epoch; a replacement connection gets a new id.
+    conn: u64,
     event_sink: EventSink,
     /// Set before a commanded shutdown (`mpv_shutdown`, used by the frontend's
     /// load-deadline sidecar restart): the pipe ending that follows is
@@ -126,11 +139,12 @@ struct IpcCore {
 }
 
 impl IpcCore {
-    fn new(event_sink: EventSink) -> Self {
+    fn new(conn: u64, event_sink: EventSink) -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),
             loadfile_requests: Mutex::new(HashSet::new()),
             load_epoch: AtomicU64::new(0),
+            conn,
             event_sink,
             shutdown_requested: AtomicBool::new(false),
         }
@@ -194,7 +208,7 @@ impl IpcCore {
                     }
                 }
             }
-            Some(Incoming::Event(message)) => (self.event_sink)(message, self.load_epoch()),
+            Some(Incoming::Event(message)) => (self.event_sink)(message, self.load_epoch(), self.conn),
             None => {
                 let preview: String = line.chars().take(80).collect();
                 log::debug!("[mpv-ipc] ignoring non-JSON line: {preview:?}");
@@ -213,7 +227,8 @@ impl MpvIpc {
     /// Take ownership of the connected pipe: spawn the reader task and keep
     /// the write half for outgoing commands.
     pub(crate) fn new(client: NamedPipeClient, event_sink: EventSink) -> Self {
-        let core = Arc::new(IpcCore::new(event_sink));
+        let conn = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
+        let core = Arc::new(IpcCore::new(conn, event_sink));
         let (read_half, write_half) = tokio::io::split(client);
         let reader_core = Arc::clone(&core);
         tokio::spawn(async move { read_loop(read_half, reader_core).await });
@@ -236,6 +251,13 @@ impl MpvIpc {
     /// can tag engine events.
     pub(crate) fn current_epoch(&self) -> u64 {
         self.core.load_epoch()
+    }
+
+    /// Identity of this connection (R2.2). Included in the `mpv_spawn` reply
+    /// and attached to every emitted engine event, so the frontend can drop
+    /// events of a replaced connection.
+    pub(crate) fn current_conn(&self) -> u64 {
+        self.core.conn
     }
 
     /// Send one command and await its reply. Timeout-guarded; the pending
@@ -337,6 +359,7 @@ async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<Ipc
                     (core.event_sink)(
                         IpcMessage::ConnectionClosed { cause: "eof".to_string() },
                         core.load_epoch(),
+                        core.conn,
                     );
                 }
                 core.fail_all_pending();
@@ -362,6 +385,7 @@ async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<Ipc
                             cause: format!("read error: {read_error}"),
                         },
                         core.load_epoch(),
+                        core.conn,
                     );
                 }
                 core.fail_all_pending();
@@ -375,25 +399,31 @@ async fn read_loop<R: tokio::io::AsyncRead + Unpin>(mut reader: R, core: Arc<Ipc
 mod tests {
     use super::*;
 
-    type Collected = Arc<Mutex<Vec<(IpcMessage, u64)>>>;
+    type Collected = Arc<Mutex<Vec<(IpcMessage, u64, u64)>>>;
+
+    /// Fixed connection id used by the direct-dispatch test cores; the event
+    /// plumbing is what these tests exercise, not the id minting.
+    const TEST_CONN: u64 = 7;
 
     fn sink_with_collector() -> (EventSink, Collected) {
         let collected: Collected = Arc::new(Mutex::new(Vec::new()));
         let sink: EventSink = {
             let collected = Arc::clone(&collected);
-            Arc::new(move |message, epoch| collected.lock().unwrap().push((message, epoch)))
+            Arc::new(move |message, epoch, conn| {
+                collected.lock().unwrap().push((message, epoch, conn))
+            })
         };
         (sink, collected)
     }
 
     fn core_with_collector() -> (IpcCore, Collected) {
         let (sink, collected) = sink_with_collector();
-        (IpcCore::new(sink), collected)
+        (IpcCore::new(TEST_CONN, sink), collected)
     }
 
     /// The messages alone, for assertions that do not care about the epoch.
     fn collected_messages(collected: &Collected) -> Vec<IpcMessage> {
-        collected.lock().unwrap().iter().map(|(message, _)| message.clone()).collect()
+        collected.lock().unwrap().iter().map(|(message, _, _)| message.clone()).collect()
     }
 
     #[test]
@@ -647,7 +677,7 @@ mod tests {
         let client = tokio::net::windows::named_pipe::ClientOptions::new()
             .open(&pipe_name)
             .expect("test pipe client must connect");
-        let sink: EventSink = Arc::new(|_, _| {});
+        let sink: EventSink = Arc::new(|_, _, _| {});
         let ipc = MpvIpc::new(client, sink);
 
         // Kill the peer: the next write must fail instead of reaching mpv.
@@ -713,7 +743,7 @@ mod tests {
         core.dispatch(r#"{"event":"file-loaded"}"#);
 
         let epochs: Vec<u64> =
-            collected.lock().unwrap().iter().map(|(_, epoch)| *epoch).collect();
+            collected.lock().unwrap().iter().map(|(_, epoch, _)| *epoch).collect();
         assert_eq!(
             epochs,
             [0, 1],
@@ -839,6 +869,58 @@ mod tests {
             ipc.core.lock_loadfile_requests().is_empty(),
             "a mid-flight close must not leave a tracked loadfile request behind"
         );
+    }
+
+    // --- connection identity (R2.2 — RC-6) -----------------------------------
+
+    /// Every dispatched message is tagged with the connection it came from.
+    /// The frontend drops events whose connection id is not the live one, so a
+    /// late event of a replaced connection can never drive the new engine
+    /// state (B1/RC-1) — even when its per-connection epoch would pass.
+    #[test]
+    fn events_carry_the_connection_id_of_their_connection() {
+        let (sink, collected) = sink_with_collector();
+        let core = IpcCore::new(42, sink);
+
+        core.dispatch(r#"{"event":"property-change","id":1,"name":"time-pos","data":1}"#);
+        core.dispatch(r#"{"event":"file-loaded"}"#);
+
+        let conns: Vec<u64> = collected.lock().unwrap().iter().map(|(_, _, conn)| *conn).collect();
+        assert_eq!(conns, [42, 42], "every event must carry its connection's identity");
+    }
+
+    /// Connection ids are minted monotonically for the whole process: a
+    /// respawn gets a NEW id — a per-connection restart (1, 2, ...) would let
+    /// events of the replaced connection alias the new one.
+    #[tokio::test]
+    async fn connection_ids_are_monotonic_and_never_repeat() {
+        let (first, _first_server) = test_pipe("conn-mono-a");
+        let (second, _second_server) = test_pipe("conn-mono-b");
+        let first = MpvIpc::new(first, Arc::new(|_, _, _| {}));
+        let second = MpvIpc::new(second, Arc::new(|_, _, _| {}));
+
+        assert!(first.current_conn() >= 1, "ids start at 1, got {}", first.current_conn());
+        assert!(
+            second.current_conn() > first.current_conn(),
+            "a newer connection must get a strictly greater id ({} -> {})",
+            first.current_conn(),
+            second.current_conn()
+        );
+    }
+
+    /// Create one connected named-pipe pair; the server half is returned so the
+    /// test keeps the connection open.
+    fn test_pipe(
+        purpose: &str,
+    ) -> (NamedPipeClient, tokio::net::windows::named_pipe::NamedPipeServer) {
+        let pipe_name = format!(r"\\.\pipe\drplay-ipc-{}-{}", purpose, std::process::id());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .create(&pipe_name)
+            .expect("test pipe server must be created");
+        let client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .expect("test pipe client must connect");
+        (client, server)
     }
 
     #[tokio::test]

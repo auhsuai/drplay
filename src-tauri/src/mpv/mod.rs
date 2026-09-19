@@ -1,14 +1,18 @@
 //! mpv sidecar engine: process lifecycle + JSON IPC exposed as Tauri commands.
 //!
 //! Events emitted to the frontend:
-//! - `mpv-property` → `{ name: String, data: Value, epoch: u64 }` (mpv `property-change`)
-//! - `mpv-event`    → `{ event: String, reason: Option<String>, error: Option<String>, epoch: u64 }`
+//! - `mpv-property` → `{ name: String, data: Value, epoch: u64, conn: u64 }` (mpv `property-change`)
+//! - `mpv-event`    → `{ event: String, reason: Option<String>, error: Option<String>, epoch: u64, conn: u64 }`
 //!   (`end-file`, `shutdown`, ...) plus `ipc-closed` when the pipe ends
 //!
 //! `epoch` is additive: the load epoch current when the message was
 //! dispatched. It increments once per dispatched `loadfile` reply (see
 //! `ipc.rs`), letting the frontend drop events that predate the latest
-//! requested load. Consumers that ignore the field keep working.
+//! requested load. `conn` is additive too: the identity of the connection
+//! (one per spawned sidecar, monotonic process-wide), letting the frontend
+//! drop every event of a replaced connection — the per-connection epoch base
+//! resets on respawn, so it alone cannot tell the old connection's events
+//! apart (B1/RC-1). Consumers that ignore the fields keep working.
 
 mod ipc;
 mod job;
@@ -43,6 +47,14 @@ struct MpvHandle {
     pipe_name: String,
 }
 
+impl MpvHandle {
+    /// Reply of `mpv_spawn` (R2.2): the frontend adopts `conn` and drops
+    /// every engine event tagged with an older connection id.
+    fn spawn_reply(&self) -> Value {
+        json!({ "conn": self.ipc.current_conn() })
+    }
+}
+
 /// Shared slot holding the running mpv instance (`None` = not spawned).
 type SharedMpv = Arc<Mutex<Option<MpvHandle>>>;
 
@@ -64,20 +76,21 @@ fn app_handle() -> Result<&'static tauri::AppHandle, String> {
 /// Map IPC messages to the frontend event names fixed by the contract.
 fn event_sink(app: tauri::AppHandle) -> EventSink {
     use tauri::Emitter;
-    Arc::new(move |message: IpcMessage, epoch: u64| match message {
+    Arc::new(move |message: IpcMessage, epoch: u64, conn: u64| match message {
         IpcMessage::PropertyChange { name, data } => {
-            let _ = app.emit("mpv-property", json!({ "name": name, "data": data, "epoch": epoch }));
+            let _ =
+                app.emit("mpv-property", json!({ "name": name, "data": data, "epoch": epoch, "conn": conn }));
         }
         IpcMessage::MpvEvent { event, reason, error } => {
             let _ = app.emit(
                 "mpv-event",
-                json!({ "event": event, "reason": reason, "error": error, "epoch": epoch }),
+                json!({ "event": event, "reason": reason, "error": error, "epoch": epoch, "conn": conn }),
             );
         }
         IpcMessage::ConnectionClosed { cause } => {
             let _ = app.emit(
                 "mpv-event",
-                json!({ "event": "ipc-closed", "reason": cause, "error": null, "epoch": epoch }),
+                json!({ "event": "ipc-closed", "reason": cause, "error": null, "epoch": epoch, "conn": conn }),
             );
         }
     })
@@ -85,16 +98,18 @@ fn event_sink(app: tauri::AppHandle) -> EventSink {
 
 /// Spawn the mpv sidecar, connect the JSON IPC pipe and start observing the
 /// default property set. Idempotent: a healthy running sidecar makes this a
-/// no-op; a crashed one is reaped and replaced.
+/// no-op; a crashed one is reaped and replaced. The reply carries the
+/// connection identity (`{ "conn": u64 }`) the frontend filters engine events
+/// by — including the no-op path, which answers with the running handle's id.
 #[tauri::command]
-pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
     let state = mpv_state(&app);
     let mut slot = state.lock().await;
 
     if let Some(handle) = slot.as_mut() {
         match handle.child.try_wait() {
             // Still alive → already spawned, nothing to do.
-            Ok(None) => return Ok(()),
+            Ok(None) => return Ok(handle.spawn_reply()),
             Ok(Some(status)) => log::warn!("[mpv] previous sidecar exited ({status}); respawning"),
             Err(poll_error) => {
                 log::warn!("[mpv] failed to poll previous sidecar: {poll_error}; respawning")
@@ -154,8 +169,10 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     log::info!("[mpv] sidecar ready (pipe: {pipe_name})");
-    *slot = Some(MpvHandle { ipc: Arc::new(ipc), child, job, pipe_name });
-    Ok(())
+    let handle = MpvHandle { ipc: Arc::new(ipc), child, job, pipe_name };
+    let reply = handle.spawn_reply();
+    *slot = Some(handle);
+    Ok(reply)
 }
 
 /// Run one mpv IPC command, e.g. `["loadfile", url, "replace"]` or
@@ -267,7 +284,7 @@ mod tests {
         let client = tokio::net::windows::named_pipe::ClientOptions::new()
             .open(pipe_name)
             .expect("test pipe client must connect");
-        let sink: EventSink = Arc::new(|_, _| {});
+        let sink: EventSink = Arc::new(|_, _, _| {});
         let ipc = MpvIpc::new(client, sink);
         let child = tokio::process::Command::new("cmd")
             .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
@@ -363,6 +380,23 @@ mod tests {
             .expect("the connection held by the clone must stay usable after the slot swap");
         assert_eq!(data, json!(7));
         responder.await.expect("the responder must finish");
+    }
+
+    // --- connection identity (R2.2 — RC-6) -----------------------------------
+
+    /// The `mpv_spawn` reply must carry the new connection's identity so the
+    /// frontend can filter engine events by it (B1/RC-1): events of a replaced
+    /// connection never drive the fresh engine state.
+    #[tokio::test]
+    async fn spawn_reply_carries_the_connection_identity() {
+        let pipe_name = format!(r"\\.\pipe\drplay-mpv-spawn-reply-{}", std::process::id());
+        let (handle, _server) = test_handle(&pipe_name).await;
+
+        let reply = handle.spawn_reply();
+
+        let conn = reply["conn"].as_u64().expect("the reply must carry a numeric conn");
+        assert_eq!(conn, handle.ipc.current_conn(), "conn must be the handle's own connection");
+        assert!(conn >= 1, "connection ids start at 1, got {conn}");
     }
 
     /// The rejection path must not keep the lock either.
