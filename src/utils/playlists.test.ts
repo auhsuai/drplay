@@ -189,8 +189,9 @@ describe("playlists (Dexie-backed)", () => {
     window.addEventListener("playlists-updated", handler);
     const txnSpy = vi.spyOn(store, "transaction");
 
-    await removeTracksFromPlaylist(p.id, ["1", "3"]);
+    const ok = await removeTracksFromPlaylist(p.id, ["1", "3"]);
 
+    expect(ok).toBe(true);
     const fetched = nonNull(await getPlaylistById(p.id), "playlist");
     expect(fetched.tracks.map((t) => t.id)).toEqual(["2"]);
     expect(txnSpy).toHaveBeenCalledTimes(1);
@@ -211,8 +212,9 @@ describe("playlists (Dexie-backed)", () => {
     window.addEventListener("playlists-updated", handler);
     const txnSpy = vi.spyOn(store, "transaction");
 
-    await removeTracksFromPlaylist(p.id, []);
+    const ok = await removeTracksFromPlaylist(p.id, []);
 
+    expect(ok).toBe(true);
     expect(txnSpy).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
     const fetched = nonNull(await getPlaylistById(p.id), "playlist");
@@ -402,8 +404,9 @@ describe("playlists (Dexie-backed)", () => {
       .spyOn(store, "transaction")
       .mockRejectedValueOnce(new Error("boom"));
 
-    await removeTracksFromPlaylist(p.id, ["1"]);
+    const ok = await removeTracksFromPlaylist(p.id, ["1"]);
 
+    expect(ok).toBe(false);
     expect(showErrorToastMock).toHaveBeenCalledTimes(1);
     expect(showErrorToastMock).toHaveBeenCalledWith(
       "playlist.remove_track_error",

@@ -145,13 +145,13 @@ export function PlaylistView({
 
   // The playlist utils never reject (they log + toast internally), but keep
   // the second line of defense so a programming error can never surface as an
-  // unhandled rejection from a click handler.
-  const runRemoval = async (
-    removal: () => Promise<void>,
+  // unhandled rejection from a click handler. Returns null on failure.
+  const runRemoval = async <T,>(
+    removal: () => Promise<T>,
     failureLog: string,
-  ): Promise<void> => {
+  ): Promise<T | null> => {
     try {
-      await removal();
+      return await removal();
     } catch (err) {
       void captureError({
         level: "error",
@@ -159,14 +159,16 @@ export function PlaylistView({
         message: `${failureLog}: ${err instanceof Error ? err.message : String(err)}`,
       });
       showErrorToast(t("playlist.remove_error"));
+      return null;
     }
   };
 
-  const removeTrackById = (trackId: string): Promise<void> =>
-    runRemoval(
+  const removeTrackById = async (trackId: string): Promise<void> => {
+    await runRemoval(
       () => removeTrackFromPlaylist(playlistId, trackId),
       "remove-track-failed",
     );
+  };
 
   // Row menu passes the clicked track (enter with that row selected); the
   // header Select button enters with an empty selection (0 selected state).
@@ -209,10 +211,13 @@ export function PlaylistView({
     // Snapshot before the await: the playlist may reload while the write is
     // in flight, and the exit decision belongs to the click's own list.
     const removedAll = tracks.every((track) => selected.has(track.id));
-    await runRemoval(
+    const ok = await runRemoval(
       () => removeTracksFromPlaylist(playlistId, ids),
       "remove-tracks-failed",
     );
+    // Failure keeps the selection (and selection mode) so the user can retry;
+    // the data layer already surfaced the error toast.
+    if (ok !== true) return;
     if (removedAll) exitSelection();
     else setSelected(new Set());
   };

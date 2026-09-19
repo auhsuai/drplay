@@ -211,9 +211,9 @@ export async function removeTrackFromPlaylist(
 export async function removeTracksFromPlaylist(
   playlistId: string,
   trackIds: readonly string[],
-): Promise<void> {
+): Promise<boolean> {
   // Empty batch is a no-op: no transaction, no "playlists-updated" event.
-  if (trackIds.length === 0) return;
+  if (trackIds.length === 0) return true;
   try {
     await db.transaction("rw", db.playlists, async () => {
       const playlist = await db.playlists.get(playlistId);
@@ -229,6 +229,7 @@ export async function removeTracksFromPlaylist(
         window.dispatchEvent(new CustomEvent("playlists-updated"));
       }
     });
+    return true;
   } catch (e: unknown) {
     const { name, message } = classifyPlaylistError(e);
     await captureError({
@@ -237,6 +238,9 @@ export async function removeTracksFromPlaylist(
       message: `remove-tracks-failed: ${name}: ${message}`,
     });
     showErrorToast(i18n.t("playlist.remove_track_error"));
+    // The caller needs to know the write failed to keep the selection for a
+    // retry (the toast above is the user-facing surfacing).
+    return false;
   }
 }
 

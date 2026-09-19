@@ -133,6 +133,15 @@ const TRACK_2 = {
   parentName: "Folder Two",
 };
 
+const TRACK_3 = {
+  id: "t3",
+  title: "Track 3",
+  artist: "Artist 3",
+  streamUrl: "https://example.com/t3.mp3",
+  parentId: "parent-3",
+  parentName: "Folder Three",
+};
+
 const FULL_PLAYLIST: Playlist = {
   id: "pl-1",
   userEmail: "u@example.com",
@@ -144,6 +153,11 @@ const FULL_PLAYLIST: Playlist = {
 const TWO_TRACK_PLAYLIST: Playlist = {
   ...FULL_PLAYLIST,
   tracks: [TRACK, TRACK_2],
+};
+
+const THREE_TRACK_PLAYLIST: Playlist = {
+  ...FULL_PLAYLIST,
+  tracks: [TRACK, TRACK_2, TRACK_3],
 };
 
 function dispatchPlaylistEmpty() {
@@ -276,6 +290,9 @@ describe("PlaylistView playlist row menu + selection mode", () => {
   beforeEach(() => {
     // The real MoreMenu's playlists hook loads on open; feed it an empty list.
     mocks.getPlaylists.mockResolvedValue([]);
+    // Success path default: the view clears the selection when the batch
+    // write reports success (removeTracksFromPlaylist -> boolean).
+    mocks.removeTracksFromPlaylist.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -562,6 +579,80 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     expect(screen.getByTestId("queue-remove-selected").textContent).toContain(
       "Remove from Playlist",
     );
+  });
+
+  it("failed bulk remove keeps selection mode and the selection for retry", async () => {
+    mocks.getPlaylistById.mockResolvedValue(TWO_TRACK_PLAYLIST);
+    mocks.removeTracksFromPlaylist.mockResolvedValue(false);
+    renderView();
+    await screen.findByText("Track 1");
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Track 1" }));
+
+    fireEvent.click(screen.getByTestId("queue-remove-selected"));
+
+    await waitFor(() => {
+      expect(mocks.removeTracksFromPlaylist).toHaveBeenCalledWith("pl-1", [
+        "t1",
+      ]);
+    });
+    expect(screen.getByTestId("queue-selection-toolbar")).not.toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Track 1" })).toBeChecked();
+  });
+
+  it("removing every selected row ends in the valid empty state after the reload", async () => {
+    mocks.getPlaylistById.mockResolvedValue(TWO_TRACK_PLAYLIST);
+    mocks.removeTracksFromPlaylist.mockImplementation(() => {
+      mocks.getPlaylistById.mockResolvedValue({
+        ...TWO_TRACK_PLAYLIST,
+        tracks: [],
+      });
+      act(() => {
+        window.dispatchEvent(new CustomEvent("playlists-updated"));
+      });
+      return Promise.resolve(true);
+    });
+    renderView();
+    await screen.findByText("Track 1");
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    fireEvent.click(screen.getByTestId("queue-remove-selected"));
+
+    await waitFor(() => {
+      expect(screen.getByText("No tracks yet")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("queue-selection-toolbar")).toBeNull();
+    expect(screen.queryByText("Track 1")).toBeNull();
+  });
+
+  it("removing a subset keeps the remaining rows in their original order", async () => {
+    mocks.getPlaylistById.mockResolvedValue(THREE_TRACK_PLAYLIST);
+    mocks.removeTracksFromPlaylist.mockImplementation(() => {
+      mocks.getPlaylistById.mockResolvedValue({
+        ...THREE_TRACK_PLAYLIST,
+        tracks: [TRACK_2, TRACK_3],
+      });
+      act(() => {
+        window.dispatchEvent(new CustomEvent("playlists-updated"));
+      });
+      return Promise.resolve(true);
+    });
+    renderView();
+    await screen.findByText("Track 1");
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Track 1" }));
+
+    fireEvent.click(screen.getByTestId("queue-remove-selected"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Track 1")).toBeNull();
+    });
+    const titles = [...document.querySelectorAll("h4")].map(
+      (el) => el.textContent,
+    );
+    expect(titles).toEqual(["Track 2", "Track 3"]);
+    expect(screen.getByRole("checkbox", { name: "Track 2" })).not.toBeChecked();
   });
 
   it("normal mode no longer renders the hover remove (X) button; removal is menu-only", async () => {
