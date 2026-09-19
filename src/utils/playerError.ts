@@ -36,6 +36,13 @@ export function resetAdvanceGuard(): void {
   advanceGuard.formatErrorCount = 0;
   advanceGuard.windowStart = 0;
   advanceGuard.blockedAt = null;
+  // F8-3: the storm banner is the visible face of a blocked guard — dropping
+  // the block (manual action, session stop, cooldown over) must drop its stale
+  // banner too, or it orphans on screen claiming a failure that no longer
+  // blocks anything. Only the storm code is touched: every other error keeps
+  // its own clear rules (play event / track change).
+  const { errorInfo, setErrorInfo } = usePlayerStore.getState();
+  if (errorInfo?.code === "advance_stopped") setErrorInfo(null);
 }
 
 /**

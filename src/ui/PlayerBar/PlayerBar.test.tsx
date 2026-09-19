@@ -19,7 +19,10 @@ import { useAuthStore } from "../../store/authStore";
 import * as errorLog from "../../utils/errorLog";
 import { FAVORITES_UPDATED_EVENT } from "../../utils/favorites";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
-import { resetAdvanceGuard } from "../../utils/playerError";
+import {
+  guardAllowsAutoAdvance,
+  resetAdvanceGuard,
+} from "../../utils/playerError";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -1128,6 +1131,72 @@ describe("PlayerBar auto-advance storm guard (Fix I — queue cháy hết im l�
     expect(onNext).toHaveBeenCalledTimes(3);
     expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
     expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+
+  it("F8-3: hết cooldown 30s không có error mới → banner advance_stopped tự clear + guard re-arm", () => {
+    vi.useFakeTimers();
+    const onNext = vi.fn();
+    renderPlayer({ onNextTrack: onNext });
+
+    stormBlock(onNext);
+    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+  });
+
+  it("F8-3: error khác overwrite banner storm → hết cooldown KHÔNG clear lỗi khác", () => {
+    vi.useFakeTimers();
+    const onNext = vi.fn();
+    renderPlayer({ onNextTrack: onNext });
+
+    stormBlock(onNext);
+    act(() => {
+      fakeController._emit("error", NETWORK_ERROR);
+    });
+    expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
+    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
+  });
+
+  it("F8-3: manual action reset guard → banner storm clear ngay, không đợi cooldown", () => {
+    const onNext = vi.fn();
+    renderPlayer({ onNextTrack: onNext });
+
+    stormBlock(onNext);
+    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "n" });
+    });
+
+    expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
+  });
+
+  it("F8-3: unmount → timer storm được cleanup (không tự clear store sau khi bar gỡ)", () => {
+    vi.useFakeTimers();
+    const onNext = vi.fn();
+    const { unmount } = renderPlayer({ onNextTrack: onNext });
+
+    stormBlock(onNext);
+    expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
+
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(usePlayerStore.getState().errorInfo?.code).toBe("advance_stopped");
   });
 });
 

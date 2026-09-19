@@ -16,6 +16,7 @@ import {
   noteFormatError,
   resetAdvanceGuard,
   retryCurrentTrack,
+  STORM_COOLDOWN_MS,
 } from "../../utils/playerError";
 
 function PlayerBarImpl({
@@ -139,6 +140,25 @@ function PlayerBarImpl({
       unsubEnded();
     };
   }, [onNextTrack, audio]);
+
+  // F8-3: the storm banner must not outlive its cooldown. Arm one timer while
+  // the banner is up — a new storm error re-publishes errorInfo, which re-arms
+  // the timer, so the banner lives exactly STORM_COOLDOWN_MS since the last
+  // failure and then re-arms the guard (resetAdvanceGuard drops both the block
+  // and its banner). The cleanup cancels the timer whenever the banner goes
+  // away first (track change, successful play, another error) or on unmount,
+  // so a stale timer can never unblock/reset a newer storm.
+  useEffect(() => {
+    if (errorInfo?.code !== "advance_stopped") return;
+    const timer = setTimeout(() => {
+      if (usePlayerStore.getState().errorInfo?.code === "advance_stopped") {
+        resetAdvanceGuard();
+      }
+    }, STORM_COOLDOWN_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [errorInfo]);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel): renders the SAME error banner
   // as a real AudioController error via setErrorInfo only — it deliberately
