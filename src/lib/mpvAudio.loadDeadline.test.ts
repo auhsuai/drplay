@@ -81,6 +81,10 @@ function fireMpvEvent(
   fireTauri("mpv-event", { event, reason, error });
 }
 
+function fireProperty(name: string, data: unknown): void {
+  fireTauri("mpv-property", { name, data });
+}
+
 function commandNames(): string[] {
   return (tauriMocks.invoke.mock.calls as unknown as Array<[string]>).map(
     (call) => call[0],
@@ -256,6 +260,61 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
     await vi.advanceTimersByTimeAsync(3 * LOADFILE_DEADLINE_MS);
 
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("(F5-6) a pause requested inside the load window pins the loaded track paused; play then resumes it", async () => {
+    // Hold the proxy start open so playTrack is still inside the load window
+    // when the user pauses: no track exists yet, pause() has nowhere to land.
+    let resolveProxy: ((port: number) => void) | undefined;
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "stream_proxy_start") {
+        return new Promise<number>((resolve) => {
+          resolveProxy = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const play = ctrl.playTrack(trackA);
+    await vi.advanceTimersByTimeAsync(0); // spawn settles, proxy still pending
+    ctrl.pause(); // user pause while currentTrackId is still null
+    resolveProxy?.(PROXY_PORT);
+    await play;
+
+    // The load comes up pinned: never pause=no, the pause intent wins.
+    expect(mpvCommands()).toEqual([
+      ["set_property", "volume", "100"],
+      ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+      ["set_property", "pause", "yes"],
+    ]);
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(true);
+
+    tauriMocks.invoke.mockClear();
+    await ctrl.playTrack(trackA); // explicit play resumes — no reload
+    expect(mpvCommands()).toEqual([["set_property", "pause", "no"]]);
+  });
+
+  it("(F8-2) a sidecar restart after a user pause reloads the track paused (no forced play)", async () => {
+    await ctrl.playTrack(trackA);
+    ctrl.pause(); // user pause while the load chain is wedged (no file-loaded)
+    tauriMocks.invoke.mockClear();
+
+    await vi.advanceTimersByTimeAsync(LOADFILE_DEADLINE_MS);
+
+    expect(commandNames().filter((name) => name !== "mpv_command")).toEqual([
+      "mpv_shutdown",
+      "mpv_spawn",
+    ]);
+    expect(mpvCommands()).toEqual([
+      ["set_property", "volume", "100"],
+      ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
+      // The reload honors the pause intent — the old forced pause=no here is
+      // what dragged the store back to playing after the restart.
+      ["set_property", "pause", "yes"],
+    ]);
+    // A real mpv answers the pin with pause=true: the store must stay false.
+    fireProperty("pause", true);
+    expect(storeMocks.setIsPlaying).not.toHaveBeenCalledWith(true);
   });
 });
 

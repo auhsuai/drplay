@@ -74,6 +74,15 @@ export class MpvAudioController {
   private currentTrackId: string | null = null;
   private playbackFinished = true;
   private paused = false;
+  // Why (F5-6/F8-2): pause() is fire-and-forget and no-ops before beginTrack,
+  // so a pause requested inside the load window (or before a deadline sidecar
+  // restart) would leave no trace — beginTrack then forced mpv back to play
+  // and the pause=false push dragged the store to playing. This latch records
+  // "the user asked to pause" until an explicit play request supersedes it.
+  // The store is deliberately NOT the source: playbackFailure/end-file set
+  // isPlaying=false with no user pause, and a retry (retryCurrentTrack) must
+  // still start playing, not resume pinned.
+  private pauseIntent = false;
   private currentTime = 0;
   private duration = 0;
   private cacheRanges: MpvRange[] = [];
@@ -525,15 +534,19 @@ export class MpvAudioController {
     // switch made while mpv is paused would start the new track frozen, and a
     // lost `pause` push (the property-push class TimePosWatchdog covers) meant
     // the cached flag below never learned the real state — the new track then
-    // stayed silent while the app believed it played. Always clear the flag
-    // for a newly loaded track: a same-track resume never reaches this path.
-    this.paused = false;
+    // stayed silent while the app believed it played. Clear the flag for a
+    // newly loaded track — EXCEPT when the user paused inside the load window
+    // or before a deadline sidecar restart: that intent is consumed here, so
+    // the reload comes up pinned instead of erasing the pause (F5-6/F8-2).
+    const keepPaused = this.pauseIntent;
+    this.pauseIntent = false;
+    this.paused = keepPaused;
     void this.sendCommand([
       MPV_COMMANDS.setProperty,
       MPV_PROPERTY_ARGS.pause,
-      MPV_BOOL.no,
+      keepPaused ? MPV_BOOL.yes : MPV_BOOL.no,
     ]).catch((e: unknown) => {
-      this.logWarn(`resume-on-switch-failed: ${describeError(e)}`);
+      this.logWarn(`initial-pause-apply-failed: ${describeError(e)}`);
     });
   }
 
@@ -551,6 +564,9 @@ export class MpvAudioController {
 
   public async playTrack(track: Track, startTime?: number): Promise<void> {
     const epoch = this.lifecycleEpoch;
+    // Any explicit play request supersedes a pending pause intent — including
+    // a retry after a failure, where the store is false without a user pause.
+    this.pauseIntent = false;
     try {
       if (this.currentTrackId === track.id && !this.playbackFinished) {
         // Same-track replay: paused -> resume only; playing -> no-op (web parity).
@@ -610,16 +626,24 @@ export class MpvAudioController {
       void this.playTrack(this.lastTrack);
       return;
     }
+    const resuming = this.paused;
+    // Keep the latch in step with the command sent: a toggle that pauses is a
+    // pause intent for the next load, a resume supersedes an older one.
+    this.pauseIntent = !resuming;
     void this.sendCommand([
       MPV_COMMANDS.setProperty,
       MPV_PROPERTY_ARGS.pause,
-      this.paused ? MPV_BOOL.no : MPV_BOOL.yes,
+      resuming ? MPV_BOOL.no : MPV_BOOL.yes,
     ]).catch((e: unknown) => {
       this.logWarn(`toggle-play-failed: ${describeError(e)}`);
     });
   }
 
   public pause(): void {
+    // Record the intent BEFORE the no-op guards: in the load window there is
+    // no track yet, so the request has nowhere to land until beginTrack —
+    // dropping it here is exactly how the user's pause was swallowed (F5-6).
+    this.pauseIntent = true;
     if (!this.currentTrackId || this.playbackFinished) return;
     void this.sendCommand([
       MPV_COMMANDS.setProperty,
@@ -690,6 +714,7 @@ export class MpvAudioController {
     this.currentTrackId = null;
     this.playbackFinished = true;
     this.paused = false;
+    this.pauseIntent = false;
     this.currentTime = 0;
     this.duration = 0;
     this.cacheRanges = [];
