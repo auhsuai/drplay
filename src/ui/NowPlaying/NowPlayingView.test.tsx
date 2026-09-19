@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
 import en from "../../locales/en/translation.json";
 import { NowPlayingView } from "./NowPlayingView";
+import {
+  guardAllowsAutoAdvance,
+  noteFormatError,
+  resetAdvanceGuard,
+} from "../../utils/playerError";
 
 vi.mock("react-i18next", () => {
   const resolveKey = (key: string): string | undefined => {
@@ -95,6 +100,14 @@ function baseProps() {
   };
 }
 
+function tripAdvanceGuard(): void {
+  resetAdvanceGuard();
+  const now = Date.now();
+  noteFormatError(now);
+  noteFormatError(now);
+  noteFormatError(now);
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -160,5 +173,43 @@ describe("NowPlayingView full-screen error surface (P2-12-6)", () => {
 
     expect(screen.queryByText(en.player.network_interrupted)).toBeNull();
     expect(screen.queryByText(en.player.format_error)).toBeNull();
+  });
+});
+
+describe("NowPlayingView storm guard parity (F7-7)", () => {
+  afterEach(() => {
+    resetAdvanceGuard();
+    cleanup();
+  });
+
+  it("nút next/prev reset advance guard như PlayerBar (cùng hành vi manual)", () => {
+    const props = baseProps();
+    render(<NowPlayingView {...props} currentTrack={makeTrack()} />);
+
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: en.player.next }));
+    expect(props.onNextTrack).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: en.player.prev }));
+    expect(props.onPrevTrack).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+  });
+
+  it("nút play/pause (không có lỗi) reset advance guard", () => {
+    const props = baseProps();
+    render(<NowPlayingView {...props} currentTrack={makeTrack()} />);
+
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: en.player.play }));
+    expect(props.onTogglePlay).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 });

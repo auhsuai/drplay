@@ -10,6 +10,11 @@ import type { PlayerLifecycleDeps } from "./usePlayerLifecycle";
 import { set as idbSet } from "../../db/kv";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { usePlayerStore } from "../../store/playerStore";
+import {
+  guardAllowsAutoAdvance,
+  noteFormatError,
+  resetAdvanceGuard,
+} from "../../utils/playerError";
 
 vi.mock("tauri-plugin-keepawake-api", () => ({
   start: vi.fn(() => Promise.resolve()),
@@ -164,6 +169,28 @@ describe("usePlayerLifecycle player-stop hard reset", () => {
     expect(deps.setOriginalQueue).toHaveBeenCalledWith([]);
     expect(deps.setPlaybackQueue).toHaveBeenCalledWith([]);
     expect(deps.resetBrokenTracks).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("UPL-4 (F8-4): player-stop hard resets the advance storm guard — session sau không kế thừa block", () => {
+    resetAdvanceGuard();
+    const now = Date.now();
+    noteFormatError(now);
+    noteFormatError(now);
+    expect(noteFormatError(now)).toBe(true);
+    expect(guardAllowsAutoAdvance(now)).toBe(false);
+
+    const deps = makeDeps(false);
+    const { unmount } = renderHook(() => {
+      usePlayerLifecycle(deps);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event(PLAYER_STOP_EVENT));
+    });
+
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
 
     unmount();
   });

@@ -22,6 +22,7 @@ import type { TabKey } from "../utils/driveConstants";
 
 import { usePlayerStore } from "../store/playerStore";
 import { useMediaControls } from "./useMediaControls";
+import { resetAdvanceGuard } from "../utils/playerError";
 
 export { PLAYER_STOP_EVENT } from "./player/usePlayerLifecycle";
 
@@ -230,12 +231,23 @@ export const usePlayer = (accessToken: string | null) => {
   // existing player handlers. The native SMTC session lives in Rust
   // (src-tauri/src/media_controls.rs) — this hook only routes its events and
   // pushes state snapshots, so queue/playback logic stays single-sourced here.
+  // F7-7 parity: media keys are manual transport entry points, same as the
+  // PlayerBar buttons/keyboard — they must reset the storm guard before
+  // delegating. Auto-advance calls handleNextTrack directly (never through
+  // here), so it stays guarded. Do NOT move the reset into the raw handlers.
   useMediaControls({
     onTogglePlay: () => {
+      resetAdvanceGuard();
       void handleTogglePlay();
     },
-    onNext: handleNextTrack,
-    onPrev: handlePrevTrack,
+    onNext: () => {
+      resetAdvanceGuard();
+      handleNextTrack();
+    },
+    onPrev: () => {
+      resetAdvanceGuard();
+      handlePrevTrack();
+    },
   });
 
   return {

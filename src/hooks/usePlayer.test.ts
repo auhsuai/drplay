@@ -8,6 +8,11 @@ import { showErrorToast } from "../utils/simpleToast";
 import { metadataCache, getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
 import { getValidToken } from "../utils/apiClient";
+import {
+  guardAllowsAutoAdvance,
+  noteFormatError,
+  resetAdvanceGuard,
+} from "../utils/playerError";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -117,6 +122,14 @@ function makeTrack(id: string): Track {
   };
 }
 
+function tripAdvanceGuard(): void {
+  resetAdvanceGuard();
+  const now = Date.now();
+  noteFormatError(now);
+  noteFormatError(now);
+  noteFormatError(now);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   usePlayerStore.setState({
@@ -164,6 +177,44 @@ describe("usePlayer media controls integration", () => {
       mediaControlsMock.options?.onTogglePlay();
     });
     expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+
+  it("F7-7: media key next reset advance guard (parity PlayerBar)", () => {
+    renderHook(() => usePlayer("test-token"));
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
+
+    act(() => {
+      mediaControlsMock.options?.onNext();
+    });
+
+    expect(queueMock.handleNextTrack).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+  });
+
+  it("F7-7: media key prev reset advance guard (parity PlayerBar)", () => {
+    renderHook(() => usePlayer("test-token"));
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
+
+    act(() => {
+      mediaControlsMock.options?.onPrev();
+    });
+
+    expect(queueMock.handlePrevTrack).toHaveBeenCalledTimes(1);
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+  });
+
+  it("F7-7: media key play/pause reset advance guard (parity PlayerBar)", () => {
+    renderHook(() => usePlayer("test-token"));
+    tripAdvanceGuard();
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
+
+    act(() => {
+      mediaControlsMock.options?.onTogglePlay();
+    });
+
+    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 
   it("unmount usePlayer không throw (hook native vắng mặt trong jsdom)", () => {

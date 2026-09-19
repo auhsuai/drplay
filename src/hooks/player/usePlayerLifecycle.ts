@@ -9,6 +9,7 @@ import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
+import { resetAdvanceGuard } from "../../utils/playerError";
 
 export const PLAYER_STOP_EVENT = "player-stop";
 
@@ -84,6 +85,10 @@ export function usePlayerLifecycle({
   // Cleanup on logout
   useEffect(() => {
     const handleStop = () => {
+      // F8-4: the storm guard is module-scope state — a fresh session must
+      // not inherit the previous session's block/counter (the store is
+      // reset below, the guard would otherwise survive the logout).
+      resetAdvanceGuard();
       // B3: release the real audio elements (buffers, src, pending retry)
       // before clearing the store state.
       AudioController.getInstance().release();

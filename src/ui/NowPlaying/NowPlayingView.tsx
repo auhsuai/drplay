@@ -1,10 +1,10 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import type { PlayMode, Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
-import { retryCurrentTrack } from "../../utils/playerError";
+import { resetAdvanceGuard, retryCurrentTrack } from "../../utils/playerError";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { SeekBar } from "../components/SeekBar";
@@ -61,6 +61,25 @@ export const NowPlayingView = memo(function NowPlayingView({
       setIsBuffering(buffering);
     });
   }, []);
+
+  // F7-7 parity: the full-screen transport buttons are manual transport
+  // actions, exactly like PlayerBar's (which reset the shared storm guard in
+  // its own wrappers). Wrap locally and hand the wrapped versions down —
+  // retryCurrentTrack already resets the guard it shares.
+  const handleManualTogglePlay = useCallback(() => {
+    resetAdvanceGuard();
+    onTogglePlay();
+  }, [onTogglePlay]);
+
+  const handleManualNext = useCallback(() => {
+    resetAdvanceGuard();
+    onNextTrack();
+  }, [onNextTrack]);
+
+  const handleManualPrev = useCallback(() => {
+    resetAdvanceGuard();
+    onPrevTrack();
+  }, [onPrevTrack]);
 
   if (!currentTrack) {
     return (
@@ -169,9 +188,9 @@ export const NowPlayingView = memo(function NowPlayingView({
                 isDownloading={isDownloading}
                 hasError={errorInfo !== null}
                 onRetry={retryCurrentTrack}
-                onTogglePlay={onTogglePlay}
-                onNextTrack={onNextTrack}
-                onPrevTrack={onPrevTrack}
+                onTogglePlay={handleManualTogglePlay}
+                onNextTrack={handleManualNext}
+                onPrevTrack={handleManualPrev}
                 playMode={playMode}
                 onTogglePlayMode={onTogglePlayMode}
               />
