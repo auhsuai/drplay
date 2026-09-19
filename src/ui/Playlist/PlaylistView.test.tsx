@@ -410,7 +410,6 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     // The header play-all button is replaced by the selection toolbar.
     expect(document.querySelector("button.w-14.h-14")).toBeNull();
     // Per-row single actions are hidden while selecting.
-    expect(screen.queryByTitle("Remove from Playlist")).toBeNull();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
 
     fireEvent.click(screen.getByText("Track 1"));
@@ -535,37 +534,35 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     expect(screen.queryByTestId("queue-selection-toolbar")).toBeNull();
     expect(screen.queryByRole("checkbox", { name: "Track 1" })).toBeNull();
     expect(document.querySelector("button.w-14.h-14")).not.toBeNull();
-    expect(screen.getByTitle("Remove from Playlist")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "More actions" })).not.toBeNull();
   });
 
-  it("the hover remove (X) button still removes the track from the playlist", async () => {
+  it("normal mode no longer renders the hover remove (X) button; removal is menu-only", async () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     renderView();
     await screen.findByText("Track 1");
 
-    fireEvent.click(screen.getByTitle("Remove from Playlist"));
-
-    await waitFor(() => {
-      expect(mocks.removeTrackFromPlaylist).toHaveBeenCalledWith("pl-1", "t1");
-    });
-    expect(mocks.removeTracksFromPlaylist).not.toHaveBeenCalled();
+    expect(screen.queryByTitle("Remove from Playlist")).toBeNull();
+    expect(mocks.removeTrackFromPlaylist).not.toHaveBeenCalled();
   });
 });
 
-// P2-13a-7: the row remove button is hidden until hover; keyboard focus must
-// reveal it (focus:), otherwise focus is invisible.
-describe("PlaylistView hover-reveal remove control (P2-13a-7)", () => {
+// P2-13a-7: the row ⋯ control is hidden until hover; keyboard focus must
+// reveal it (focus-within:), otherwise focus is invisible.
+describe("PlaylistView hover-reveal row menu control (P2-13a-7)", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
   });
 
-  it("reveals the row remove button when it receives focus", async () => {
+  it("reveals the ⋯ row control when it receives focus", async () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     renderView();
     await screen.findByText("Track 1");
 
-    const remove = screen.getByTitle("Remove from Playlist");
-    expect(remove.className).toContain("focus:opacity-100");
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    const reveal = trigger.closest('[class*="focus-within:opacity-100"]');
+    expect(reveal).not.toBeNull();
+    expect(reveal?.className).toContain("opacity-0");
   });
 });

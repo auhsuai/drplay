@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Track } from "../../types";
-import { Music, Play, X, Trash2, Camera } from "lucide-react";
+import { Music, Play, Trash2, Camera } from "lucide-react";
 import type { Playlist } from "../../utils/playlists";
 import {
   getPlaylistById,
@@ -167,11 +167,6 @@ export function PlaylistView({
       () => removeTrackFromPlaylist(playlistId, trackId),
       "remove-track-failed",
     );
-
-  const handleRemove = (e: React.MouseEvent, trackId: string) => {
-    e.stopPropagation();
-    void removeTrackById(trackId);
-  };
 
   const enterSelection = (trackId: string) => {
     setSelectionMode(true);
@@ -496,38 +491,27 @@ export function PlaylistView({
                     </div>
 
                     {!selectionMode && (
-                      <>
-                        <button
-                          onClick={(e) => {
-                            handleRemove(e, track.id);
+                      <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                        <MoreMenu
+                          variant="playlist"
+                          track={track}
+                          forceOpen={isContextTarget}
+                          anchorPoint={
+                            isContextTarget
+                              ? { x: contextMenu.x, y: contextMenu.y }
+                              : null
+                          }
+                          onClose={() => {
+                            setContextMenu(null);
                           }}
-                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all text-gray-400 hover:text-red-500"
-                          title={t("remove_from_playlist")}
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                        <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                          <MoreMenu
-                            variant="playlist"
-                            track={track}
-                            forceOpen={isContextTarget}
-                            anchorPoint={
-                              isContextTarget
-                                ? { x: contextMenu.x, y: contextMenu.y }
-                                : null
-                            }
-                            onClose={() => {
-                              setContextMenu(null);
-                            }}
-                            onRemoveFromPlaylist={() => {
-                              void removeTrackById(track.id);
-                            }}
-                            onSelectMultiple={() => {
-                              enterSelection(track.id);
-                            }}
-                          />
-                        </div>
-                      </>
+                          onRemoveFromPlaylist={() => {
+                            void removeTrackById(track.id);
+                          }}
+                          onSelectMultiple={() => {
+                            enterSelection(track.id);
+                          }}
+                        />
+                      </div>
                     )}
                   </div>
                 </div>
