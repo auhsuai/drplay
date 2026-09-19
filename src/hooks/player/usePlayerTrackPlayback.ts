@@ -19,6 +19,13 @@ import type { TabKey } from "../../utils/driveConstants";
 import { usePlayerStore } from "../../store/playerStore";
 import { commitIsPlaying } from "../../store/playbackCommit";
 import { AudioController } from "../../lib/AudioController";
+import {
+  abortCurrentIntent,
+  beginIntent,
+  commitIfCurrent,
+  getCurrentIntentSignal,
+  type IntentHandle,
+} from "./playbackIntent";
 
 // Why: fallback for the deferred metadata fetch — >> typical first-audio
 // (<2s on a healthy network) so it never fires early on a normal play,
@@ -49,40 +56,46 @@ export function usePlayerTrackPlayback(
     })),
   );
 
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // R3.1a: the play attempt's identity/abort lifecycle lives in the playback
+  // intent controller now (supersede, epoch, abort). This ref only lets the
+  // hook retire the attempt IT still owns on unmount — end() is a no-op for a
+  // handle a newer intent already superseded.
+  const intentRef = useRef<IntentHandle | null>(null);
   // P1 pre-play gate: fileId of the most recently BLOCKED track. A second
   // consecutive click on the same id forces playback; any other user click
   // (different track or unflagged) resets it.
   const blockedStreamRef = useRef<string | undefined>(undefined);
 
-  const createAbortSignal = (): AbortSignal => {
-    abortControllerRef.current?.abort();
-    const ctrl = new AbortController();
-    abortControllerRef.current = ctrl;
-    return ctrl.signal;
+  const beginPlayIntent = (): IntentHandle => {
+    const intent = beginIntent("play");
+    intentRef.current = intent;
+    return intent;
   };
 
-  // Why: isDownloading is shared by every attempt; a superseded attempt must
-  // only clear the spinner it still owns (same controller in the ref) — a
-  // later attempt has already set its own state on the same flag.
-  const isCurrentAttempt = (signal: AbortSignal) =>
-    abortControllerRef.current?.signal === signal;
+  // Why: the controller grants a new play intent by superseding the previous
+  // one (same swap the old AbortController ref did), so callers get the fresh
+  // signal directly. Kept as the hook's public entry for attempt-supersede
+  // tests and any resume-style caller that only needs the signal.
+  const createAbortSignal = (): AbortSignal => beginPlayIntent().abortSignal;
 
-  // Why: abort the owning attempt WITHOUT swapping the ref to a fresh
-  // controller. The aborted attempt stays the ref's current one, so its
-  // owner-checked cleanup still clears the spinner it set (a plain
-  // createAbortSignal would hand ownership to an empty controller and leak
-  // the spinner). Used by handleTogglePlay's user-pause path.
-  const abortCurrentAttempt = () => abortControllerRef.current?.abort();
+  // Why: isDownloading is shared by every attempt; a superseded attempt must
+  // only clear the spinner it still owns (same signal as the current intent) —
+  // a later attempt has already set its own state on the same flag.
+  const isCurrentAttempt = (signal: AbortSignal): boolean =>
+    getCurrentIntentSignal() === signal;
 
   useEffect(() => {
     const handleStop = () => {
-      abortControllerRef.current?.abort();
+      abortCurrentIntent();
     };
     window.addEventListener(PLAYER_STOP_EVENT, handleStop);
     return () => {
       window.removeEventListener(PLAYER_STOP_EVENT, handleStop);
-      abortControllerRef.current?.abort();
+      abortCurrentIntent();
+      // Retire the attempt this hook still owns: a pending token await must
+      // not leave a module-global user intent guarding system lanes after the
+      // hook is gone (its commit is already blocked by the abort).
+      intentRef.current?.end();
       // The spinner's owner is gone; a later attempt will set its own state.
       setIsDownloading(false);
     };
@@ -146,7 +159,8 @@ export function usePlayerTrackPlayback(
         );
       }
 
-      const signal = createAbortSignal();
+      const intent = beginPlayIntent();
+      const signal = intent.abortSignal;
 
       commitIsPlaying("intent", false);
       setIsDownloading(true);
@@ -186,9 +200,15 @@ export function usePlayerTrackPlayback(
         const streamUrl =
           prefetchedUrl ||
           buildStreamUrl(targetTrack.id, targetTrack.originalName);
-        setCurrentTrack({ ...targetTrack, streamUrl });
-        triggerReload();
-        commitIsPlaying("intent", true);
+        // R3.1a: this is the play intent's commit point — a superseded attempt
+        // (newer user intent) or an epoch-invalidated one (delete/logout) must
+        // not touch store/engine/recordPlay even if its token resolves late.
+        const committed = commitIfCurrent(intent.id, () => {
+          setCurrentTrack({ ...targetTrack, streamUrl });
+          triggerReload();
+          commitIsPlaying("intent", true);
+        });
+        if (!committed) return;
 
         recordPlay(targetTrack).catch((e: unknown) => {
           void logUsePlayer("warn", `recordPlay-fail: ${errMsg(e)}`);
@@ -238,7 +258,7 @@ export function usePlayerTrackPlayback(
           },
           // Why: a failed playback must not fetch display-only metadata for a
           // dead track — drop the pending fetch instead of wasting quota;
-          // track change (createAbortSignal aborts the previous signal) and
+          // track change (a superseding intent aborts the previous signal) and
           // unmount (cleanup effect aborts) drop the stale track's fetch too.
           // Error/abort/track-change exit: the optimistic loading state must
           // not outlive the play attempt it belonged to.
@@ -274,7 +294,7 @@ export function usePlayerTrackPlayback(
           },
           // Why: a failed playback must not prefetch for a dead track — the
           // next track's own play handles its own prefetch; track change
-          // (createAbortSignal aborts the previous signal) and unmount
+          // (a superseding intent aborts the previous signal) and unmount
           // (cleanup effect aborts) both land here — the stale track never
           // prefetches and its listeners are freed.
           onDrop: () => {},
@@ -289,6 +309,11 @@ export function usePlayerTrackPlayback(
           ),
         );
         setIsDownloading(false);
+      } finally {
+        // The intent's async work is over — the deferred metadata/SW
+        // continuations keep using its signal, but a system lane may start
+        // again (the user-intent guard only covers the in-flight window).
+        intent.end();
       }
     },
     [
@@ -305,6 +330,5 @@ export function usePlayerTrackPlayback(
     handlePlayTrack,
     createAbortSignal,
     isCurrentAttempt,
-    abortCurrentAttempt,
   };
 }

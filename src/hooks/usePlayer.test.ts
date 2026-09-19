@@ -13,6 +13,7 @@ import {
   noteFormatError,
   resetAdvanceGuard,
 } from "../utils/playerError";
+import { __resetPlaybackIntentForTests } from "./player/playbackIntent";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -123,6 +124,7 @@ function tripAdvanceGuard(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetPlaybackIntentForTests();
   usePlayerStore.setState({
     currentTrack: null,
     loadNonce: 0,

@@ -8,6 +8,12 @@ import { usePlayerStore } from "../../store/playerStore";
 import { getValidToken } from "../../utils/apiClient";
 import { recordPlay } from "../../utils/history";
 import { showErrorToast } from "../../utils/simpleToast";
+import { stopPlaybackIfTrack } from "../../utils/stopPlayback";
+import {
+  __resetPlaybackIntentForTests,
+  beginIntent,
+  hasActiveUserIntent,
+} from "./playbackIntent";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -56,7 +62,7 @@ vi.mock("../../utils/errorLog", () => ({
 
 vi.mock("../../lib/AudioController", () => ({
   AudioController: {
-    getInstance: () => ({ on: vi.fn(() => () => {}) }),
+    getInstance: () => ({ on: vi.fn(() => () => {}), release: vi.fn() }),
   },
 }));
 
@@ -100,6 +106,7 @@ function beginPlay(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetPlaybackIntentForTests();
   vi.mocked(getValidToken).mockResolvedValue("test-token");
   usePlayerStore.setState({
     currentTrack: null,
@@ -280,5 +287,71 @@ describe("usePlayerTrackPlayback — isDownloading owner check (attempt supersed
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("usePlayerTrackPlayback — R3.1a intent controller (contracts a/b)", () => {
+  it("(a) system intent during the token await does not invalidate the user play intent — commit still lands", async () => {
+    const token = deferred<string | null>();
+    vi.mocked(getValidToken).mockReturnValue(token.promise);
+    const { result } = renderPlayback();
+
+    const playPromise = beginPlay(result, makeTrack("t1"));
+    expect(hasActiveUserIntent()).toBe(true);
+
+    // Auto-advance tries to start while the user's click is awaiting its token.
+    let system: ReturnType<typeof beginIntent> | undefined;
+    act(() => {
+      system = beginIntent("auto-advance");
+    });
+    expect(system?.isCurrent()).toBe(false);
+    expect(system?.abortSignal.aborted).toBe(false);
+
+    await act(async () => {
+      token.resolve("fresh-token");
+      await playPromise;
+    });
+
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("t1");
+    expect(recordPlay).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t1" }),
+    );
+    expect(hasActiveUserIntent()).toBe(false);
+  });
+
+  it("(b) delete/stop of the loaded track during an in-flight attempt → no resurrect (SC3)", async () => {
+    const token = deferred<string | null>();
+    vi.mocked(getValidToken).mockReturnValue(token.promise);
+    const { result } = renderPlayback();
+
+    // The file to delete is the loaded track and the user navigates onto it
+    // again (next/prev wrap / queue click), so stopPlaybackIfTrack's guard
+    // passes while the attempt is still awaiting the token.
+    usePlayerStore.setState({ currentTrack: makeTrack("t1"), isPlaying: true });
+    let playPromise: Promise<void> | undefined;
+    act(() => {
+      playPromise = result.current.handlePlayTrack(
+        makeTrack("t1"),
+        undefined,
+        true,
+      );
+    });
+    expect(usePlayerStore.getState().isDownloading).toBe(true);
+
+    act(() => {
+      stopPlaybackIfTrack("t1");
+    });
+
+    await act(async () => {
+      token.resolve("fresh-token");
+      await playPromise;
+    });
+
+    const state = usePlayerStore.getState();
+    expect(state.currentTrack).toBeNull();
+    expect(state.isPlaying).toBe(false);
+    expect(state.isDownloading).toBe(false);
+    expect(recordPlay).not.toHaveBeenCalled();
+    expect(hasActiveUserIntent()).toBe(false);
   });
 });

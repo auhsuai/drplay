@@ -25,6 +25,12 @@ import { usePlayerStore } from "../store/playerStore";
 import { commitIsPlaying } from "../store/playbackCommit";
 import { useMediaControls } from "./useMediaControls";
 import { resetAdvanceGuard } from "../utils/playerError";
+import {
+  abortCurrentIntent,
+  beginIntent,
+  commitIfCurrent,
+  type IntentHandle,
+} from "./player/playbackIntent";
 
 export { PLAYER_STOP_EVENT } from "./player/usePlayerLifecycle";
 
@@ -84,11 +90,12 @@ export const usePlayer = (accessToken: string | null) => {
   );
 
   const handlePlayTrackRef = useRef<typeof handlePlayTrack>(undefined);
-  // R5b: marker for the in-flight resume attempt owned by handleTogglePlay.
-  // Set while its token fetch is pending, cleared when it settles — the
-  // else-branch pause uses it to abort exactly that attempt (never a
-  // play-attempt owned by handlePlayTrack).
-  const resumeSignalRef = useRef<AbortSignal | null>(null);
+  // R5b/R3.1a: handle of the in-flight RESUME intent owned by
+  // handleTogglePlay. Kept while its token fetch is pending, cleared when it
+  // settles — the else-branch pause uses it to abort exactly that attempt
+  // (never a play-attempt owned by handlePlayTrack: a newer intent already
+  // made that handle non-current).
+  const resumeIntentRef = useRef<IntentHandle | null>(null);
   const stableHandlePlayTrack = useCallback(
     (
       track: Track,
@@ -144,12 +151,9 @@ export const usePlayer = (accessToken: string | null) => {
     resetBrokenTracks,
   });
 
-  const {
-    handlePlayTrack,
-    createAbortSignal,
-    isCurrentAttempt,
-    abortCurrentAttempt,
-  } = usePlayerTrackPlayback(accessToken, { updateQueueContext });
+  const { handlePlayTrack } = usePlayerTrackPlayback(accessToken, {
+    updateQueueContext,
+  });
 
   useEffect(() => {
     handlePlayTrackRef.current = handlePlayTrack;
@@ -158,8 +162,11 @@ export const usePlayer = (accessToken: string | null) => {
   const handleTogglePlay = useCallback(async () => {
     if (currentTrack) {
       if (!currentTrack.streamUrl && !isPlaying) {
-        const signal = createAbortSignal();
-
+        // R3.1a: the resume attempt is a USER intent — it supersedes any older
+        // in-flight attempt and is itself superseded/aborted by a newer one or
+        // by an epoch bump (delete/logout).
+        const intent = beginIntent("resume");
+        const signal = intent.abortSignal;
         const prefetchedUrl = getPrefetchedStreamUrl(currentTrack.id);
 
         if (prefetchedUrl) {
@@ -168,11 +175,12 @@ export const usePlayer = (accessToken: string | null) => {
           );
           triggerReload();
           commitIsPlaying("intent", true);
+          intent.end();
           return;
         }
 
         setIsDownloading(true);
-        resumeSignalRef.current = signal;
+        resumeIntentRef.current = intent;
         try {
           const freshToken = await getValidToken(false, signal);
 
@@ -190,34 +198,39 @@ export const usePlayer = (accessToken: string | null) => {
             currentTrack.originalName,
           );
 
-          setCurrentTrack((prev) =>
-            prev ? { ...prev, streamUrl: url } : prev,
-          );
-          triggerReload();
-          commitIsPlaying("intent", true);
+          commitIfCurrent(intent.id, () => {
+            setCurrentTrack((prev) =>
+              prev ? { ...prev, streamUrl: url } : prev,
+            );
+            triggerReload();
+            commitIsPlaying("intent", true);
+          });
         } catch (e: unknown) {
           if (isAbortError(e)) return;
           void logUsePlayer("error", `stream-url-resume-fail: ${errMsg(e)}`);
           showErrorToast(t("player.playback_failed"));
         } finally {
-          if (resumeSignalRef.current === signal)
-            resumeSignalRef.current = null;
+          if (resumeIntentRef.current === intent)
+            resumeIntentRef.current = null;
           // Owner-check, not `!signal.aborted`: a user-pause abort keeps this
-          // attempt as the ref's owner (abortCurrentAttempt does not swap it),
+          // attempt current (abortCurrentIntent does not retire the handle),
           // so the spinner it set must still be cleared; a superseded attempt
           // skips this and leaves the newer attempt's spinner alone.
-          if (isCurrentAttempt(signal)) setIsDownloading(false);
+          if (intent.isCurrent()) setIsDownloading(false);
+          intent.end();
         }
       } else {
         const { isPlaying: currentIsPlaying } = usePlayerStore.getState();
         // R5b: a pause (store is playing) while a resume attempt is still
         // awaiting its token must cancel that attempt first — otherwise the
         // late token commits URL + setIsPlaying(true) and overrides the
-        // user's pause. Play-intent toggles leave the attempt running.
+        // user's pause. Play-intent toggles leave the attempt running: pause
+        // stays a synchronous store commit with the narrow H3 bind (killing
+        // an in-flight play attempt is the F5-6/A12 lane, not this slice).
         if (currentIsPlaying) {
-          const resumeSignal = resumeSignalRef.current;
-          if (resumeSignal && isCurrentAttempt(resumeSignal)) {
-            abortCurrentAttempt();
+          const resumeIntent = resumeIntentRef.current;
+          if (resumeIntent?.isCurrent()) {
+            abortCurrentIntent();
           }
         }
         commitIsPlaying("intent", !currentIsPlaying);
@@ -229,9 +242,6 @@ export const usePlayer = (accessToken: string | null) => {
     setIsDownloading,
     setCurrentTrack,
     isPlaying,
-    createAbortSignal,
-    isCurrentAttempt,
-    abortCurrentAttempt,
     t,
   ]);
 
