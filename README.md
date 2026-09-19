@@ -82,18 +82,18 @@ npm test               # unit tests (vitest, 960+ passing)
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  Frontend · React 19 + TypeScript (src/)          │  UI, hooks, utils, Dexie DB
+│  Frontend · React 19 + TypeScript (src/)         │  UI, hooks, utils, Dexie DB
 └───────┬──────────────────────────────┬───────────┘
         │ Tauri IPC (invoke)           │ /drive-stream/ (service worker)
 ┌───────▼──────────────────┐   ┌───────▼──────────────────────────┐
-│  Backend · Rust (src-    │   │  Service worker (public/sw.js)    │
+│  Backend · Rust (src-    │   │  Service worker (public/sw.js)   │
 │  tauri/) — OAuth, key-   │   │  proxies audio to Google Drive   │
 │  ring, covers, tray      │   └───────────────┬──────────────────┘
 └───────┬──────────────────┘                   │
         │ HTTPS (Google APIs only — enforced by CSP)
 ┌───────▼──────────────────────────────────────┐
-│           Google Drive (your account)         │
-└───────────────────────────────────────────────┘
+│           Google Drive (your account)        │
+└──────────────────────────────────────────────┘
 ```
 
 - **Frontend** — React 19 + Vite + TypeScript; local data in **IndexedDB (Dexie)**; virtualized lists for large folders
