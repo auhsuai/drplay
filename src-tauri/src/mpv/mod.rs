@@ -14,6 +14,7 @@
 //! resets on respawn, so it alone cannot tell the old connection's events
 //! apart (B1/RC-1). Consumers that ignore the fields keep working.
 
+mod handle;
 mod ipc;
 mod job;
 mod process;
@@ -23,6 +24,8 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
+use handle::{mpv_state, running_ipc_from_state, MpvHandle};
+pub(crate) use handle::mpv_kill_sync_best_effort;
 use ipc::{EventSink, IpcMessage, MpvIpc};
 
 /// Properties observed right after spawn as `(observe id, mpv property name)`.
@@ -35,37 +38,8 @@ const OBSERVED_PROPERTIES: &[(u64, &str)] = &[
     (5, "demuxer-cache-state"),
 ];
 
-/// Handle for one running mpv sidecar: IPC connection + child process + the
-/// kill-on-close job pinning the child to the app's lifetime. The job MUST be
-/// stored here (not dropped after spawn): closing its last handle terminates
-/// the sidecar, so it has to stay alive exactly as long as the child.
-struct MpvHandle {
-    ipc: Arc<MpvIpc>,
-    child: tokio::process::Child,
-    #[allow(dead_code)]
-    job: job::JobHandle,
-    pipe_name: String,
-}
-
-impl MpvHandle {
-    /// Reply of `mpv_spawn` (R2.2): the frontend adopts `conn` and drops
-    /// every engine event tagged with an older connection id.
-    fn spawn_reply(&self) -> Value {
-        json!({ "conn": self.ipc.current_conn() })
-    }
-}
-
 /// Shared slot holding the running mpv instance (`None` = not spawned).
 type SharedMpv = Arc<Mutex<Option<MpvHandle>>>;
-
-/// Lazily create / fetch the mpv state slot for this app instance.
-fn mpv_state(app: &tauri::AppHandle) -> SharedMpv {
-    if let Some(existing) = app.try_state::<SharedMpv>() {
-        return existing.inner().clone();
-    }
-    app.manage(Arc::new(Mutex::new(None::<MpvHandle>)));
-    app.state::<SharedMpv>().inner().clone()
-}
 
 /// Commands without an `AppHandle` parameter (per contract) resolve the app
 /// through the global handle captured at startup.
@@ -222,29 +196,6 @@ pub async fn mpv_shutdown() -> Result<(), String> {
     Ok(())
 }
 
-/// Best-effort synchronous kill for process-exit paths (`RunEvent::Exit`,
-/// tray Quit) that cannot `.await` the async `mpv_shutdown`. Non-blocking by
-/// design: `try_lock` never waits (a contended lock means the async owner is
-/// shutting down already) and `start_kill` only signals termination. The Job
-/// Object is the real orphan guarantee here — this just speeds the graceful
-/// quit so `mpv.exe` is gone within ~ms instead of at handle teardown.
-pub(crate) fn mpv_kill_sync_best_effort(app: &tauri::AppHandle) {
-    let state = mpv_state(app);
-    let Ok(mut slot) = state.try_lock() else {
-        return;
-    };
-    if let Some(handle) = slot.as_mut() {
-        // Already exited (or unpollable): nothing to kill; the slot keeps the
-        // reaped handle until process teardown, when the closed job finishes
-        // any remainder via KILL_ON_JOB_CLOSE.
-        if let Ok(None) = handle.child.try_wait() {
-            if let Err(kill_error) = handle.child.start_kill() {
-                log::warn!("[mpv] sync exit kill failed: {kill_error}");
-            }
-        }
-    }
-}
-
 /// Clone the running sidecar's IPC handle (releasing the state lock before
 /// any round-trip) and reject the call when no sidecar has been spawned yet.
 /// Holding the lock across a command round-trip used to stall the control
@@ -257,157 +208,5 @@ async fn running_ipc() -> Result<Arc<MpvIpc>, String> {
     running_ipc_from_state(&state).await
 }
 
-/// Lock-scope core of `running_ipc`, split out so the "lock released before
-/// the round-trip" property is testable without a Tauri app handle.
-async fn running_ipc_from_state(state: &SharedMpv) -> Result<Arc<MpvIpc>, String> {
-    let slot = state.lock().await;
-    match slot.as_ref() {
-        Some(handle) => Ok(Arc::clone(&handle.ipc)),
-        None => Err("mpv is not running (call mpv_spawn first)".to_string()),
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-
-    type TestServer = tokio::net::windows::named_pipe::NamedPipeServer;
-
-    /// A live `MpvHandle` around a test pipe, plus the server half so the test
-    /// plays mpv's side. The child is a placeholder pinned to a kill-on-close
-    /// job; nothing here talks to it — the IPC pipe is the test's own.
-    async fn test_handle(pipe_name: &str) -> (MpvHandle, TestServer) {
-        let server = tokio::net::windows::named_pipe::ServerOptions::new()
-            .create(pipe_name)
-            .expect("test pipe server must be created");
-        let client = tokio::net::windows::named_pipe::ClientOptions::new()
-            .open(pipe_name)
-            .expect("test pipe client must connect");
-        let sink: EventSink = Arc::new(|_, _, _| {});
-        let ipc = MpvIpc::new(client, sink);
-        let child = tokio::process::Command::new("cmd")
-            .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("dummy child must spawn");
-        let job = job::JobHandle::create_with_kill_on_close().expect("job must be created");
-        job.assign(&child).expect("dummy child must join the job");
-        (MpvHandle { ipc: Arc::new(ipc), child, job, pipe_name: pipe_name.to_string() }, server)
-    }
-
-    /// Play mpv's side of one command round-trip: read the frame, report it
-    /// (`frame_seen`), wait for the go-ahead, then reply success with `data: 7`.
-    async fn answer_one_command(
-        server: TestServer,
-        frame_seen: tokio::sync::oneshot::Sender<()>,
-        reply_go: tokio::sync::oneshot::Receiver<()>,
-    ) {
-        server.connect().await.expect("server must accept the client");
-        let (read_half, mut write_half) = tokio::io::split(server);
-        let mut reader = tokio::io::BufReader::new(read_half);
-        let mut frame = String::new();
-        reader.read_line(&mut frame).await.expect("the command frame must arrive");
-        let request_id = serde_json::from_str::<Value>(frame.trim_end())
-            .expect("the frame must be JSON")["request_id"]
-            .as_u64()
-            .expect("the frame must carry a request_id");
-        frame_seen.send(()).expect("the test must still be waiting");
-        reply_go.await.expect("the test must release the reply");
-        let reply = format!(r#"{{"error":"success","data":7,"request_id":{request_id}}}"#);
-        write_half.write_all(reply.as_bytes()).await.expect("the reply must be writable");
-        write_half.write_all(b"\n").await.expect("the reply newline must be writable");
-        write_half.flush().await.expect("the reply must flush");
-    }
-
-    /// Regression (R9): while a command round-trip is in flight the state lock
-    /// must be free — `mpv_spawn` / `mpv_shutdown` take it and used to queue
-    /// behind every command for up to the IPC timeout.
-    #[tokio::test]
-    async fn command_round_trip_does_not_hold_the_state_lock() {
-        let pipe_name = format!(r"\\.\pipe\drplay-mpv-lock-scope-{}", std::process::id());
-        let (handle, server) = test_handle(&pipe_name).await;
-        let state: SharedMpv = Arc::new(Mutex::new(Some(handle)));
-
-        // Exactly what a command call site does: resolve the IPC handle...
-        let ipc = running_ipc_from_state(&state).await.expect("a running sidecar must resolve");
-
-        // ...then run the round-trip. The server reads the frame and holds the
-        // reply back, so the command is in flight during the assertion.
-        let (frame_seen_tx, frame_seen_rx) = tokio::sync::oneshot::channel();
-        let (reply_go_tx, reply_go_rx) = tokio::sync::oneshot::channel();
-        let responder = tokio::spawn(answer_one_command(server, frame_seen_tx, reply_go_rx));
-
-        let command = tokio::spawn(async move { ipc.send_command(vec![json!("pause")]).await });
-        frame_seen_rx.await.expect("the command must reach the peer");
-
-        assert!(
-            state.try_lock().is_ok(),
-            "the state lock must be released while a command round-trip is in flight"
-        );
-
-        reply_go_tx.send(()).expect("the responder must be waiting");
-        let data =
-            command.await.expect("the command task must not panic").expect("the command must succeed");
-        assert_eq!(data, json!(7));
-        responder.await.expect("the responder must finish");
-    }
-
-    /// A resolved handle must outlive a slot swap: the restart path takes the
-    /// handle out of the slot while a command may still be in flight, and the
-    /// clone's connection must stay usable on its own.
-    #[tokio::test]
-    async fn a_resolved_handle_survives_a_slot_swap() {
-        let pipe_name = format!(r"\\.\pipe\drplay-mpv-swap-{}", std::process::id());
-        let (handle, server) = test_handle(&pipe_name).await;
-        let state: SharedMpv = Arc::new(Mutex::new(Some(handle)));
-
-        let ipc = running_ipc_from_state(&state).await.expect("a running sidecar must resolve");
-        // The control path (shutdown/spawn) empties the slot; that lock is
-        // free because the command call site already released it.
-        assert!(state.lock().await.take().is_some(), "the test must own one handle");
-
-        let (frame_seen_tx, _frame_seen_rx) = tokio::sync::oneshot::channel();
-        let (reply_go_tx, reply_go_rx) = tokio::sync::oneshot::channel();
-        let responder = tokio::spawn(answer_one_command(server, frame_seen_tx, reply_go_rx));
-        reply_go_tx.send(()).expect("the responder must accept the go signal");
-
-        let data = ipc
-            .send_command(vec![json!("get_property"), json!("pause")])
-            .await
-            .expect("the connection held by the clone must stay usable after the slot swap");
-        assert_eq!(data, json!(7));
-        responder.await.expect("the responder must finish");
-    }
-
-    // --- connection identity (R2.2 — RC-6) -----------------------------------
-
-    /// The `mpv_spawn` reply must carry the new connection's identity so the
-    /// frontend can filter engine events by it (B1/RC-1): events of a replaced
-    /// connection never drive the fresh engine state.
-    #[tokio::test]
-    async fn spawn_reply_carries_the_connection_identity() {
-        let pipe_name = format!(r"\\.\pipe\drplay-mpv-spawn-reply-{}", std::process::id());
-        let (handle, _server) = test_handle(&pipe_name).await;
-
-        let reply = handle.spawn_reply();
-
-        let conn = reply["conn"].as_u64().expect("the reply must carry a numeric conn");
-        assert_eq!(conn, handle.ipc.current_conn(), "conn must be the handle's own connection");
-        assert!(conn >= 1, "connection ids start at 1, got {conn}");
-    }
-
-    /// The rejection path must not keep the lock either.
-    #[tokio::test]
-    async fn running_ipc_rejects_when_no_sidecar_is_spawned() {
-        let state: SharedMpv = Arc::new(Mutex::new(None));
-        let error = match running_ipc_from_state(&state).await {
-            Ok(_) => panic!("an empty slot must reject the command"),
-            Err(error) => error,
-        };
-        assert!(error.contains("mpv is not running"), "got: {error}");
-        assert!(state.try_lock().is_ok(), "the rejection path must not keep the lock");
-    }
-}
+mod tests;

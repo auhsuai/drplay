@@ -5,7 +5,6 @@ vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { captureError } from "../utils/errorLog";
 import {
-  BufferingTracker,
   BUFFERING_TIMEOUT_MS,
   SPINNER_DELAY_MS,
   WATCHDOG_INTERVAL_MS,
@@ -14,16 +13,19 @@ import {
   dispatchMpvEvent,
   dispatchPropertyEvent,
   resetWarnThrottleForTest,
-  StallReconciler,
   STALL_LOAD_GRACE_MS,
   STALL_POLL_INTERVAL_MS,
   STALL_RECONCILE_MS,
   STALL_RECOVER_MS,
   STALL_RECOVERY_MAX_ATTEMPTS,
-  TimePosWatchdog,
   type MpvEventCallbacks,
-  type StallTruth,
 } from "./mpvProtocol";
+import {
+  BufferingTracker,
+  StallReconciler,
+  type StallTruth,
+  TimePosWatchdog,
+} from "./mpvPlaybackMachines";
 
 function makeCb(): MpvEventCallbacks {
   return {

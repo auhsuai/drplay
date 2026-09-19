@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
-import { BufferingTracker, TimePosWatchdog } from "./mpvProtocol";
+import { BufferingTracker, TimePosWatchdog } from "./mpvPlaybackMachines";
 import { INTERPOLATOR_TICK_MS, TimeInterpolator } from "./timeInterpolator";
 import { TimerRegistry } from "./timerRegistry";
 

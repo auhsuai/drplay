@@ -13,12 +13,8 @@ vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
 import { captureError } from "../utils/errorLog";
-import {
-  BufferingTracker,
-  LOADFILE_DEADLINE_MS,
-  resetWarnThrottleForTest,
-  TimePosWatchdog,
-} from "./mpvProtocol";
+import { LOADFILE_DEADLINE_MS, resetWarnThrottleForTest } from "./mpvProtocol";
+import { BufferingTracker, TimePosWatchdog } from "./mpvPlaybackMachines";
 
 const PROXY_PORT = 51234;
 const PROXY_URL_PREFIX = "http://127.0.0.1:51234/stream/";

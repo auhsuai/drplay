@@ -12,7 +12,6 @@ import {
   asBoolean,
   asNumber,
   asString,
-  BufferingTracker,
   classifyEndFileError,
   describeError,
   dispatchMpvEvent,
@@ -32,20 +31,23 @@ import {
   PROXY_START_TIMEOUT_MS,
   SEEK_ACK_TIMEOUT_MS,
   SEEK_ACK_TOLERANCE_SECS,
-  StallReconciler,
   STALL_MIN_RESUME_SECS,
   STREAM_PATH,
   TAURI_COMMANDS,
   TAURI_EVENTS,
   THROTTLE_MS,
-  TimePosWatchdog,
   toTimeRanges,
   VOLUME_SCALE,
   withStallQueryTimeout,
   type MpvEventCallbacks,
   type MpvRange,
-  type StallTruth,
 } from "./mpvProtocol";
+import {
+  BufferingTracker,
+  StallReconciler,
+  type StallTruth,
+  TimePosWatchdog,
+} from "./mpvPlaybackMachines";
 import { TimeInterpolator } from "./timeInterpolator";
 import { TimerRegistry } from "./timerRegistry";
 
