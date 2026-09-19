@@ -355,11 +355,7 @@ export function PlaylistView({
                         }),
                       );
                     }}
-                    className={`flex items-center gap-4 p-2 rounded-lg group cursor-pointer transition-all active:scale-[0.99] ${
-                      currentTrack?.id === track.id
-                        ? "bg-gray-100 dark:bg-[#2A2A2A]"
-                        : "hover:bg-gray-100 dark:hover:bg-[#2A2A2A]"
-                    }`}
+                    className="flex items-center gap-4 p-2 rounded-lg group cursor-pointer transition-all active:scale-[0.99]"
                   >
                     <div
                       className={`w-8 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-text hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
