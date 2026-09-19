@@ -28,7 +28,7 @@ export function ImageCropperModal({
 }: ImageCropperModalProps) {
   const { t } = useTranslation();
   const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(2);
+  const [zoom, setZoom] = useState(1.3);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
