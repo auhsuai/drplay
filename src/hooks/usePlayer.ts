@@ -23,6 +23,7 @@ import type { TabKey } from "../utils/driveConstants";
 
 import { usePlayerStore } from "../store/playerStore";
 import { commitIsPlaying } from "../store/playbackCommit";
+import { AudioController } from "../lib/AudioController";
 import { useMediaControls } from "./useMediaControls";
 import { resetAdvanceGuard } from "../utils/playerError";
 import {
@@ -31,11 +32,13 @@ import {
   commitIfCurrent,
   type IntentHandle,
 } from "./player/playbackIntent";
+import { consumeRestoreResume } from "./player/restoreResume";
 
 export { PLAYER_STOP_EVENT } from "./player/usePlayerLifecycle";
 
 export const usePlayer = (accessToken: string | null) => {
   const { t } = useTranslation();
+  const audio = AudioController.getInstance();
   const {
     currentTrack,
     setCurrentTrack,
@@ -175,6 +178,13 @@ export const usePlayer = (accessToken: string | null) => {
           );
           triggerReload();
           commitIsPlaying("intent", true);
+          // R3.5: engine command at the resume intent's commit point (the
+          // PlayerBar bridge is gone). Read the store for the committed track
+          // so the engine gets the same object the UI renders.
+          const resumed = usePlayerStore.getState().currentTrack;
+          if (resumed) {
+            void audio.playTrack(resumed, consumeRestoreResume(resumed.id));
+          }
           intent.end();
           return;
         }
@@ -204,6 +214,11 @@ export const usePlayer = (accessToken: string | null) => {
             );
             triggerReload();
             commitIsPlaying("intent", true);
+            // R3.5: engine command at commit, same as the prefetched path.
+            const resumed = usePlayerStore.getState().currentTrack;
+            if (resumed) {
+              void audio.playTrack(resumed, consumeRestoreResume(resumed.id));
+            }
           });
         } catch (e: unknown) {
           if (isAbortError(e)) return;
@@ -234,6 +249,22 @@ export const usePlayer = (accessToken: string | null) => {
           }
         }
         commitIsPlaying("intent", !currentIsPlaying);
+        // R3.5: engine command at the pause/resume intent's commit point (the
+        // PlayerBar bridge is gone). Pause is unconditional once a track is
+        // loaded (the bridge's `if (!currentTrack) return` guard, same as
+        // before); resume replays the committed store track and consumes the
+        // one-shot restore hint exactly like the bridge did.
+        const committedTrack = usePlayerStore.getState().currentTrack;
+        if (committedTrack) {
+          if (currentIsPlaying) {
+            audio.pause();
+          } else {
+            void audio.playTrack(
+              committedTrack,
+              consumeRestoreResume(committedTrack.id),
+            );
+          }
+        }
       }
     }
   }, [
@@ -242,6 +273,7 @@ export const usePlayer = (accessToken: string | null) => {
     setIsDownloading,
     setCurrentTrack,
     isPlaying,
+    audio,
     t,
   ]);
 

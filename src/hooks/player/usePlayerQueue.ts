@@ -107,7 +107,8 @@ export function usePlayerQueue(
         // Nothing playable left in the queue (end of queue, or every candidate
         // broken) — deterministic terminal state: always park the store at
         // isPlaying=false instead of leaving it stuck true. Repeat-one never
-        // reaches this branch: PlayerBar replays the track directly.
+        // reaches this branch: usePlayerPlaybackPolicy replays the track
+        // directly on `ended` (engine-direct, unchanged by R3.5).
         commitIsPlaying("policy", false);
       }
     } finally {

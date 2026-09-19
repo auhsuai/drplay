@@ -19,6 +19,7 @@ import type { TabKey } from "../../utils/driveConstants";
 import { usePlayerStore } from "../../store/playerStore";
 import { commitIsPlaying } from "../../store/playbackCommit";
 import { AudioController } from "../../lib/AudioController";
+import { consumeRestoreResume } from "./restoreResume";
 import {
   abortCurrentIntent,
   beginIntent,
@@ -119,8 +120,17 @@ export function usePlayerTrackPlayback(
       const { currentTrack } = usePlayerStore.getState();
 
       if (currentTrack?.id === track.id && !isNavigation) {
-        if (!usePlayerStore.getState().isPlaying)
+        if (!usePlayerStore.getState().isPlaying) {
           commitIsPlaying("intent", true);
+          // R3.5: the intent layer issues the engine command at commit time
+          // (the PlayerBar bridge is gone). Same-track = the engine's resume
+          // lane; the one-shot restore hint is still consumed here so a
+          // click on the restored track resumes at the restored position.
+          void AudioController.getInstance().playTrack(
+            currentTrack,
+            consumeRestoreResume(currentTrack.id),
+          );
+        }
         return;
       }
 
@@ -208,10 +218,18 @@ export function usePlayerTrackPlayback(
         // R3.1a: this is the play intent's commit point — a superseded attempt
         // (newer user intent) or an epoch-invalidated one (delete/logout) must
         // not touch store/engine/recordPlay even if its token resolves late.
+        // R3.5: the engine command belongs HERE now, at commit (audit RC-1) —
+        // the PlayerBar bridge no longer turns the store commit into a
+        // `playTrack` call, so a stale attempt can never reach the engine.
+        const committedTrack = { ...targetTrack, streamUrl };
         const committed = commitIfCurrent(intent.id, () => {
-          setCurrentTrack({ ...targetTrack, streamUrl });
+          setCurrentTrack(committedTrack);
           triggerReload();
           commitIsPlaying("intent", true);
+          void AudioController.getInstance().playTrack(
+            committedTrack,
+            consumeRestoreResume(committedTrack.id),
+          );
         });
         if (!committed) return;
 

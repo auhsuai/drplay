@@ -4,7 +4,6 @@ import { List } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
 import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
 import { usePlayerStore } from "../../store/playerStore";
-import { consumeRestoreResume } from "../../hooks/player/restoreResume";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
@@ -22,7 +21,6 @@ function PlayerBarImpl({
   onNextTrack,
   onPrevTrack,
   isDownloading,
-  loadNonce,
   playMode,
   onTogglePlayMode,
   onExpandNowPlaying,
@@ -71,6 +69,10 @@ function PlayerBarImpl({
   // advance decision, errorInfo writes, repeat-one replay) moved to
   // usePlayerPlaybackPolicy — mounted ONCE by usePlayer at app level. This
   // component keeps only its display subscriptions.
+  // R3.5: the state→engine bridge effect is GONE — this surface is
+  // observe-only. Every play/pause command is issued by the intent layer at
+  // its commit point (usePlayerTrackPlayback / usePlayer), never by prop
+  // changes here.
   // R2.1: the buffering handler reads the event's engine identity and drops
   // events of a DIFFERENT track than the store's current one — in the switch
   // window (store already on B, engine still emitting A's events) the old
@@ -110,23 +112,6 @@ function PlayerBarImpl({
     onTogglePlayMode,
     onToggleQueue,
   });
-
-  // Handle Play/Pause from Props (Syncing)
-  useEffect(() => {
-    if (!currentTrack) return;
-    if (isPlaying) {
-      // F7-6/F8-8: the session restore position is a ONE-SHOT hint consumed
-      // here — only the first play after a restore may seek to it. It is never
-      // read off the track object: the restored track survives in the queues,
-      // so Track.restoreTime would seek every later replay (after EOF, back
-      // from prev/next, retry) to the stale position. undefined = start at 0 /
-      // engine resume, which is the intended replay/retry behavior.
-      const startTime = consumeRestoreResume(currentTrack.id);
-      void audio.playTrack(currentTrack, startTime);
-    } else {
-      audio.pause();
-    }
-  }, [isPlaying, currentTrack, loadNonce, audio]);
 
   return (
     <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
@@ -187,7 +172,9 @@ export const PlayerBar = memo(PlayerBarImpl, (prevProps, nextProps) => {
     prevProps.isPlaying === nextProps.isPlaying &&
     prevProps.playMode === nextProps.playMode &&
     prevProps.isDownloading === nextProps.isDownloading &&
-    prevProps.loadNonce === nextProps.loadNonce &&
+    // R3.5: loadNonce is no longer compared — its only consumer was the
+    // removed bridge effect. The prop itself is still accepted (App passes
+    // it) but intentionally ignored here until the dead wiring is removed.
     // The queue drawer lives in App/AppShell now; without this the memoized
     // bar would keep the stale button highlight + aria-expanded.
     prevProps.isQueueOpen === nextProps.isQueueOpen

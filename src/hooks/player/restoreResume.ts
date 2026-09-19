@@ -1,6 +1,7 @@
 // Session restore position is a ONE-SHOT resume hint (F7-6/F8-8). It is armed
 // once when usePlayerSession commits the restored track and consumed by the
-// FIRST play of that exact track (PlayerBar's play bridge). It deliberately
+// FIRST play of that exact track (the intent layer's engine command at its
+// commit point — usePlayerTrackPlayback / usePlayer, R3.5). It deliberately
 // lives OUTSIDE the Track object: the restored track survives in both queues
 // (and in the persisted session), so an engine start time read off the object
 // would seek every later replay-after-EOF / prev-next return / retry back to

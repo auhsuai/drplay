@@ -98,7 +98,8 @@ export function usePlayerSession(
           };
 
           // F7-6/F8-8: the resume position is armed as a ONE-SHOT engine hint
-          // (consumed by the first play of this track in PlayerBar's bridge).
+          // (consumed by the first play of this track in the intent layer's
+          // engine command — R3.5; the former PlayerBar bridge is gone).
           // Track.restoreTime above only feeds SeekBar's initial fill — the
           // track object survives in the queues, so reading the position off
           // it at play time would leak it into every replay/retry.
