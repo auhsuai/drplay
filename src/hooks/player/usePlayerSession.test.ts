@@ -231,7 +231,7 @@ describe("usePlayerSession restore (lock-behavior)", () => {
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        source: "usePlayerSession",
+        source: "playerPersistence",
         message: expect.stringContaining(
           "session-corrupt",
         ) as unknown as string,
@@ -349,7 +349,7 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        source: "usePlayerSession",
+        source: "playerPersistence",
         message: expect.stringContaining(
           "session-playmode-corrupt",
         ) as unknown as string,
@@ -470,7 +470,7 @@ describe("usePlayerSession queue element validation (B16-4)", () => {
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        source: "usePlayerSession",
+        source: "playerPersistence",
         message: "session-queue-dropped-invalid: 1",
       }),
     );
@@ -511,7 +511,7 @@ describe("usePlayerSession queue element validation (B16-4)", () => {
       expect(mockedCaptureError).toHaveBeenCalledWith(
         expect.objectContaining({
           level: "warn",
-          source: "usePlayerSession",
+          source: "playerPersistence",
           message: "session-queue-dropped-invalid: 1",
         }),
       );
@@ -542,7 +542,7 @@ describe("usePlayerSession queue element validation (B16-4)", () => {
     expect(mockedCaptureError).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        source: "usePlayerSession",
+        source: "playerPersistence",
         message: "session-queue-dropped-invalid: 1",
       }),
     );

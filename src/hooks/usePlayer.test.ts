@@ -56,15 +56,6 @@ vi.mock("../utils/errorLog", () => ({
   captureError: vi.fn(),
 }));
 
-vi.mock("../utils/sessionCleanup", () => ({
-  SESSION_CLEANUP_KEYS: {
-    playModeKv: "drplay_playmode",
-    queueKv: "drplay_queue",
-    lastSessionLocalStorage: "drplay_last_session",
-    lastSessionKv: "drplay_last_session_kv",
-  },
-}));
-
 const queueMock = vi.hoisted(() => ({
   handleNextTrack: vi.fn(),
   handlePrevTrack: vi.fn(),

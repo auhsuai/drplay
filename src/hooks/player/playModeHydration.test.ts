@@ -9,7 +9,7 @@ import {
   getPrefetchedStreamUrl,
 } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
-import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
+import { PLAYER_PERSISTENCE_KEYS } from "../../utils/playerPersistence";
 import { usePlayerStore } from "../../store/playerStore";
 import type { Track } from "../../types";
 import { usePlayerSession } from "./usePlayerSession";
@@ -148,11 +148,11 @@ describe("F7-1 playMode hydration (mount order thật: session trước lifecycl
   it("kv shuffle + session track → shuffle thắng, không bao giờ ghi 'normal', queue rebuild shuffle", async () => {
     const queue = [makeTrack("t1"), makeTrack("t2"), makeTrack("t3")];
     localStorage.setItem(
-      SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
+      PLAYER_PERSISTENCE_KEYS.session,
       JSON.stringify({ track: queue[0], time: 12, duration: 240 }),
     );
-    kvStore.set(SESSION_CLEANUP_KEYS.queueKv, queue);
-    kvStore.set(SESSION_CLEANUP_KEYS.playModeKv, "shuffle");
+    kvStore.set(PLAYER_PERSISTENCE_KEYS.queue, queue);
+    kvStore.set(PLAYER_PERSISTENCE_KEYS.playMode, "shuffle");
     vi.spyOn(Math, "random").mockReturnValue(0);
 
     renderHook(() => {
@@ -161,10 +161,15 @@ describe("F7-1 playMode hydration (mount order thật: session trước lifecycl
     await flush();
 
     const playModeSets = kvOps.filter(
-      (o) => o.op === "set" && o.key === SESSION_CLEANUP_KEYS.playModeKv,
+      (o) => o.op === "set" && o.key === PLAYER_PERSISTENCE_KEYS.playMode,
     );
-    expect(playModeSets.map((o) => o.value)).toEqual(["shuffle"]);
-    expect(kvStore.get(SESSION_CLEANUP_KEYS.playModeKv)).toBe("shuffle");
+    expect(playModeSets.map((o) => o.value)).toEqual([
+      { v: 2, mode: "shuffle" },
+    ]);
+    expect(kvStore.get(PLAYER_PERSISTENCE_KEYS.playMode)).toEqual({
+      v: 2,
+      mode: "shuffle",
+    });
     expect(usePlayerStore.getState().playMode).toBe("shuffle");
     expect(usePlayerStore.getState().currentTrack?.id).toBe("t1");
     expect(usePlayerStore.getState().playbackQueue.map((t) => t.id)).toEqual([
@@ -182,8 +187,10 @@ describe("F7-1 playMode hydration (mount order thật: session trước lifecycl
 
     expect(usePlayerStore.getState().playMode).toBe("normal");
     const playModeSets = kvOps.filter(
-      (o) => o.op === "set" && o.key === SESSION_CLEANUP_KEYS.playModeKv,
+      (o) => o.op === "set" && o.key === PLAYER_PERSISTENCE_KEYS.playMode,
     );
-    expect(playModeSets.map((o) => o.value)).toEqual(["normal"]);
+    expect(playModeSets.map((o) => o.value)).toEqual([
+      { v: 2, mode: "normal" },
+    ]);
   });
 });

@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { get } from "../../db/kv";
 import type { Track, PlayMode } from "../../types";
 import { getValidToken } from "../../utils/apiClient";
 import {
@@ -7,7 +6,12 @@ import {
   buildStreamUrl,
 } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
-import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
+import {
+  readPlayMode,
+  readQueue,
+  readSession,
+  writeSession,
+} from "../../utils/playerPersistence";
 import { classifyPlayerError, isAbortError } from "./utils";
 import { PLAYER_STOP_EVENT } from "./usePlayerLifecycle";
 import { usePlayerStore } from "../../store/playerStore";
@@ -18,16 +22,6 @@ import { armRestoreResume } from "./restoreResume";
 
 const PLAYER_SESSION_MODULE = "usePlayerSession";
 const SAVE_THROTTLE_MS = 5000;
-
-// Shape of the persisted session payload (localStorage + kv). Optional fields
-// mirror the defensive `if (lastSession && lastSession.track)` guards below;
-// the real payload always carries them, but a corrupt/older session must not
-// crash the restore.
-interface StoredSession {
-  track?: Track;
-  time?: number;
-  duration?: number;
-}
 
 export function usePlayerSession(
   setCurrentTrack: (
@@ -52,28 +46,9 @@ export function usePlayerSession(
     window.addEventListener(PLAYER_STOP_EVENT, handleStop);
     const loadSession = async (signal: AbortSignal) => {
       try {
-        const lastSessionStr = localStorage.getItem(
-          SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
-        );
-        let lastSession: StoredSession | undefined;
-        if (lastSessionStr) {
-          try {
-            lastSession = JSON.parse(lastSessionStr) as StoredSession;
-          } catch (e: unknown) {
-            void captureError({
-              level: "warn",
-              source: PLAYER_SESSION_MODULE,
-              message: `session-corrupt: ${classifyPlayerError(e).message}`,
-            });
-            lastSession = await get<StoredSession>(
-              SESSION_CLEANUP_KEYS.lastSessionKv,
-            );
-          }
-        } else {
-          lastSession = await get<StoredSession>(
-            SESSION_CLEANUP_KEYS.lastSessionKv,
-          );
-        }
+        // Scoped-key read with a one-time legacy fallback; corrupt payloads
+        // are logged and skipped inside the persistence module.
+        const lastSession = await readSession();
 
         if (lastSession && lastSession.track) {
           if (isAborted()) {
@@ -102,10 +77,8 @@ export function usePlayerSession(
           }
           if (isAborted()) return;
 
-          const savedQueue = await get<Track[]>(SESSION_CLEANUP_KEYS.queueKv);
-          // unknown (the default get<T>): a corrupt/older persisted value must
-          // still hit the corrupt-log branch below instead of crashing.
-          const savedPlayMode = await get(SESSION_CLEANUP_KEYS.playModeKv);
+          const savedQueue = await readQueue();
+          const savedPlayMode = await readPlayMode();
           if (isAborted()) return;
 
           // User đã hành động trong lúc restore await (click bài / bắt đầu load):
@@ -133,28 +106,10 @@ export function usePlayerSession(
             armRestoreResume(restoredTrack.id, lastSession.time);
           }
 
-          // Elements from the kv cast are unvalidated: one null/number/{} entry
-          // would throw inside shuffleQueueWithCurrent (sameTrack derefs
-          // queueItemId) and kill the whole restore, or crash QueuePanel on
-          // render in the normal branch. Drop invalid entries before use.
-          const validQueue: Track[] = Array.isArray(savedQueue)
-            ? savedQueue.filter(
-                (t: unknown): t is Track =>
-                  typeof t === "object" &&
-                  t !== null &&
-                  typeof (t as { id?: unknown }).id === "string",
-              )
-            : [];
-          if (
-            Array.isArray(savedQueue) &&
-            validQueue.length !== savedQueue.length
-          ) {
-            void captureError({
-              level: "warn",
-              source: PLAYER_SESSION_MODULE,
-              message: `session-queue-dropped-invalid: ${String(savedQueue.length - validQueue.length)}`,
-            });
-          }
+          // readQueue decoded the payload and dropped invalid entries
+          // (null/number/{} would throw inside shuffleQueueWithCurrent or crash
+          // QueuePanel) — the dropped count was logged by the module.
+          const validQueue: Track[] = savedQueue ?? [];
           if (validQueue.length > 0) {
             setOriginalQueue(validQueue);
             if (savedPlayMode === "shuffle") {
@@ -170,20 +125,9 @@ export function usePlayerSession(
           } else {
             setPlaybackQueue([restoredTrack]);
           }
-          if (
-            savedPlayMode === "normal" ||
-            savedPlayMode === "shuffle" ||
-            savedPlayMode === "repeat-all" ||
-            savedPlayMode === "repeat-one"
-          ) {
-            setPlayMode(savedPlayMode);
-          } else if (savedPlayMode) {
-            void captureError({
-              level: "warn",
-              source: PLAYER_SESSION_MODULE,
-              message: "session-playmode-corrupt",
-            });
-          }
+          // readPlayMode already whitelists the value (unknown versions and
+          // junk are logged and skipped inside the persistence module).
+          if (savedPlayMode !== undefined) setPlayMode(savedPlayMode);
           setCurrentTrack(restoredTrack);
           triggerReload();
         }
@@ -239,16 +183,8 @@ export function usePlayerSession(
       // Không lưu nếu chưa có dữ liệu hợp lệ
       if (time === 0 && duration === 0) return;
 
-      const sessionData = {
-        track: currentTrack,
-        time,
-        duration,
-      };
       try {
-        localStorage.setItem(
-          SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
-          JSON.stringify(sessionData),
-        );
+        writeSession({ track: currentTrack, time, duration });
         lastSaveTime = now;
       } catch (e: unknown) {
         void captureError({

@@ -3,10 +3,9 @@ import {
   start as keepAwakeStart,
   stop as keepAwakeStop,
 } from "tauri-plugin-keepawake-api";
-import { set as idbSet } from "../../db/kv";
 import type { Track, PlayMode } from "../../types";
 import { captureError } from "../../utils/errorLog";
-import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
+import { writePlayMode } from "../../utils/playerPersistence";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
 import { resetAdvanceGuard } from "../../utils/playerError";
@@ -78,7 +77,7 @@ export function usePlayerLifecycle({
   // value, otherwise the mount-time default write clobbers it (F7-1).
   useEffect(() => {
     if (!hydrated) return;
-    idbSet(SESSION_CLEANUP_KEYS.playModeKv, playMode).catch((e: unknown) => {
+    writePlayMode(playMode).catch((e: unknown) => {
       void logUsePlayer("warn", `playmode-save-fail: ${errMsg(e)}`);
     });
   }, [playMode, hydrated]);

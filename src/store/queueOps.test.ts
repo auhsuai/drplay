@@ -10,7 +10,7 @@ import { usePlayerStore } from "./playerStore";
 import type { PlayMode, Track } from "../types";
 import { set as idbSet } from "../db/kv";
 import { captureError } from "../utils/errorLog";
-import { SESSION_CLEANUP_KEYS } from "../utils/sessionCleanup";
+import { PLAYER_PERSISTENCE_KEYS } from "../utils/playerPersistence";
 
 vi.mock("../db/kv", () => ({
   set: vi.fn(() => Promise.resolve()),
@@ -71,8 +71,8 @@ describe("appendTracksToQueue", () => {
     }
     expect(vi.mocked(idbSet)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
-      SESSION_CLEANUP_KEYS.queueKv,
-      state.originalQueue,
+      PLAYER_PERSISTENCE_KEYS.queue,
+      { v: 2, tracks: state.originalQueue },
     );
   });
 
@@ -153,8 +153,8 @@ describe("removeTracksFromQueue", () => {
     expect(state.originalQueue.map((t) => t.id)).toEqual(["a", "c"]);
     expect(state.playbackQueue.map((t) => t.id)).toEqual(["c", "a"]);
     expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
-      SESSION_CLEANUP_KEYS.queueKv,
-      state.originalQueue,
+      PLAYER_PERSISTENCE_KEYS.queue,
+      { v: 2, tracks: state.originalQueue },
     );
   });
 
@@ -243,8 +243,8 @@ describe("removeTracksByDriveIds", () => {
       "drive-a",
     ]);
     expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
-      SESSION_CLEANUP_KEYS.queueKv,
-      state.originalQueue,
+      PLAYER_PERSISTENCE_KEYS.queue,
+      { v: 2, tracks: state.originalQueue },
     );
   });
 
@@ -448,8 +448,8 @@ describe("persistQueue", () => {
     persistQueue([]);
 
     expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
-      SESSION_CLEANUP_KEYS.queueKv,
-      [],
+      PLAYER_PERSISTENCE_KEYS.queue,
+      { v: 2, tracks: [] },
     );
   });
 });

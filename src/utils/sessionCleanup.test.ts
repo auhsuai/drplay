@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SESSION_CLEANUP_KEYS, clearSessionState } from "./sessionCleanup";
+import { clearSessionState } from "./sessionCleanup";
+import { PLAYER_PERSISTENCE_KEYS } from "./playerPersistence";
+import { SORT_OPTION_KEY } from "./storageKeys";
 import { del as kvDel } from "../db/kv";
 import { captureError } from "./errorLog";
 
@@ -20,66 +22,51 @@ afterEach(() => {
 });
 
 describe("clearSessionState", () => {
-  it("removes drplay_last_session from localStorage", () => {
+  it("removes the playback session from localStorage", () => {
     localStorage.setItem(
-      SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
+      PLAYER_PERSISTENCE_KEYS.session,
       JSON.stringify({ track: { id: "old-track" }, time: 12, duration: 180 }),
     );
 
     clearSessionState();
 
-    expect(
-      localStorage.getItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage),
-    ).toBeNull();
+    expect(localStorage.getItem(PLAYER_PERSISTENCE_KEYS.session)).toBeNull();
   });
 
   it("removes drplay_sort_option from localStorage", () => {
-    localStorage.setItem(
-      SESSION_CLEANUP_KEYS.sortOptionLocalStorage,
-      "name-asc",
-    );
+    localStorage.setItem(SORT_OPTION_KEY, "name-asc");
 
     clearSessionState();
 
-    expect(
-      localStorage.getItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage),
-    ).toBeNull();
+    expect(localStorage.getItem(SORT_OPTION_KEY)).toBeNull();
   });
 
   it("clears sort option (raw string value) alongside last_session", () => {
     localStorage.setItem(
-      SESSION_CLEANUP_KEYS.lastSessionLocalStorage,
+      PLAYER_PERSISTENCE_KEYS.session,
       JSON.stringify({ track: { id: "old-track" } }),
     );
-    localStorage.setItem(
-      SESSION_CLEANUP_KEYS.sortOptionLocalStorage,
-      "modified-desc",
-    );
+    localStorage.setItem(SORT_OPTION_KEY, "modified-desc");
 
     clearSessionState();
 
-    expect(
-      localStorage.getItem(SESSION_CLEANUP_KEYS.lastSessionLocalStorage),
-    ).toBeNull();
-    expect(
-      localStorage.getItem(SESSION_CLEANUP_KEYS.sortOptionLocalStorage),
-    ).toBeNull();
+    expect(localStorage.getItem(PLAYER_PERSISTENCE_KEYS.session)).toBeNull();
+    expect(localStorage.getItem(SORT_OPTION_KEY)).toBeNull();
   });
 
-  it("pins the shared last-session storage contract (localStorage key === kv key)", () => {
-    expect(SESSION_CLEANUP_KEYS.lastSessionLocalStorage).toBe(
-      "drplay_last_session",
-    );
-    expect(SESSION_CLEANUP_KEYS.lastSessionKv).toBe("drplay_last_session");
+  it("pins the playback persistence key contract", () => {
+    expect(PLAYER_PERSISTENCE_KEYS.session).toBe("drplay_last_session");
+    expect(PLAYER_PERSISTENCE_KEYS.queue).toBe("drplay_queue");
+    expect(PLAYER_PERSISTENCE_KEYS.playMode).toBe("drplay_playmode");
   });
 
-  it("calls kvDel for last_session, playmode and queue", () => {
+  it("calls kvDel for session, playmode and queue", () => {
     clearSessionState();
 
     expect(kvDelMock).toHaveBeenCalledTimes(3);
-    expect(kvDelMock).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.lastSessionKv);
-    expect(kvDelMock).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.playModeKv);
-    expect(kvDelMock).toHaveBeenCalledWith(SESSION_CLEANUP_KEYS.queueKv);
+    expect(kvDelMock).toHaveBeenCalledWith(PLAYER_PERSISTENCE_KEYS.session);
+    expect(kvDelMock).toHaveBeenCalledWith(PLAYER_PERSISTENCE_KEYS.playMode);
+    expect(kvDelMock).toHaveBeenCalledWith(PLAYER_PERSISTENCE_KEYS.queue);
   });
 
   it("captures the failure via captureError when a kvDel rejects, without throwing", async () => {
@@ -96,7 +83,7 @@ describe("clearSessionState", () => {
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
-        source: "sessionCleanup",
+        source: "playerPersistence",
         kind: "logout-cleanup-failed",
         message: expect.stringContaining(
           "kv-store-unavailable",
@@ -133,6 +120,17 @@ describe("clearSessionState", () => {
         expect(captureErrorMock).toHaveBeenCalled();
       });
 
+      // Both halves report independently: the playback lanes (module) and the
+      // sort preference (sessionCleanup) each log their own storage failure.
+      expect(captureErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          source: "playerPersistence",
+          message: expect.stringContaining(
+            "localStorage cleanup failed",
+          ) as unknown as string,
+        }),
+      );
       expect(captureErrorMock).toHaveBeenCalledWith(
         expect.objectContaining({
           level: "warn",

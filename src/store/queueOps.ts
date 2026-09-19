@@ -1,7 +1,6 @@
 import type { Track } from "../types";
-import { set as idbSet } from "../db/kv";
 import { captureError } from "../utils/errorLog";
-import { SESSION_CLEANUP_KEYS } from "../utils/sessionCleanup";
+import { writeQueue } from "../utils/playerPersistence";
 import {
   classifyPlayerError,
   ensureQueueItemId,
@@ -16,7 +15,7 @@ import { usePlayerStore } from "./playerStore";
  * edit the user just made in memory.
  */
 export function persistQueue(queue: Track[]): void {
-  idbSet(SESSION_CLEANUP_KEYS.queueKv, queue).catch((e: unknown) => {
+  writeQueue(queue).catch((e: unknown) => {
     // captureError never rejects (it swallows internally), so this is safe in
     // the rejection handler.
     void captureError({

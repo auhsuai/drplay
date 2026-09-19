@@ -8,7 +8,7 @@ import {
 import { PLAYER_STOP_EVENT, usePlayerLifecycle } from "./usePlayerLifecycle";
 import type { PlayerLifecycleDeps } from "./usePlayerLifecycle";
 import { set as idbSet } from "../../db/kv";
-import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
+import { PLAYER_PERSISTENCE_KEYS } from "../../utils/playerPersistence";
 import { usePlayerStore } from "../../store/playerStore";
 import {
   guardAllowsAutoAdvance,
@@ -151,8 +151,8 @@ describe("usePlayerLifecycle playMode hydration gate (F7-1)", () => {
 
     expect(vi.mocked(idbSet)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
-      SESSION_CLEANUP_KEYS.playModeKv,
-      "shuffle",
+      PLAYER_PERSISTENCE_KEYS.playMode,
+      { v: 2, mode: "shuffle" },
     );
   });
 });
