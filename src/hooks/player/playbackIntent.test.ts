@@ -75,6 +75,16 @@ describe("playbackIntent — kinds & priority", () => {
     expect(handle.abortSignal.aborted).toBe(false);
   });
 
+  it("handle.abort() kills the signal even after end() (unmount cleanup of deferred work)", () => {
+    const handle = beginIntent("play");
+    handle.end();
+    expect(handle.abortSignal.aborted).toBe(false);
+
+    handle.abort();
+
+    expect(handle.abortSignal.aborted).toBe(true);
+  });
+
   it("commitIfCurrent runs only while the id is current", () => {
     const handle = beginIntent("play");
     let value = 0;

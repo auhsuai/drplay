@@ -86,12 +86,17 @@ export function usePlayerTrackPlayback(
 
   useEffect(() => {
     const handleStop = () => {
+      // Abort the active attempt (whatever owns it now) AND this hook's own
+      // last signal even if that intent already ended: the deferred
+      // metadata/SW continuations hang off it and must drop on stop.
       abortCurrentIntent();
+      intentRef.current?.abort();
     };
     window.addEventListener(PLAYER_STOP_EVENT, handleStop);
     return () => {
       window.removeEventListener(PLAYER_STOP_EVENT, handleStop);
       abortCurrentIntent();
+      intentRef.current?.abort();
       // Retire the attempt this hook still owns: a pending token await must
       // not leave a module-global user intent guarding system lanes after the
       // hook is gone (its commit is already blocked by the abort).

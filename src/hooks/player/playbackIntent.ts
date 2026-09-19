@@ -75,6 +75,12 @@ export interface IntentHandle {
    * display-only work still needs it.
    */
   end(): void;
+  /**
+   * Abort this handle's signal whether or not the intent is still current —
+   * unmount cleanup of the owner must still drop the deferred continuations
+   * hanging off an already-ended intent.
+   */
+  abort(): void;
 }
 
 interface IntentRecord {
@@ -111,6 +117,9 @@ function makeHandle(record: IntentRecord): IntentHandle {
     isCurrent: () => record.granted && isCurrent(record.id),
     end: () => {
       if (current === record) current = null;
+    },
+    abort: () => {
+      record.controller.abort();
     },
   };
 }
