@@ -21,6 +21,7 @@ import type { QueueDriveItem } from "./player/usePlayerQueue";
 import type { TabKey } from "../utils/driveConstants";
 
 import { usePlayerStore } from "../store/playerStore";
+import { commitIsPlaying } from "../store/playbackCommit";
 import { useMediaControls } from "./useMediaControls";
 import { resetAdvanceGuard } from "../utils/playerError";
 
@@ -158,7 +159,7 @@ export const usePlayer = (accessToken: string | null) => {
             prev ? { ...prev, streamUrl: prefetchedUrl } : prev,
           );
           triggerReload();
-          setIsPlaying(true);
+          commitIsPlaying("intent", true);
           return;
         }
 
@@ -185,7 +186,7 @@ export const usePlayer = (accessToken: string | null) => {
             prev ? { ...prev, streamUrl: url } : prev,
           );
           triggerReload();
-          setIsPlaying(true);
+          commitIsPlaying("intent", true);
         } catch (e: unknown) {
           if (isAbortError(e)) return;
           void logUsePlayer("error", `stream-url-resume-fail: ${errMsg(e)}`);
@@ -211,7 +212,7 @@ export const usePlayer = (accessToken: string | null) => {
             abortCurrentAttempt();
           }
         }
-        setIsPlaying(!currentIsPlaying);
+        commitIsPlaying("intent", !currentIsPlaying);
       }
     }
   }, [
@@ -219,7 +220,6 @@ export const usePlayer = (accessToken: string | null) => {
     triggerReload,
     setIsDownloading,
     setCurrentTrack,
-    setIsPlaying,
     isPlaying,
     createAbortSignal,
     isCurrentAttempt,

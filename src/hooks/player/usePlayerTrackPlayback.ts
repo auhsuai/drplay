@@ -17,6 +17,7 @@ import { errMsg, logUsePlayer, PLAYER_STOP_EVENT } from "./usePlayerLifecycle";
 import type { QueueDriveItem } from "./usePlayerQueue";
 import type { TabKey } from "../../utils/driveConstants";
 import { usePlayerStore } from "../../store/playerStore";
+import { commitIsPlaying } from "../../store/playbackCommit";
 import { AudioController } from "../../lib/AudioController";
 
 // Why: fallback for the deferred metadata fetch — >> typical first-audio
@@ -40,15 +41,13 @@ export function usePlayerTrackPlayback(
   { updateQueueContext }: TrackPlaybackDeps,
 ) {
   const { t } = useTranslation();
-  const { triggerReload, setIsPlaying, setIsDownloading, setCurrentTrack } =
-    usePlayerStore(
-      useShallow((state) => ({
-        triggerReload: state.triggerReload,
-        setIsPlaying: state.setIsPlaying,
-        setIsDownloading: state.setIsDownloading,
-        setCurrentTrack: state.setCurrentTrack,
-      })),
-    );
+  const { triggerReload, setIsDownloading, setCurrentTrack } = usePlayerStore(
+    useShallow((state) => ({
+      triggerReload: state.triggerReload,
+      setIsDownloading: state.setIsDownloading,
+      setCurrentTrack: state.setCurrentTrack,
+    })),
+  );
 
   const abortControllerRef = useRef<AbortController | null>(null);
   // P1 pre-play gate: fileId of the most recently BLOCKED track. A second
@@ -103,7 +102,7 @@ export function usePlayerTrackPlayback(
 
       if (currentTrack?.id === track.id && !isNavigation) {
         if (!usePlayerStore.getState().isPlaying)
-          usePlayerStore.getState().setIsPlaying(true);
+          commitIsPlaying("intent", true);
         return;
       }
 
@@ -149,7 +148,7 @@ export function usePlayerTrackPlayback(
 
       const signal = createAbortSignal();
 
-      setIsPlaying(false);
+      commitIsPlaying("intent", false);
       setIsDownloading(true);
 
       // NOTE: no page-side prefetch fetch here. The old warm-up fetch was
@@ -189,7 +188,7 @@ export function usePlayerTrackPlayback(
           buildStreamUrl(targetTrack.id, targetTrack.originalName);
         setCurrentTrack({ ...targetTrack, streamUrl });
         triggerReload();
-        setIsPlaying(true);
+        commitIsPlaying("intent", true);
 
         recordPlay(targetTrack).catch((e: unknown) => {
           void logUsePlayer("warn", `recordPlay-fail: ${errMsg(e)}`);
@@ -294,7 +293,6 @@ export function usePlayerTrackPlayback(
       accessToken,
       triggerReload,
       updateQueueContext,
-      setIsPlaying,
       setIsDownloading,
       setCurrentTrack,
       t,
