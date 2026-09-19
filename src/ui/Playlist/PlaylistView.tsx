@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Track } from "../../types";
-import { Music, Play, Trash2, Camera } from "lucide-react";
+import { Music, Play, Trash2, Camera, SquareCheckBig } from "lucide-react";
 import type { Playlist } from "../../utils/playlists";
 import {
   getPlaylistById,
@@ -168,9 +168,11 @@ export function PlaylistView({
       "remove-track-failed",
     );
 
-  const enterSelection = (trackId: string) => {
+  // Row menu passes the clicked track (enter with that row selected); the
+  // header Select button enters with an empty selection (0 selected state).
+  const enterSelection = (trackId?: string) => {
     setSelectionMode(true);
-    setSelected(new Set([trackId]));
+    setSelected(trackId === undefined ? new Set() : new Set([trackId]));
   };
 
   const exitSelection = () => {
@@ -368,18 +370,31 @@ export function PlaylistView({
                   void handleBulkRemove();
                 }}
                 onExit={exitSelection}
+                removeLabel={t("remove_from_playlist")}
               />
             ) : (
-              <button
-                onClick={() => {
-                  const first = tracks[0];
-                  if (first === undefined) return;
-                  onPlay(first, tracks);
-                }}
-                className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg"
-              >
-                <Play className="w-7 h-7 fill-current ml-1" />
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    const first = tracks[0];
+                    if (first === undefined) return;
+                    onPlay(first, tracks);
+                  }}
+                  className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg"
+                >
+                  <Play className="w-7 h-7 fill-current ml-1" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    enterSelection();
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
+                >
+                  <SquareCheckBig className="w-4 h-4" />
+                  <span>{t("playlist.select")}</span>
+                </button>
+              </div>
             )}
           </div>
         )}

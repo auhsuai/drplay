@@ -537,6 +537,33 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     expect(screen.getByRole("button", { name: "More actions" })).not.toBeNull();
   });
 
+  it("header Select button enters selection mode with an empty selection (Remove disabled)", async () => {
+    mocks.getPlaylistById.mockResolvedValue(TWO_TRACK_PLAYLIST);
+    renderView();
+    await screen.findByText("Track 1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(screen.getByTestId("queue-selection-toolbar")).not.toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Track 1" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Track 2" })).not.toBeChecked();
+    expect(screen.getByTestId("queue-remove-selected")).toBeDisabled();
+    // The normal-mode controls (play-all + Select entry) are replaced.
+    expect(document.querySelector("button.w-14.h-14")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Select" })).toBeNull();
+  });
+
+  it("selection toolbar shows the playlist-scoped Remove from Playlist label", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    renderView();
+    await screen.findByText("Track 1");
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(screen.getByTestId("queue-remove-selected").textContent).toContain(
+      "Remove from Playlist",
+    );
+  });
+
   it("normal mode no longer renders the hover remove (X) button; removal is menu-only", async () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     renderView();

@@ -7,6 +7,10 @@ export interface QueueSelectionToolbarProps {
   onToggleSelectAll: () => void;
   onRemove: () => void;
   onExit: () => void;
+  // Context-specific copy for the remove action (the playlist wants "Remove
+  // from Playlist" instead of the queue's "Remove selected (N)"). Absent ->
+  // queue copy, so the queue panel call site is unchanged.
+  removeLabel?: string | undefined;
 }
 
 /** Bulk-selection actions shown only while selection mode is active. */
@@ -16,6 +20,7 @@ export function QueueSelectionToolbar({
   onToggleSelectAll,
   onRemove,
   onExit,
+  removeLabel,
 }: QueueSelectionToolbarProps) {
   const { t } = useTranslation();
 
@@ -67,7 +72,10 @@ export function QueueSelectionToolbar({
           className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-brand-primary hover:bg-blue-600 rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Trash2 className="w-4 h-4" />
-          <span>{t("queue.remove_selected", { count: selectedCount })}</span>
+          <span>
+            {removeLabel ??
+              t("queue.remove_selected", { count: selectedCount })}
+          </span>
         </button>
       </div>
     </div>

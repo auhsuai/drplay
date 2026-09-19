@@ -114,6 +114,7 @@
     "update_error": "Couldn't update playlist. Try again.",
     "empty_state_title": "No tracks yet",
     "empty_state_subtitle": "Add songs to your playlist.",
+    "select": "Select",
     "change_cover": "Change Cover",
     "cover_save_error": "Couldn't save cover. Try again.",
     "adjust_cover": "Adjust Image",
