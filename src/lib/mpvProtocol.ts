@@ -12,6 +12,7 @@
  */
 
 import { captureError } from "../utils/errorLog";
+import type { TimerRegistry } from "./timerRegistry";
 
 export const TAURI_COMMANDS = {
   mpvSpawn: "mpv_spawn",
@@ -187,9 +188,12 @@ export class BufferingTracker {
   /** Last paused-for-cache value mpv reported (v4 spin-hold gate). */
   private mpvBuffering = false;
   private readonly emit: (isBuffering: boolean) => void;
+  /** Optional (R1.5): register every arm/clear under a name + owner. */
+  private readonly timers: TimerRegistry | null;
 
-  constructor(emit: (isBuffering: boolean) => void) {
+  constructor(emit: (isBuffering: boolean) => void, timers?: TimerRegistry) {
     this.emit = emit;
+    this.timers = timers ?? null;
   }
 
   request(immediate = false): void {
@@ -205,10 +209,14 @@ export class BufferingTracker {
       return;
     }
     this.state = "pending";
-    this.displayTimer = setTimeout(() => {
-      this.displayTimer = null;
-      this.promote();
-    }, SPINNER_DELAY_MS);
+    this.displayTimer = this.setTimer(
+      () => {
+        this.displayTimer = null;
+        this.promote();
+      },
+      SPINNER_DELAY_MS,
+      "buffering-display",
+    );
     this.rearmDeadline();
   }
 
@@ -231,10 +239,14 @@ export class BufferingTracker {
         return;
       }
       if (this.sustainTimer === null) {
-        this.sustainTimer = setTimeout(() => {
-          this.sustainTimer = null;
-          this.promote();
-        }, SPINNER_DELAY_MS);
+        this.sustainTimer = this.setTimer(
+          () => {
+            this.sustainTimer = null;
+            this.promote();
+          },
+          SPINNER_DELAY_MS,
+          "buffering-sustain",
+        );
       }
       return;
     }
@@ -313,30 +325,43 @@ export class BufferingTracker {
   }
 
   private rearmDeadline(): void {
-    if (this.deadlineTimer !== null) clearTimeout(this.deadlineTimer);
-    this.deadlineTimer = setTimeout(() => {
-      this.deadlineTimer = null;
-      this.deadlineFire();
-    }, BUFFERING_TIMEOUT_MS);
+    this.clearTimer(this.deadlineTimer);
+    this.deadlineTimer = this.setTimer(
+      () => {
+        this.deadlineTimer = null;
+        this.deadlineFire();
+      },
+      BUFFERING_TIMEOUT_MS,
+      "buffering-deadline",
+    );
   }
 
   private clearTimers(): void {
     this.clearSustainTimer();
-    if (this.displayTimer !== null) {
-      clearTimeout(this.displayTimer);
-      this.displayTimer = null;
-    }
-    if (this.deadlineTimer !== null) {
-      clearTimeout(this.deadlineTimer);
-      this.deadlineTimer = null;
-    }
+    this.clearTimer(this.displayTimer);
+    this.displayTimer = null;
+    this.clearTimer(this.deadlineTimer);
+    this.deadlineTimer = null;
   }
 
   private clearSustainTimer(): void {
-    if (this.sustainTimer !== null) {
-      clearTimeout(this.sustainTimer);
-      this.sustainTimer = null;
-    }
+    this.clearTimer(this.sustainTimer);
+    this.sustainTimer = null;
+  }
+
+  private setTimer(
+    fn: () => void,
+    ms: number,
+    name: string,
+  ): ReturnType<typeof setTimeout> {
+    if (this.timers === null) return setTimeout(fn, ms);
+    return this.timers.setTimeout(name, fn, ms);
+  }
+
+  private clearTimer(handle: ReturnType<typeof setTimeout> | null): void {
+    if (handle === null) return;
+    if (this.timers === null) clearTimeout(handle);
+    else this.timers.clearTimeout(handle);
   }
 }
 
@@ -350,14 +375,18 @@ export class TimePosWatchdog {
   private readonly isPlaying: () => boolean;
   private readonly getTimePos: () => Promise<unknown>;
   private readonly onTimeUpdate: (time: number) => void;
+  /** Optional (R1.5): register the interval under a name + owner. */
+  private readonly timers: TimerRegistry | null;
   constructor(
     isPlaying: () => boolean,
     getTimePos: () => Promise<unknown>,
     onTimeUpdate: (time: number) => void,
+    timers?: TimerRegistry,
   ) {
     this.isPlaying = isPlaying;
     this.getTimePos = getTimePos;
     this.onTimeUpdate = onTimeUpdate;
+    this.timers = timers ?? null;
   }
   noteEmit(): void {
     this.lastTickAt = Date.now();
@@ -365,13 +394,21 @@ export class TimePosWatchdog {
   start(): void {
     if (this.timer !== null || !this.isPlaying()) return;
     this.lastTickAt = Date.now();
-    this.timer = setInterval(() => void this.poll(), WATCHDOG_INTERVAL_MS);
+    this.timer =
+      this.timers === null
+        ? setInterval(() => void this.poll(), WATCHDOG_INTERVAL_MS)
+        : this.timers.setInterval(
+            "watchdog",
+            () => void this.poll(),
+            WATCHDOG_INTERVAL_MS,
+          );
   }
   stop(): void {
     // Why: clearing the interval cannot cancel a poll already awaiting the
     // IPC reply — the bump is what invalidates that continuation.
     this.generation += 1;
-    clearInterval(this.timer ?? undefined);
+    if (this.timers === null) clearInterval(this.timer ?? undefined);
+    else this.timers.clearInterval(this.timer);
     this.timer = null;
   }
   private async poll(): Promise<void> {
@@ -464,9 +501,12 @@ export class StallReconciler {
   private attempts = 0;
   private exhausted = false;
   private readonly cb: StallReconcilerCallbacks;
+  /** Optional (R1.5): register the interval under a name + owner. */
+  private readonly timers: TimerRegistry | null;
 
-  constructor(cb: StallReconcilerCallbacks) {
+  constructor(cb: StallReconcilerCallbacks, timers?: TimerRegistry) {
     this.cb = cb;
+    this.timers = timers ?? null;
   }
 
   /** Start watching (idempotent). Why it re-anchors even when already
@@ -476,14 +516,22 @@ export class StallReconciler {
     if (!this.cb.isActive()) return;
     this.lastProgressAt = Date.now();
     if (this.timer !== null) return;
-    this.timer = setInterval(() => void this.round(), STALL_POLL_INTERVAL_MS);
+    this.timer =
+      this.timers === null
+        ? setInterval(() => void this.round(), STALL_POLL_INTERVAL_MS)
+        : this.timers.setInterval(
+            "reconciler",
+            () => void this.round(),
+            STALL_POLL_INTERVAL_MS,
+          );
   }
 
   /** Stop watching (idempotent): no callback can fire after this returns. */
   stop(): void {
     this.generation += 1;
     if (this.timer !== null) {
-      clearInterval(this.timer);
+      if (this.timers === null) clearInterval(this.timer);
+      else this.timers.clearInterval(this.timer);
       this.timer = null;
     }
   }

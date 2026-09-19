@@ -11,6 +11,8 @@
  * are unchanged; the watchdog stays the truth resync on total push loss.
  */
 
+import type { TimerRegistry } from "./timerRegistry";
+
 /** Tick cadence; also the minimum push silence before a synthetic emit. */
 export const INTERPOLATOR_TICK_MS = 250;
 
@@ -32,15 +34,19 @@ export class TimeInterpolator {
   private readonly isPlaying: () => boolean;
   private readonly isBuffering: () => boolean;
   private readonly emit: (time: number) => void;
+  /** Optional (R1.5): register the tick interval under a name + owner. */
+  private readonly timers: TimerRegistry | null;
 
   constructor(
     isPlaying: () => boolean,
     emit: (time: number) => void,
     isBuffering: () => boolean = () => false,
+    timers?: TimerRegistry,
   ) {
     this.isPlaying = isPlaying;
     this.isBuffering = isBuffering;
     this.emit = emit;
+    this.timers = timers ?? null;
   }
 
   /** A real push arrived (push, watchdog backfill, seek report): resync base only. */
@@ -64,14 +70,19 @@ export class TimeInterpolator {
   /** Arm the tick interval while playing; silent until the first real push. */
   start(): void {
     if (this.timer !== null || !this.isPlaying()) return;
-    this.timer = setInterval(() => {
+    const tick = (): void => {
       this.tick();
-    }, INTERPOLATOR_TICK_MS);
+    };
+    this.timer =
+      this.timers === null
+        ? setInterval(tick, INTERPOLATOR_TICK_MS)
+        : this.timers.setInterval("interpolator", tick, INTERPOLATOR_TICK_MS);
   }
 
   stop(): void {
     if (this.timer === null) return;
-    clearInterval(this.timer);
+    if (this.timers === null) clearInterval(this.timer);
+    else this.timers.clearInterval(this.timer);
     this.timer = null;
   }
 

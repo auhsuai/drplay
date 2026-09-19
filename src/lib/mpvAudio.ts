@@ -48,6 +48,7 @@ import {
   type StallTruth,
 } from "./mpvProtocol";
 import { TimeInterpolator } from "./timeInterpolator";
+import { TimerRegistry } from "./timerRegistry";
 
 /** MpvEngine — mpv sidecar playback over Tauri JSON IPC; Rust contract + watchdog in mpvProtocol.ts. */
 
@@ -137,9 +138,13 @@ export class MpvAudioController {
   // Why: guards the once-per-track `first-audio` emit so interpolated
   // timeupdates (which bypass onTimeUpdate) can never fake it.
   private firstAudioEmitted = false;
+  // Why (R1.5): one registry owns every playback timer (engine arms + the 3
+  // machines + the interpolator) so `release()` can assert an empty registry
+  // instead of trusting five scattered clear sites.
+  private timers = new TimerRegistry();
   private buffering = new BufferingTracker((isBuffering) => {
     this.emit("buffering", { isBuffering });
-  });
+  }, this.timers);
   private watchdog = new TimePosWatchdog(
     () => usePlayerStore.getState().isPlaying,
     () =>
@@ -147,6 +152,7 @@ export class MpvAudioController {
     (time) => {
       this.events.onTimeUpdate(time);
     },
+    this.timers,
   );
   private interpolator = new TimeInterpolator(
     () => usePlayerStore.getState().isPlaying,
@@ -160,6 +166,7 @@ export class MpvAudioController {
     // Why: paused-for-cache stalls keep isPlaying true — gate the synthetic
     // clock on the spinner so fill/clock freeze instead of running blind.
     () => this.buffering.isShown(),
+    this.timers,
   );
   /**
    * Pinned-playhead self-heal (mpv can freeze time-pos with no end-file/error
@@ -168,23 +175,26 @@ export class MpvAudioController {
    * spinner whose paused-for-cache=false was lost, reload the stream after a
    * bounded pin, then surface a bounded error the user can retry.
    */
-  private reconciler = new StallReconciler({
-    isActive: () =>
-      usePlayerStore.getState().isPlaying &&
-      !this.paused &&
-      !this.playbackFinished,
-    isBusy: () => this.seekTarget !== null,
-    queryTruth: () => this.queryStallTruth(),
-    onReconcileBuffering: (buffering) => {
-      this.buffering.reportMpvBuffering(buffering);
+  private reconciler = new StallReconciler(
+    {
+      isActive: () =>
+        usePlayerStore.getState().isPlaying &&
+        !this.paused &&
+        !this.playbackFinished,
+      isBusy: () => this.seekTarget !== null,
+      queryTruth: () => this.queryStallTruth(),
+      onReconcileBuffering: (buffering) => {
+        this.buffering.reportMpvBuffering(buffering);
+      },
+      onStallRecover: (pinnedTime, attempt) => {
+        this.recoverFromStall(pinnedTime, attempt);
+      },
+      onStallExhausted: () => {
+        this.handleStallExhausted();
+      },
     },
-    onStallRecover: (pinnedTime, attempt) => {
-      this.recoverFromStall(pinnedTime, attempt);
-    },
-    onStallExhausted: () => {
-      this.handleStallExhausted();
-    },
-  });
+    this.timers,
+  );
 
   private readonly events: MpvEventCallbacks = {
     onTimeUpdate: (time) => {
@@ -848,6 +858,16 @@ export class MpvAudioController {
     };
   }
 
+  /** Live playback timers (R1.5) — 0 after release(), by invariant. */
+  public activeTimerCount(): number {
+    return this.timers.activeTimerCount();
+  }
+
+  /** Names of the live playback timers, for tests/diagnostics (R1.5). */
+  public activeTimerNames(): string[] {
+    return this.timers.activeTimerNames();
+  }
+
   public release(): void {
     // Why: bump FIRST so every in-flight continuation (listener attach, spawn,
     // loadfile) observes the teardown at its next await boundary and aborts.
@@ -909,10 +929,14 @@ export class MpvAudioController {
     // (same reset+start pattern as beginTrack).
     this.interpolator.reset();
     this.interpolator.start();
-    this.seekFailsafe = setTimeout(() => {
-      this.seekFailsafe = null;
-      this.seekTarget = null;
-    }, SEEK_ACK_TIMEOUT_MS);
+    this.seekFailsafe = this.timers.setTimeout(
+      "seek-failsafe",
+      () => {
+        this.seekFailsafe = null;
+        this.seekTarget = null;
+      },
+      SEEK_ACK_TIMEOUT_MS,
+    );
     this.buffering.request();
     void this.sendCommand([
       MPV_COMMANDS.seek,
@@ -930,7 +954,7 @@ export class MpvAudioController {
   private clearSeekAck(): void {
     this.seekTarget = null;
     if (this.seekFailsafe !== null) {
-      clearTimeout(this.seekFailsafe);
+      this.timers.clearTimeout(this.seekFailsafe);
       this.seekFailsafe = null;
     }
   }
@@ -1035,15 +1059,19 @@ export class MpvAudioController {
   private armLoadDeadline(trackId: string): void {
     this.clearLoadDeadline();
     const epoch = this.lifecycleEpoch;
-    this.loadDeadline = setTimeout(() => {
-      this.loadDeadline = null;
-      void this.onLoadDeadline(trackId, epoch);
-    }, LOADFILE_DEADLINE_MS);
+    this.loadDeadline = this.timers.setTimeout(
+      "load-deadline",
+      () => {
+        this.loadDeadline = null;
+        void this.onLoadDeadline(trackId, epoch);
+      },
+      LOADFILE_DEADLINE_MS,
+    );
   }
 
   private clearLoadDeadline(): void {
     if (this.loadDeadline !== null) {
-      clearTimeout(this.loadDeadline);
+      this.timers.clearTimeout(this.loadDeadline);
       this.loadDeadline = null;
     }
   }
