@@ -145,8 +145,8 @@ describe("NowPlayingView full-screen error surface (P2-12-6)", () => {
     expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
   });
 
-  it("hasError → center button is the retry affordance (RefreshCw, no spinner); click replays the current track", () => {
-    const track = makeTrack();
+  it("hasError → center button is the retry affordance (RefreshCw, no spinner); click replays the current track WITHOUT the stale restore position (F8-8)", () => {
+    const track = { ...makeTrack(), restoreTime: 12 };
     storeState.errorInfo = {
       code: "format_error",
       message: "File lỗi định dạng, đang bỏ qua...",
@@ -165,7 +165,9 @@ describe("NowPlayingView full-screen error surface (P2-12-6)", () => {
     if (!center) throw new Error("center button not found");
     fireEvent.click(center);
 
-    expect(audioMock.playTrack).toHaveBeenCalledWith(track, track.restoreTime);
+    // Retry is not a restore: it never re-reads Track.restoreTime (one-shot
+    // resume hint consumed by the first play — F7-6/F8-8).
+    expect(audioMock.playTrack).toHaveBeenCalledWith(track);
   });
 
   it("no error → no banner and the center button stays Play", () => {

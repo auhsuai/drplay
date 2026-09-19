@@ -85,15 +85,18 @@ export function guardAllowsAutoAdvance(now: number): boolean {
 /**
  * Manual "retry current track" (center transport button). Retrying is a
  * user-initiated transport action, so it resets the storm guard and replays
- * the current track from its restore position. Shared by PlayerBar's
- * TransportControls and the full-screen NowPlayingControls so both surfaces
- * run the exact same retry (P2-12-6 parity), instead of one of them growing a
- * second implementation.
+ * the current track. It deliberately passes NO start time: the session restore
+ * position is a one-shot hint owned by the first play after a restore
+ * (F7-6/F8-8), so a retry must never seek back to it. The engine then keeps
+ * mpv's own position for a same-track mid-playback retry, and restarts from 0
+ * after a terminal failure. Shared by PlayerBar's TransportControls and the
+ * full-screen NowPlayingControls so both surfaces run the exact same retry
+ * (P2-12-6 parity), instead of one of them growing a second implementation.
  */
 export function retryCurrentTrack(): void {
   resetAdvanceGuard();
   const track = usePlayerStore.getState().currentTrack;
   if (track) {
-    void AudioController.getInstance().playTrack(track, track.restoreTime);
+    void AudioController.getInstance().playTrack(track);
   }
 }

@@ -9,6 +9,7 @@ import {
 } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
 import { usePlayerSession } from "./usePlayerSession";
+import { clearRestoreResume, consumeRestoreResume } from "./restoreResume";
 import { usePlayerStore } from "../../store/playerStore";
 import type { Track } from "../../types";
 
@@ -104,6 +105,7 @@ async function flushMicrotasks() {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  clearRestoreResume();
   mockedGet.mockResolvedValue(undefined);
   mockedGetValidToken.mockResolvedValue("test-token");
   mockedGetPrefetchedStreamUrl.mockReturnValue(undefined);
@@ -246,6 +248,40 @@ describe("usePlayerSession restore (lock-behavior)", () => {
     expect(setOriginalQueue).not.toHaveBeenCalled();
     expect(setPlayMode).not.toHaveBeenCalled();
     expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("usePlayerSession restore resume hint (F7-6/F8-8)", () => {
+  it("Q: restore có time → arm ONE-SHOT resume hint, consume đúng 1 lần", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 12, duration: 240 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+
+    const { setCurrentTrack } = makeHook();
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).toHaveBeenCalledTimes(1);
+    expect(consumeRestoreResume("t1")).toBe(12);
+    expect(consumeRestoreResume("t1")).toBeUndefined();
+  });
+
+  it("R: restore không có time → không arm hint", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        track: makeTrack("t1", "q1"),
+        duration: 240,
+      }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+
+    const { setCurrentTrack } = makeHook();
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).toHaveBeenCalledTimes(1);
+    expect(consumeRestoreResume("t1")).toBeUndefined();
   });
 });
 
@@ -558,6 +594,9 @@ describe("usePlayerSession restore race (user intent guard)", () => {
     expect(setPlayMode).not.toHaveBeenCalled();
     expect(triggerReload).not.toHaveBeenCalled();
     expect(mockedCaptureError).not.toHaveBeenCalled();
+    // An aborted restore must not leave a resume hint armed for a track it
+    // never committed (F7-6/F8-8).
+    expect(consumeRestoreResume("t1")).toBeUndefined();
   });
 
   it("O: user đang load (isDownloading=true) khi restore resolve → bỏ toàn bộ commit", async () => {

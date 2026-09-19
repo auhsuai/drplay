@@ -12,6 +12,7 @@ import { classifyPlayerError, isAbortError } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
 import { AudioController } from "../../lib/AudioController";
 import { shuffleQueueWithCurrent } from "./usePlayerQueue";
+import { armRestoreResume } from "./restoreResume";
 
 const PLAYER_SESSION_MODULE = "usePlayerSession";
 const SAVE_THROTTLE_MS = 5000;
@@ -112,6 +113,15 @@ export function usePlayerSession(
               ? { restoreDuration: lastSession.duration }
               : undefined),
           };
+
+          // F7-6/F8-8: the resume position is armed as a ONE-SHOT engine hint
+          // (consumed by the first play of this track in PlayerBar's bridge).
+          // Track.restoreTime above only feeds SeekBar's initial fill — the
+          // track object survives in the queues, so reading the position off
+          // it at play time would leak it into every replay/retry.
+          if (lastSession.time !== undefined) {
+            armRestoreResume(restoredTrack.id, lastSession.time);
+          }
 
           // Elements from the kv cast are unvalidated: one null/number/{} entry
           // would throw inside shuffleQueueWithCurrent (sameTrack derefs

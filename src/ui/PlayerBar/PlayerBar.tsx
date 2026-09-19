@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { List } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
 import { usePlayerStore } from "../../store/playerStore";
+import { consumeRestoreResume } from "../../hooks/player/restoreResume";
 import type { PlayerBarProps } from "./types";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
@@ -186,7 +187,14 @@ function PlayerBarImpl({
   useEffect(() => {
     if (!currentTrack) return;
     if (isPlaying) {
-      void audio.playTrack(currentTrack, currentTrack.restoreTime);
+      // F7-6/F8-8: the session restore position is a ONE-SHOT hint consumed
+      // here — only the first play after a restore may seek to it. It is never
+      // read off the track object: the restored track survives in the queues,
+      // so Track.restoreTime would seek every later replay (after EOF, back
+      // from prev/next, retry) to the stale position. undefined = start at 0 /
+      // engine resume, which is the intended replay/retry behavior.
+      const startTime = consumeRestoreResume(currentTrack.id);
+      void audio.playTrack(currentTrack, startTime);
     } else {
       audio.pause();
     }
