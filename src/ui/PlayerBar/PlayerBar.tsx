@@ -2,6 +2,7 @@ import { memo, useCallback, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { List } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
+import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
 import { usePlayerStore } from "../../store/playerStore";
 import { commitIsPlaying } from "../../store/playbackCommit";
 import { consumeRestoreResume } from "../../hooks/player/restoreResume";
@@ -71,11 +72,21 @@ function PlayerBarImpl({
 
   // Subscribe to AudioController Events (transport-relevant only — seek /
   // buffer-bar subscriptions live in SeekBar next to the DOM they own).
+  // R2.1: every handler reads the event's engine identity and drops events of
+  // a DIFFERENT track than the store's current one — in the switch window
+  // (store already on B, engine still emitting A's terminal events) the old
+  // track's error/ended/play/buffering must not mark B broken, advance past
+  // B, clear B's banner or spin B's loader. Untagged events (no identity)
+  // keep legacy behavior, as does a missing current track.
   useEffect(() => {
-    const unsubBuf = audio.on("buffering", ({ isBuffering }) => {
+    const isForeign = (payload: { trackId?: string } | undefined) =>
+      isForeignTrackEvent(payload, usePlayerStore.getState().currentTrack?.id);
+    const unsubBuf = audio.on("buffering", ({ isBuffering, ...identity }) => {
+      if (isForeign(identity)) return;
       setIsBuffering(isBuffering);
     });
     const unsubErr = audio.on("error", (err) => {
+      if (isForeign(err)) return;
       // Task D: an unrecoverable playback failure (format_error — broken
       // format/decode or retry give-up) marks the current track broken so the
       // auto-advance guard in usePlayerQueue skips it instead of looping it
@@ -100,17 +111,22 @@ function PlayerBarImpl({
           return;
         }
       }
-      usePlayerStore.getState().setErrorInfo(err);
+      // Store only the UI surface — the engine identity is not part of it.
+      usePlayerStore
+        .getState()
+        .setErrorInfo({ code: err.code, message: err.message });
     });
     // A `play` event is the native "playback actually resumed" signal — it
     // fires after a successful auto-retry, so the stale error banner (and its
     // RefreshCw button) must not outlive the recovery. Fix I: a successful
     // play also proves the storm is over — reset the counter and unblock.
-    const unsubPlay = audio.on("play", () => {
+    const unsubPlay = audio.on("play", (identity) => {
+      if (isForeign(identity)) return;
       resetAdvanceGuard();
       usePlayerStore.getState().setErrorInfo(null);
     });
-    const unsubEnded = audio.on("ended", () => {
+    const unsubEnded = audio.on("ended", (identity) => {
+      if (isForeign(identity)) return;
       // Fix I: while a format_error storm is blocked, an `ended` must NOT
       // auto-advance — the next track would only fail again. Stop playback
       // instead; the storm banner (set by the error handler) stays visible

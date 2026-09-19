@@ -675,3 +675,88 @@ describe("usePlayerSession restore race (user intent guard)", () => {
     expect(mockedCaptureError).not.toHaveBeenCalled();
   });
 });
+
+describe("usePlayerSession save identity (R2.1 — no {track B, time A} pairs)", () => {
+  function savedSession(): { track?: Track; time?: number } | null {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as { track?: Track; time?: number }) : null;
+  }
+
+  function saveHandlers() {
+    return {
+      time: audioMock.on.mock.calls.find((c) => c[0] === "timeupdate")?.[1] as
+        ((payload?: unknown) => void) | undefined,
+      pause: audioMock.on.mock.calls.find((c) => c[0] === "pause")?.[1] as
+        ((payload?: unknown) => void) | undefined,
+      ended: audioMock.on.mock.calls.find((c) => c[0] === "ended")?.[1] as
+        ((payload?: unknown) => void) | undefined,
+    };
+  }
+
+  beforeEach(() => {
+    // Deterministic throttle clock: the event-driven save is time-gated at 5s
+    // and performance.now() is wall-clock in jsdom (may still be < 5s here).
+    vi.spyOn(performance, "now").mockReturnValue(10_000);
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: makeTrack("t1", "q1"),
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(10);
+    vi.mocked(audioMock.getDuration).mockReturnValue(240);
+  });
+
+  it("timeupdate of another track (engine still on A) skips the save — no {t1, timeA}", () => {
+    makeHook();
+    const { time } = saveHandlers();
+
+    act(() => {
+      time?.({ trackId: "t2", attempt: 9 });
+    });
+    expect(savedSession()).toBeNull();
+
+    act(() => {
+      time?.({ trackId: "t1", attempt: 1 });
+    });
+    expect(savedSession()).toMatchObject({ time: 10 });
+    expect(savedSession()?.track?.id).toBe("t1");
+  });
+
+  it("pause of another track skips the forced save; its own pause saves", () => {
+    makeHook();
+    const { pause } = saveHandlers();
+
+    act(() => {
+      pause?.({ trackId: "t2", attempt: 9 });
+    });
+    expect(savedSession()).toBeNull();
+
+    act(() => {
+      pause?.({ trackId: "t1", attempt: 1 });
+    });
+    expect(savedSession()).toMatchObject({ time: 10 });
+  });
+
+  it("ended of another track skips the forced save; its own ended saves the final position", () => {
+    makeHook();
+    const { ended } = saveHandlers();
+
+    act(() => {
+      ended?.({ trackId: "t2", attempt: 9 });
+    });
+    expect(savedSession()).toBeNull();
+
+    act(() => {
+      ended?.({ trackId: "t1", attempt: 1 });
+    });
+    expect(savedSession()).toMatchObject({ time: 10 });
+  });
+
+  it("untagged events (older sender) keep legacy behavior", () => {
+    makeHook();
+    const { time } = saveHandlers();
+
+    act(() => {
+      time?.();
+    });
+    expect(savedSession()).toMatchObject({ time: 10 });
+  });
+});

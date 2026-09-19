@@ -49,6 +49,13 @@ vi.mock("react-i18next", () => {
   };
 });
 
+// Identifiable LoaderCircle stub (the real icon renders an SVG): the spinner
+// is the only observable effect of the local buffering state, so tests assert
+// whether this component was rendered at all.
+const { loaderIcon } = vi.hoisted(() => ({
+  loaderIcon: vi.fn(() => null),
+}));
+
 vi.mock("lucide-react", () => {
   const icons = [
     "CloudOff",
@@ -80,7 +87,9 @@ vi.mock("lucide-react", () => {
     "Check",
   ];
   const Stub = () => null;
-  return Object.fromEntries(icons.map((n) => [n, Stub]));
+  const map = Object.fromEntries(icons.map((n) => [n, Stub]));
+  map["LoaderCircle"] = loaderIcon;
+  return map;
 });
 
 const { isFavorite, addFavorite, removeFavorite } = vi.hoisted(() => ({
@@ -2554,5 +2563,142 @@ describe("PlayerBar seek rail is the top variant (edge-to-edge at the bar's top 
     expect(endClock.tagName).toBe("SPAN");
     expect(startClock.className.split(" ")).toContain("hidden");
     expect(endClock.className.split(" ")).toContain("hidden");
+  });
+});
+
+describe("PlayerBar event identity filtering (R2.1 — stale-track misattribution)", () => {
+  // Window under test: the store already points at the new track (B,
+  // "track-1") while the engine is still finishing the old one (A,
+  // "stale-track"). A's terminal events must not mutate B's state.
+  const stalePayload = { trackId: "stale-track", attempt: 1 };
+
+  beforeEach(() => {
+    loaderIcon.mockClear();
+    fakeController.playTrack.mockClear();
+    usePlayerStore.setState({
+      currentTrack: makeTrack(),
+      isPlaying: true,
+      brokenTrackIds: [],
+      errorInfo: null,
+    });
+  });
+
+  afterEach(() => {
+    usePlayerStore.setState({
+      currentTrack: null,
+      isPlaying: false,
+      brokenTrackIds: [],
+      errorInfo: null,
+      playMode: "normal",
+    });
+  });
+
+  it("error of another track: no broken mark, no banner for the current track", () => {
+    renderPlayer();
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "File lỗi định dạng, đang bỏ qua...",
+        code: "format_error",
+        ...stalePayload,
+      });
+    });
+
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
+    expect(usePlayerStore.getState().errorInfo).toBeNull();
+    expect(screen.queryByText(en.player.format_error)).toBeNull();
+  });
+
+  it("ended of another track: never auto-advances the current track", () => {
+    const onNext = vi.fn();
+    renderPlayer({ onNextTrack: onNext });
+
+    act(() => {
+      fakeController._emit("ended", stalePayload);
+    });
+
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it("ended of another track: no repeat-one replay of the current track", () => {
+    usePlayerStore.setState({ playMode: "repeat-one" });
+    renderPlayer({ playMode: "repeat-one" });
+
+    act(() => {
+      fakeController._emit("ended", stalePayload);
+    });
+
+    expect(fakeController.playTrack).not.toHaveBeenCalled();
+  });
+
+  it("play of another track: keeps the current track's error banner", () => {
+    usePlayerStore.setState({
+      errorInfo: { code: "network_interrupted", message: "boom" },
+    });
+    renderPlayer();
+    expect(screen.getByText(en.player.network_interrupted)).toBeTruthy();
+
+    act(() => {
+      fakeController._emit("play", stalePayload);
+    });
+
+    expect(usePlayerStore.getState().errorInfo).toEqual({
+      code: "network_interrupted",
+      message: "boom",
+    });
+  });
+
+  it("buffering of another track: never flips the current spinner", () => {
+    renderPlayer({ isPlaying: true });
+
+    act(() => {
+      fakeController._emit("buffering", { isBuffering: true, ...stalePayload });
+    });
+
+    expect(loaderIcon).not.toHaveBeenCalled();
+  });
+
+  it("buffering of the current track: still promotes the spinner", () => {
+    renderPlayer({ isPlaying: true });
+
+    act(() => {
+      fakeController._emit("buffering", {
+        isBuffering: true,
+        trackId: "track-1",
+        attempt: 7,
+      });
+    });
+
+    expect(loaderIcon).toHaveBeenCalled();
+  });
+
+  it("error of the current track: still marks it broken + shows the banner", () => {
+    renderPlayer();
+
+    act(() => {
+      fakeController._emit("error", {
+        message: "File lỗi định dạng, đang bỏ qua...",
+        code: "format_error",
+        trackId: "track-1",
+        attempt: 7,
+      });
+    });
+
+    expect(usePlayerStore.getState().brokenTrackIds).toContain("track-1");
+    expect(usePlayerStore.getState().errorInfo).toEqual({
+      code: "format_error",
+      message: "File lỗi định dạng, đang bỏ qua...",
+    });
+  });
+
+  it("ended of the current track: still auto-advances", () => {
+    const onNext = vi.fn();
+    renderPlayer({ onNextTrack: onNext });
+
+    act(() => {
+      fakeController._emit("ended", { trackId: "track-1", attempt: 7 });
+    });
+
+    expect(onNext).toHaveBeenCalledWith(true);
   });
 });

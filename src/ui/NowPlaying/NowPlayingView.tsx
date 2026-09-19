@@ -3,6 +3,7 @@ import type { PlayMode, Track } from "../../types";
 import { Music, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
+import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
 import { usePlayerStore } from "../../store/playerStore";
 import { resetAdvanceGuard, retryCurrentTrack } from "../../utils/playerError";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
@@ -53,11 +54,20 @@ export const NowPlayingView = memo(function NowPlayingView({
     useNowPlayingMetadata(currentTrack, token);
 
   // Buffering state for the play-button spinner — same source/condition
-  // as PlayerBar (audio "buffering" event + isPlaying).
+  // as PlayerBar (audio "buffering" event + isPlaying). R2.1: identity guard
+  // like PlayerBar — a stale track's buffering event must not spin this view.
   const [isBuffering, setIsBuffering] = useState(false);
   useEffect(() => {
     const audio = AudioController.getInstance();
-    return audio.on("buffering", ({ isBuffering: buffering }) => {
+    return audio.on("buffering", ({ isBuffering: buffering, ...identity }) => {
+      if (
+        isForeignTrackEvent(
+          identity,
+          usePlayerStore.getState().currentTrack?.id,
+        )
+      ) {
+        return;
+      }
       setIsBuffering(buffering);
     });
   }, []);

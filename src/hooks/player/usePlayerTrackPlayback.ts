@@ -202,6 +202,7 @@ export function usePlayerTrackPlayback(
         // stream header; restoreDuration only feeds SeekBar text + session.
         const metadataAudio = AudioController.getInstance();
         onceAfterFirstAudio(metadataAudio, signal, {
+          trackId: targetTrack.id,
           fallbackMs: METADATA_DEFER_FALLBACK_MS,
           onFire: () => {
             // Why: first-audio (or the fallback timer) is the "playback
@@ -259,6 +260,7 @@ export function usePlayerTrackPlayback(
         // An already-fired prefetch is intentionally left running on track
         // change — there is no cancel protocol down to the SW.
         onceAfterFirstAudio(metadataAudio, signal, {
+          trackId: targetTrack.id,
           onFire: () => {
             const { playbackQueue, playMode, brokenTrackIds } =
               usePlayerStore.getState();

@@ -29,13 +29,24 @@ vi.mock("../lib/mediaControls", () => ({
   },
 }));
 
-const audioMock = vi.hoisted(() => ({
-  getCurrentTime: vi.fn(() => 0),
-  getDuration: vi.fn(() => 0),
-  seek: vi.fn(),
-  pause: vi.fn(),
-  on: vi.fn<(event: string, handler: () => void) => () => void>(() => vi.fn()),
-}));
+const audioMock = vi.hoisted(() => {
+  const handlers: Record<string, Array<(payload?: unknown) => void>> = {};
+  return {
+    getCurrentTime: vi.fn(() => 0),
+    getDuration: vi.fn(() => 0),
+    seek: vi.fn(),
+    pause: vi.fn(),
+    on: vi.fn((event: string, handler: (payload?: unknown) => void) => {
+      (handlers[event] ??= []).push(handler);
+      return () => {
+        handlers[event] = (handlers[event] ?? []).filter((h) => h !== handler);
+      };
+    }),
+    _emit(event: string, payload?: unknown) {
+      for (const h of handlers[event] ?? []) h(payload);
+    },
+  };
+});
 
 vi.mock("../lib/AudioController", () => ({
   AudioController: { getInstance: () => audioMock },
@@ -331,5 +342,46 @@ describe("useMediaControls app -> OS snapshots", () => {
       "timeupdate",
       expect.any(Function),
     );
+  });
+
+  it("R2.1: position tick of ANOTHER track is dropped; the current track's tick pushes", async () => {
+    usePlayerStore.setState({ currentTrack: makeTrack("t1"), isPlaying: true });
+    audioMock.getCurrentTime.mockReturnValue(30);
+    audioMock.getDuration.mockReturnValue(120);
+    await mount();
+
+    const tick = audioMock.on.mock.calls.find(
+      (c) => c[0] === "timeupdate",
+    )?.[1] as ((payload?: unknown) => void) | undefined;
+    expect(tick).toBeTypeOf("function");
+    const callsAfterMount = bridgeMock.update.mock.calls.length;
+
+    act(() => {
+      tick?.({ trackId: "t2", attempt: 9 });
+    });
+    expect(bridgeMock.update).toHaveBeenCalledTimes(callsAfterMount);
+
+    act(() => {
+      tick?.({ trackId: "t1", attempt: 1 });
+    });
+    expect(bridgeMock.update).toHaveBeenCalledTimes(callsAfterMount + 1);
+    expect(lastSnapshot()).toMatchObject({ position: 30, duration: 120 });
+  });
+
+  it("R2.1 legacy: an untagged tick still pushes (older sender)", async () => {
+    usePlayerStore.setState({ currentTrack: makeTrack("t1"), isPlaying: true });
+    audioMock.getCurrentTime.mockReturnValue(30);
+    audioMock.getDuration.mockReturnValue(120);
+    await mount();
+
+    const tick = audioMock.on.mock.calls.find(
+      (c) => c[0] === "timeupdate",
+    )?.[1] as ((payload?: unknown) => void) | undefined;
+    const callsAfterMount = bridgeMock.update.mock.calls.length;
+
+    act(() => {
+      tick?.();
+    });
+    expect(bridgeMock.update).toHaveBeenCalledTimes(callsAfterMount + 1);
   });
 });

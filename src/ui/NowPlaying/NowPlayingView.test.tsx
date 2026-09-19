@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Track } from "../../types";
 import en from "../../locales/en/translation.json";
@@ -29,10 +35,21 @@ vi.mock("react-i18next", () => {
   };
 });
 
-const audioMock = vi.hoisted(() => ({
-  on: vi.fn(() => () => {}),
-  playTrack: vi.fn(() => Promise.resolve()),
-}));
+const audioMock = vi.hoisted(() => {
+  const handlers: Record<string, Array<(payload?: unknown) => void>> = {};
+  return {
+    on: vi.fn((event: string, handler: (payload?: unknown) => void) => {
+      (handlers[event] ??= []).push(handler);
+      return () => {
+        handlers[event] = (handlers[event] ?? []).filter((h) => h !== handler);
+      };
+    }),
+    _emit(event: string, payload?: unknown) {
+      for (const h of handlers[event] ?? []) h(payload);
+    },
+    playTrack: vi.fn(() => Promise.resolve()),
+  };
+});
 
 vi.mock("../../lib/AudioController", () => ({
   AudioController: { getInstance: () => audioMock },
@@ -213,5 +230,41 @@ describe("NowPlayingView storm guard parity (F7-7)", () => {
     fireEvent.click(screen.getByRole("button", { name: en.player.play }));
     expect(props.onTogglePlay).toHaveBeenCalledTimes(1);
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+  });
+});
+
+describe("NowPlayingView buffering identity (R2.1 — stale-track misattribution)", () => {
+  afterEach(() => {
+    storeState.currentTrack = null;
+    cleanup();
+  });
+
+  it("buffering of another track never flips the spinner; the current track's event does", () => {
+    storeState.currentTrack = makeTrack();
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={makeTrack()}
+        isPlaying={true}
+      />,
+    );
+
+    act(() => {
+      audioMock._emit("buffering", {
+        isBuffering: true,
+        trackId: "stale-track",
+        attempt: 1,
+      });
+    });
+    expect(container.querySelector(".animate-spin")).toBeNull();
+
+    act(() => {
+      audioMock._emit("buffering", {
+        isBuffering: true,
+        trackId: "track-1",
+        attempt: 3,
+      });
+    });
+    expect(container.querySelector(".animate-spin")).not.toBeNull();
   });
 });

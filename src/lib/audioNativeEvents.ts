@@ -39,3 +39,22 @@ export type AudioEventMap = {
 export type AudioEventHandler<K extends keyof AudioEventMap> = (
   payload: AudioEventMap[K],
 ) => void;
+
+/**
+ * True when an event carries an engine identity for a DIFFERENT track than
+ * `currentTrackId` (R2.1 consumer guard). Untagged events (`trackId` missing —
+ * no active track, older sender) and a missing current track keep legacy
+ * behavior: they are never treated as foreign, so no consumer drops events it
+ * cannot attribute.
+ */
+export function isForeignTrackEvent(
+  payload: { trackId?: string } | undefined,
+  currentTrackId: string | null | undefined,
+): boolean {
+  const eventTrackId = payload?.trackId;
+  return (
+    eventTrackId !== undefined &&
+    currentTrackId != null &&
+    eventTrackId !== currentTrackId
+  );
+}

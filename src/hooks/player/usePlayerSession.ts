@@ -11,6 +11,7 @@ import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { classifyPlayerError, isAbortError } from "./utils";
 import { usePlayerStore } from "../../store/playerStore";
 import { AudioController } from "../../lib/AudioController";
+import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
 import { shuffleQueueWithCurrent } from "./usePlayerQueue";
 import { armRestoreResume } from "./restoreResume";
 
@@ -250,13 +251,22 @@ export function usePlayerSession(
     window.addEventListener("pagehide", handleBeforeUnload);
 
     const audio = AudioController.getInstance();
-    const unsubTime = audio.on("timeupdate", () => {
+    // R2.1: the session pairs the store's track with the engine clock, so an
+    // event tagged with ANOTHER track means the engine is still on the old
+    // track — saving now would persist {track B, time A}. Skip it; the new
+    // track's own events save normally. Untagged events keep legacy behavior.
+    const isForeign = (payload: { trackId?: string } | undefined) =>
+      isForeignTrackEvent(payload, usePlayerStore.getState().currentTrack?.id);
+    const unsubTime = audio.on("timeupdate", (payload) => {
+      if (isForeign(payload)) return;
       saveSession(false);
     });
-    const unsubPause = audio.on("pause", () => {
+    const unsubPause = audio.on("pause", (payload) => {
+      if (isForeign(payload)) return;
       saveSession(true);
     });
-    const unsubEnded = audio.on("ended", () => {
+    const unsubEnded = audio.on("ended", (payload) => {
+      if (isForeign(payload)) return;
       saveSession(true);
     });
 

@@ -6,6 +6,7 @@ import {
   type MediaControlsSnapshot,
 } from "../lib/mediaControls";
 import { AudioController } from "../lib/AudioController";
+import { isForeignTrackEvent } from "../lib/audioNativeEvents";
 import { usePlayerStore } from "../store/playerStore";
 import { seekRelative, SEEK_STEP_SECONDS } from "./player/utils";
 
@@ -152,7 +153,11 @@ export function useMediaControls(options: UseMediaControlsOptions) {
   useEffect(() => {
     if (!currentTrack) return;
     const audio = AudioController.getInstance();
-    const tick = () => {
+    const tick = (payload?: { trackId?: string }) => {
+      // R2.1: a tick tagged with another track would report the old engine
+      // clock under the current track's metadata — drop it. Untagged ticks
+      // keep legacy behavior.
+      if (isForeignTrackEvent(payload, currentTrack.id)) return;
       const now = Date.now();
       if (now - lastPositionPushRef.current < POSITION_UPDATE_INTERVAL_MS) {
         return;

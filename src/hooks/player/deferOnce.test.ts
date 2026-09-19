@@ -4,8 +4,8 @@ import { onceAfterFirstAudio, type DeferAudioSource } from "./deferOnce";
 // Hand-rolled fake for the minimal audio surface: captures each handler and
 // exposes its unsub so tests can prove cleanup actually ran.
 function makeAudio() {
-  let firstAudioHandler: (() => void) | undefined;
-  let errorHandler: ((payload: unknown) => void) | undefined;
+  let firstAudioHandler: ((payload?: unknown) => void) | undefined;
+  let errorHandler: ((payload?: unknown) => void) | undefined;
   const unsubFirstAudio = vi.fn(() => {
     firstAudioHandler = undefined;
   });
@@ -13,12 +13,12 @@ function makeAudio() {
     errorHandler = undefined;
   });
   const on = vi.fn(
-    (event: "first-audio" | "error", handler: (...args: never[]) => void) => {
+    (event: "first-audio" | "error", handler: (payload?: unknown) => void) => {
       if (event === "first-audio") {
         firstAudioHandler = handler;
         return unsubFirstAudio;
       }
-      errorHandler = handler as (payload: unknown) => void;
+      errorHandler = handler;
       return unsubError;
     },
   );
@@ -28,8 +28,9 @@ function makeAudio() {
     on,
     unsubFirstAudio,
     unsubError,
-    emitFirstAudio: () => firstAudioHandler?.(),
-    emitError: () => errorHandler?.({ message: "boom", code: "E_MPV" }),
+    emitFirstAudio: (payload?: unknown) => firstAudioHandler?.(payload),
+    emitError: (payload?: unknown) =>
+      errorHandler?.(payload ?? { message: "boom", code: "E_MPV" }),
     hasFirstAudio: () => firstAudioHandler !== undefined,
     hasError: () => errorHandler !== undefined,
   };
@@ -144,5 +145,81 @@ describe("onceAfterFirstAudio", () => {
 
     controller.abort();
     expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it("R2.1: first-audio of ANOTHER track never fires — waits for its own track", () => {
+    const audio = makeAudio();
+    const onFire = vi.fn();
+    const onDrop = vi.fn();
+    const controller = new AbortController();
+
+    onceAfterFirstAudio(audio.source, controller.signal, {
+      trackId: "B",
+      onFire,
+      onDrop,
+    });
+
+    audio.emitFirstAudio({ trackId: "A", attempt: 1 });
+    expect(onFire).not.toHaveBeenCalled();
+    expect(audio.hasFirstAudio()).toBe(true); // still waiting for B
+
+    audio.emitFirstAudio({ trackId: "B", attempt: 2 });
+    expect(onFire).toHaveBeenCalledTimes(1);
+    expect(audio.unsubFirstAudio).toHaveBeenCalledTimes(1);
+    expect(audio.unsubError).toHaveBeenCalledTimes(1);
+  });
+
+  it("R2.1: error of ANOTHER track never drops the defer — its own error does", () => {
+    const audio = makeAudio();
+    const onFire = vi.fn();
+    const onDrop = vi.fn();
+    const controller = new AbortController();
+
+    onceAfterFirstAudio(audio.source, controller.signal, {
+      trackId: "B",
+      onFire,
+      onDrop,
+    });
+
+    audio.emitError({ message: "boom", code: "E_MPV", trackId: "A" });
+    expect(onDrop).not.toHaveBeenCalled();
+    expect(audio.hasError()).toBe(true); // still armed for B
+
+    audio.emitError({ message: "boom", code: "E_MPV", trackId: "B" });
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onFire).not.toHaveBeenCalled();
+  });
+
+  it("R2.1 legacy: no trackId option (old callers) keeps fire/drop on any event", () => {
+    vi.useFakeTimers();
+    const audio = makeAudio();
+    const onFire = vi.fn();
+    const onDrop = vi.fn();
+    const controller = new AbortController();
+
+    onceAfterFirstAudio(audio.source, controller.signal, {
+      fallbackMs: 9000,
+      onFire,
+      onDrop,
+    });
+
+    audio.emitFirstAudio({ trackId: "anything" });
+    expect(onFire).toHaveBeenCalledTimes(1);
+  });
+
+  it("R2.1 legacy: untagged events keep old behavior even when trackId is set", () => {
+    const audio = makeAudio();
+    const onFire = vi.fn();
+    const onDrop = vi.fn();
+    const controller = new AbortController();
+
+    onceAfterFirstAudio(audio.source, controller.signal, {
+      trackId: "B",
+      onFire,
+      onDrop,
+    });
+
+    audio.emitFirstAudio(); // no identity at all (older sender)
+    expect(onFire).toHaveBeenCalledTimes(1);
   });
 });

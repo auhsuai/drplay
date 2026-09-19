@@ -12,6 +12,10 @@ export interface DeferOnceOptions {
   /** When set, a timer fires the defer even without first-audio. Omitted =
    *  first-audio only (stuck session simply never fires). */
   fallbackMs?: number;
+  /** Engine track this defer belongs to (R2.1). When set, a tagged
+   *  first-audio/error of ANOTHER track is ignored (the defer keeps waiting
+   *  for its own track); untagged events keep legacy behavior. */
+  trackId?: string;
   onFire: () => void;
   onDrop: () => void;
 }
@@ -28,7 +32,7 @@ export interface DeferOnceOptions {
 export function onceAfterFirstAudio(
   audio: DeferAudioSource,
   signal: AbortSignal,
-  { fallbackMs, onFire, onDrop }: DeferOnceOptions,
+  { fallbackMs, trackId, onFire, onDrop }: DeferOnceOptions,
 ): void {
   // Guard before subscribing: a listener added to an already-aborted signal
   // never fires, so the unsubs/timer would leak forever. Silent no-op on
@@ -41,6 +45,16 @@ export function onceAfterFirstAudio(
   let unsubFirstAudio: (() => void) | undefined;
   let unsubError: (() => void) | undefined;
 
+  // R2.1: an event may settle this defer only when it is untagged (older
+  // sender / no active track) or tagged with the registered track. A stale
+  // track's first-audio/error must neither fire nor drop the new track's
+  // deferred work.
+  const maySettle = (payload: unknown): boolean => {
+    if (trackId === undefined) return true;
+    const eventTrackId = (payload as { trackId?: string } | undefined)?.trackId;
+    return eventTrackId === undefined || eventTrackId === trackId;
+  };
+
   const cleanup = (): void => {
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -52,14 +66,16 @@ export function onceAfterFirstAudio(
     unsubError = undefined;
     signal.removeEventListener("abort", drop);
   };
-  const fire = (): void => {
+  const fire = (payload?: unknown): void => {
     if (settled || signal.aborted) return;
+    if (!maySettle(payload)) return;
     settled = true;
     cleanup();
     onFire();
   };
-  function drop(): void {
+  function drop(payload?: unknown): void {
     if (settled) return;
+    if (!maySettle(payload)) return;
     settled = true;
     cleanup();
     onDrop();
