@@ -273,7 +273,9 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
     fireProperty("duration", 180);
 
     fireProperty("time-pos", 12);
-    expect(emitted("timeupdate")).toEqual([{ currentTime: 12, duration: 180 }]);
+    expect(emitted("timeupdate")).toEqual([
+      { trackId: "A", attempt: 1, currentTime: 12, duration: 180 },
+    ]);
 
     fireProperty("time-pos", 12.5);
     expect(emitted("timeupdate")).toHaveLength(1);
@@ -281,24 +283,26 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
     vi.advanceTimersByTime(250);
     fireProperty("time-pos", 13);
     expect(emitted("timeupdate")).toEqual([
-      { currentTime: 12, duration: 180 },
-      { currentTime: 13, duration: 180 },
+      { trackId: "A", attempt: 1, currentTime: 12, duration: 180 },
+      { trackId: "A", attempt: 1, currentTime: 13, duration: 180 },
     ]);
   });
 
   it("duration -> durationchange {duration} + getDuration()", () => {
     fireProperty("duration", 180);
-    expect(emitted("durationchange")).toEqual([{ duration: 180 }]);
+    expect(emitted("durationchange")).toEqual([
+      { trackId: "A", attempt: 1, duration: 180 },
+    ]);
     expect(ctrl.getDuration()).toBe(180);
   });
 
   it("pause=true -> pause event + setIsPlaying(false); pause=false -> play event + setIsPlaying(true)", () => {
     fireProperty("pause", true);
-    expect(emitted("pause")).toEqual([undefined]);
+    expect(emitted("pause")).toEqual([{ trackId: "A", attempt: 1 }]);
     expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(false);
 
     fireProperty("pause", false);
-    expect(emitted("play")).toEqual([undefined]);
+    expect(emitted("play")).toEqual([{ trackId: "A", attempt: 1 }]);
     expect(storeMocks.setIsPlaying).toHaveBeenCalledWith(true);
   });
 
@@ -315,8 +319,8 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
     vi.advanceTimersByTime(250); // stall sustained -> shown
     fireProperty("paused-for-cache", false); // stall over -> settle
     expect(emitted("buffering")).toEqual([
-      { isBuffering: true },
-      { isBuffering: false },
+      { trackId: "A", attempt: 1, isBuffering: true },
+      { trackId: "A", attempt: 1, isBuffering: false },
     ]);
   });
 
@@ -330,7 +334,7 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
       ],
     });
 
-    expect(emitted("progress")).toEqual([undefined]);
+    expect(emitted("progress")).toEqual([{ trackId: "A", attempt: 1 }]);
     const buffered = ctrl.getBuffered();
     expect(buffered.duration).toBe(180);
     expect(buffered.currentTime).toBe(0);
@@ -528,7 +532,7 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     expect(emitted("error")).toEqual([
       expect.objectContaining({ code: "format_error" }),
     ]);
-    expect(emitted("ended")).toEqual([undefined]);
+    expect(emitted("ended")).toEqual([{ trackId: "A", attempt: 1 }]);
   });
 
   it("no proxy event + mpv's short string falls back to the format default (parity)", () => {
@@ -537,7 +541,7 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     expect(emitted("error")).toEqual([
       expect.objectContaining({ code: "format_error" }),
     ]);
-    expect(emitted("ended")).toEqual([undefined]);
+    expect(emitted("ended")).toEqual([{ trackId: "A", attempt: 1 }]);
   });
 
   it("end-file error without the error field stays format_error (payload parity)", () => {
@@ -546,7 +550,7 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     expect(emitted("error")).toEqual([
       expect.objectContaining({ code: "format_error" }),
     ]);
-    expect(emitted("ended")).toEqual([undefined]);
+    expect(emitted("ended")).toEqual([{ trackId: "A", attempt: 1 }]);
   });
 
   it("no proxy data: a transport keyword in mpv's string still routes to network (weak fallback)", () => {
@@ -583,7 +587,7 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     expect(emitted("error")).toEqual([
       expect.objectContaining({ code: "format_error" }),
     ]);
-    expect(emitted("ended")).toEqual([undefined]);
+    expect(emitted("ended")).toEqual([{ trackId: "B", attempt: 2 }]);
   });
 
   it("ipc-closed: network_interrupted, engine reset, no ended, listeners detached", () => {
@@ -884,30 +888,47 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
 
   it("new playTrack: immediate promote (S2) — true right away, no spinner gap before first-audio", async () => {
     await ctrl.playTrack(trackA);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
 
     vi.advanceTimersByTime(250); // no duplicate from a display-delay timer
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
   });
 
   it("load settled right after playTrack: immediate true then tick-settle — false exactly once", async () => {
     await ctrl.playTrack(trackA);
     settleViaTicks();
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
 
     vi.advanceTimersByTime(8000);
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
   });
 
   it("shown spinner settles on the 2nd time-pos tick within 1s — false exactly once", async () => {
     await ctrl.playTrack(trackA);
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
 
     fireProperty("time-pos", 1); // tick 1 — mpv may still be stalling
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
     fireProperty("time-pos", 2); // tick 2 within 1s — playback progressing
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
 
     fireProperty("time-pos", 3);
     expect(buffering).toHaveLength(2); // dedupe: no duplicate false
@@ -933,12 +954,17 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     vi.advanceTimersByTime(249);
     expect(buffering).toEqual([]); // 1ms before the delay elapses
     vi.advanceTimersByTime(1);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
 
     vi.advanceTimersByTime(150);
     fireProperty("time-pos", 120); // tick 1 (stalled position report)
     fireProperty("time-pos", 120.5); // tick 2 — actually playing again
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
   });
 
   it("seek into an already-cached range with fast ticks never flashes", async () => {
@@ -960,17 +986,26 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
 
   it("playTrack with startTime: spinner already shown (v3); the deferred seek keeps it and ticks settle", async () => {
     await ctrl.playTrack(trackB, 120);
-    expect(buffering).toEqual([{ isBuffering: true }]); // v3: immediate promote
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "B", attempt: 1 },
+    ]); // v3: immediate promote
 
     fireMpvEvent("file-loaded");
     expect(mpvCommands()).toContainEqual(["seek", "120", "absolute"]);
-    expect(buffering).toEqual([{ isBuffering: true }]); // shown dedupe on the deferred seek
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "B", attempt: 1 },
+    ]); // shown dedupe on the deferred seek
 
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "B", attempt: 1 },
+    ]);
     fireProperty("time-pos", 120);
     fireProperty("time-pos", 121);
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "B", attempt: 1 },
+      { isBuffering: false, trackId: "B", attempt: 1 },
+    ]);
   });
 
   it("same-track resume + togglePlay never request (no pending, no events)", async () => {
@@ -989,23 +1024,34 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
   it("paused-for-cache=true while already shown (v3 immediate promote) re-arms without a duplicate", async () => {
     await ctrl.playTrack(trackA); // v3: already shown at playTrack
     fireProperty("paused-for-cache", true); // genuine stall report
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
 
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]); // no duplicate true
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]); // no duplicate true
   });
 
   it("paused-for-cache=true while shown re-arms the net instead of settling (v4 spin-hold)", async () => {
     await ctrl.playTrack(trackA);
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
 
     fireProperty("paused-for-cache", true); // stall ongoing while shown
     vi.advanceTimersByTime(8000); // v4: net fires -> re-arms, spinner holds
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
 
     fireProperty("paused-for-cache", false); // stall over -> the only settle
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
   });
 
   it("paused-for-cache=false while idle emits nothing; repeat true does not double-arm", async () => {
@@ -1019,39 +1065,57 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     fireProperty("paused-for-cache", true);
     fireProperty("paused-for-cache", true); // second report — no extra timer
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
     fireProperty("paused-for-cache", false);
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
   });
 
   it("safety net: shown auto-settles 8s after request", async () => {
     await ctrl.playTrack(trackA);
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
 
     vi.advanceTimersByTime(7750); // 8000ms total from request
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
   });
 
   it("switch mid-stall: resetForTrack drops A's session, B promotes fresh and re-arms its own net", async () => {
     await ctrl.playTrack(trackA);
     vi.advanceTimersByTime(250);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+    ]);
     vi.advanceTimersByTime(7000);
 
     await ctrl.playTrack(trackB); // new track mid-stall
     // A2 (R4): the switch intentionally starts a fresh buffering session for
     // B (resetForTrack is silent, then B's own request(true) promotes) — the
     // spinner stays visible; the extra true is B's session, not A's sticky one.
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: true, trackId: "B", attempt: 2 },
+    ]);
 
     vi.advanceTimersByTime(7999); // B's re-armed net not yet fired
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: true }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: true, trackId: "B", attempt: 2 },
+    ]);
     vi.advanceTimersByTime(1);
     expect(buffering).toEqual([
-      { isBuffering: true },
-      { isBuffering: true },
-      { isBuffering: false },
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: true, trackId: "B", attempt: 2 },
+      { isBuffering: false, trackId: "B", attempt: 2 },
     ]);
   });
 
@@ -1068,14 +1132,20 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     fireProperty("time-pos", 20); // acks seek(20) + tick 1
     fireProperty("time-pos", 20.5); // tick 2 — settles
     expect(vi.getTimerCount()).toBe(0); // settled (ack cleared the failsafe)
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]); // v3: shown at playTrack, settled by the ticks
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]); // v3: shown at playTrack, settled by the ticks
 
     ctrl.seek(30);
     expect(vi.getTimerCount()).toBe(3);
     ctrl.release();
     expect(vi.getTimerCount()).toBe(0); // release cancelled silently
     vi.advanceTimersByTime(9000);
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "A", attempt: 1 },
+      { isBuffering: false, trackId: "A", attempt: 1 },
+    ]);
   });
 });
 
@@ -1147,7 +1217,9 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
     });
     // Backfill goes through onTimeUpdate: clock + throttle emit + tick.
     expect(ctrl.getCurrentTime()).toBe(90);
-    expect(emitted("timeupdate")).toEqual([{ currentTime: 90, duration: 0 }]);
+    expect(emitted("timeupdate")).toEqual([
+      { trackId: "A", attempt: 1, currentTime: 90, duration: 0 },
+    ]);
   });
 
   it("regular pushes keep the watchdog quiet (no mpv_get_property)", async () => {

@@ -104,6 +104,13 @@ const trackA: Track = {
   streamUrl: "/drive-stream/A",
 };
 
+const trackB: Track = {
+  id: "B",
+  title: "Track B",
+  artist: "Artist",
+  streamUrl: "/drive-stream/B",
+};
+
 describe("MpvAudioController — terminal failure semantics (F8-5/F8-6)", () => {
   let ctrl: MpvAudioController;
   let errors: { message: string; code: string }[];
@@ -160,6 +167,24 @@ describe("MpvAudioController — terminal failure semantics (F8-5/F8-6)", () => 
       "loadfile",
       `${PROXY_URL_PREFIX}A`,
       "replace",
+    ]);
+  });
+
+  it("(R2.1) a failed switch is attributed to the requested track, not the engine's previous one", async () => {
+    await ctrl.playTrack(trackA);
+    // The switch to B fails before the engine begins B (command rejected), so
+    // the engine's currentTrackId is still A — the error must still carry B.
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command === "stream_proxy_start") return Promise.resolve(PROXY_PORT);
+      if (command === "mpv_command")
+        return Promise.reject(new Error("mpv is not running"));
+      return Promise.resolve(undefined);
+    });
+
+    await ctrl.playTrack(trackB);
+
+    expect(errors).toEqual([
+      expect.objectContaining({ code: "network_interrupted", trackId: "B" }),
     ]);
   });
 

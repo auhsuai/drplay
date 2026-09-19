@@ -4,7 +4,11 @@ import type { Track } from "../types";
 import { captureError } from "../utils/errorLog";
 import { usePlayerStore } from "../store/playerStore";
 import type { BufferedSource } from "../utils/bufferedRange";
-import type { AudioEventMap, AudioEventHandler } from "./audioNativeEvents";
+import type {
+  AudioEventIdentity,
+  AudioEventMap,
+  AudioEventHandler,
+} from "./audioNativeEvents";
 import {
   asBoolean,
   asNumber,
@@ -74,6 +78,13 @@ export class MpvAudioController {
    *  deadline restart captured the id it belongs to and must never reload a
    *  superseded track over the newcomer (F8-1). */
   private loadRequestSeq = 0;
+  /** Why (R2.1): engine load identity paired with `currentTrackId` at
+   *  beginTrack — every load the engine begins (switch, retry, deadline
+   *  restart) mints a new attempt, so consumers can tell an event of a
+   *  previous load from the current one even on the same track id. Distinct
+   *  from `loadRequestSeq` (supersede tracking, F8-1) and from the
+   *  intent-level attemptId of RC-1/R3.1. Monotonic; never reset. */
+  private loadAttemptSeq = 0;
   private proxyPort: number | null = null;
   /** Latest `stream-proxy-error` for the current stream (R05) — state only,
    *  never a display channel: mpv's end-file is the single place an error
@@ -303,14 +314,34 @@ export class MpvAudioController {
     };
   }
 
+  /** Identity attached to every emitted event (R2.1). `trackIdOverride`
+   *  attributes an event to a load target the engine has not begun yet (a
+   *  failed new load); such an event carries no attempt — no engine load
+   *  identity exists for it. A missing current track yields `{}` so the
+   *  event stays untagged and consumers keep legacy behavior. */
+  private eventIdentity(trackIdOverride?: string): AudioEventIdentity {
+    const trackId = trackIdOverride ?? this.currentTrackId;
+    if (trackId === null) return {};
+    return trackId === this.currentTrackId
+      ? { trackId, attempt: this.loadAttemptSeq }
+      : { trackId };
+  }
+
   private emit<K extends keyof AudioEventMap>(
     event: K,
     payload: AudioEventMap[K],
+    trackIdOverride?: string,
   ) {
     const handlers = this.listeners[event];
     if (handlers) {
+      // Tag every payload with the engine identity (R2.1). Spread keeps the
+      // event's own fields authoritative and tolerates `undefined` payloads.
+      const tagged = {
+        ...this.eventIdentity(trackIdOverride),
+        ...(payload as object | undefined),
+      } as AudioEventMap[K];
       handlers.forEach((h) => {
-        h(payload);
+        h(tagged);
       });
     }
   }
@@ -548,6 +579,7 @@ export class MpvAudioController {
   private beginTrack(track: Track, startTime?: number): void {
     this.lastTrack = track;
     this.currentTrackId = track.id;
+    this.loadAttemptSeq += 1;
     this.playbackFinished = false;
     // A live track starts its own failure scope (F8-6).
     this.failureSurfacedForAttempt = false;
@@ -601,7 +633,11 @@ export class MpvAudioController {
     });
   }
 
-  private playbackFailure(where: string, e: unknown): void {
+  private playbackFailure(
+    where: string,
+    e: unknown,
+    trackIdOverride?: string,
+  ): void {
     // Why (F8-6): one failure surface per attempt — a crash mid-loadfile
     // fires both onEngineClosed and the command-rejection catch, and only
     // the first may surface (log/error/store), whichever order they land in.
@@ -616,10 +652,14 @@ export class MpvAudioController {
     // Why (S4): a failed command means no ticks will ever confirm progress —
     // never leave the spinner hanging on a dead path.
     this.buffering.settle();
-    this.emit("error", {
-      message: "Không phát được bài hát này, hãy thử lại.",
-      code: "network_interrupted",
-    });
+    this.emit(
+      "error",
+      {
+        message: "Không phát được bài hát này, hãy thử lại.",
+        code: "network_interrupted",
+      },
+      trackIdOverride,
+    );
     usePlayerStore.getState().setIsPlaying(false);
   }
 
@@ -659,7 +699,10 @@ export class MpvAudioController {
       // Why: a command failing because release() tore the engine down is not
       // a playback failure — release paths are deliberately silent.
       if (this.isStale(epoch)) return;
-      this.playbackFailure("play-track-failed", e);
+      // Why (R2.1): this failure is ABOUT the requested track, which the
+      // engine may not have begun yet (loadfile/command rejected) — attribute
+      // it to that target so a track-switch failure still surfaces on it.
+      this.playbackFailure("play-track-failed", e, track.id);
     }
   }
 

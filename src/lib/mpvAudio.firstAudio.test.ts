@@ -111,7 +111,7 @@ describe("MpvAudioController — first-audio (metadata-defer signal)", () => {
   it("first REAL time-pos push -> exactly one first-audio; further pushes/interpolation never re-emit", async () => {
     fireProperty("pause", false);
     fireProperty("time-pos", 0.2);
-    expect(firstAudio).toEqual([undefined]);
+    expect(firstAudio).toEqual([{ trackId: "A", attempt: 1 }]);
 
     // More real pushes + interpolated ticks in the gap: still exactly once.
     fireProperty("time-pos", 0.4);

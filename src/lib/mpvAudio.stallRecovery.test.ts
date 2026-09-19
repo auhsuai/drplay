@@ -188,13 +188,17 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
     fireMpvEvent("file-loaded"); // the load itself succeeded — only playback wedged
     fireProperty("pause", false);
     fireProperty("paused-for-cache", true); // genuine stall: the net re-arms
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { trackId: "A", attempt: 1, isBuffering: true },
+    ]);
     buffering.length = 0;
 
     freezeTruth(false); // mpv says the stall is over — the event was lost
     await vi.advanceTimersByTimeAsync(STALL_RECONCILE_MS);
 
-    expect(buffering).toEqual([{ isBuffering: false }]);
+    expect(buffering).toEqual([
+      { trackId: "A", attempt: 1, isBuffering: false },
+    ]);
   });
 
   it("(f) pinned playhead: reload per attempt at 75s (resume seek), exhausted after 2, replay reloads", async () => {

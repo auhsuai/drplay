@@ -116,7 +116,9 @@ describe("Bug B investigation — spinner gone on track switch", () => {
 
   it("B1 (control): switching tracks while PLAYING — A's promoted spinner stays on through the switch (shown dedupe, no drop)", async () => {
     await ctrl.playTrack(trackA);
-    expect(buffering).toEqual([{ isBuffering: true }]); // v3: immediate promote
+    expect(buffering).toEqual([
+      { trackId: "A", attempt: 1, isBuffering: true },
+    ]); // v3: immediate promote
     buffering.length = 0;
 
     await ctrl.playTrack(trackB);
@@ -125,12 +127,17 @@ describe("Bug B investigation — spinner gone on track switch", () => {
     // A2 (R4): the switch intentionally starts B's own fresh buffering
     // session — exactly one promote for B; crucially still no false while B
     // has not produced audio yet.
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { trackId: "B", attempt: 2, isBuffering: true },
+    ]);
 
     // Tracker is alive: B's progressing ticks settle it exactly once.
     fireProperty("time-pos", 1);
     fireProperty("time-pos", 2);
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { trackId: "B", attempt: 2, isBuffering: true },
+      { trackId: "B", attempt: 2, isBuffering: false },
+    ]);
   });
 
   it("B2 (fixed): switching tracks while PAUSED — the spinner stays on for B; mpv's async pause=false no longer cancels it", async () => {
@@ -153,19 +160,26 @@ describe("Bug B investigation — spinner gone on track switch", () => {
       "replace",
     ]);
     expect(mpvCommands()).toContainEqual(["set_property", "pause", "no"]);
-    expect(buffering).toEqual([{ isBuffering: true }]); // B's session — never a false
+    expect(buffering).toEqual([
+      { trackId: "B", attempt: 2, isBuffering: true },
+    ]); // B's session — never a false
 
     // mpv applies the unpause and pushes pause=false (async, well within the
     // display delay). v3: this is NOT a settle signal — the button keeps the
     // spinner for track B while no audio of B has flowed.
     fireProperty("pause", false);
     vi.advanceTimersByTime(SPINNER_DELAY_MS);
-    expect(buffering).toEqual([{ isBuffering: true }]); // no false, no re-promote
+    expect(buffering).toEqual([
+      { trackId: "B", attempt: 2, isBuffering: true },
+    ]); // no false, no re-promote
 
     // Tracker is still alive: B's first progressing ticks settle it once.
     fireProperty("time-pos", 1);
     fireProperty("time-pos", 1.5);
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: false }]);
+    expect(buffering).toEqual([
+      { trackId: "B", attempt: 2, isBuffering: true },
+      { trackId: "B", attempt: 2, isBuffering: false },
+    ]);
   });
 
   it("B2b (variant): consecutive paused switches — every async pause=false leaves the spinner alive", async () => {
@@ -186,7 +200,9 @@ describe("Bug B investigation — spinner gone on track switch", () => {
     // the switch promotes B's own fresh session.
     await ctrl.playTrack(trackB);
     fireProperty("pause", false);
-    expect(buffering).toEqual([{ isBuffering: true }]);
+    expect(buffering).toEqual([
+      { trackId: "B", attempt: 2, isBuffering: true },
+    ]);
 
     // User pauses again before track B produced any audio, then switches to C
     // — the same confirmation races the re-armed session.
@@ -197,15 +213,18 @@ describe("Bug B investigation — spinner gone on track switch", () => {
     vi.advanceTimersByTime(SPINNER_DELAY_MS);
     // v3: settle only comes from truth, so no false may appear here — only
     // C's own fresh promote on top of B's.
-    expect(buffering).toEqual([{ isBuffering: true }, { isBuffering: true }]);
+    expect(buffering).toEqual([
+      { trackId: "B", attempt: 2, isBuffering: true },
+      { trackId: "C", attempt: 3, isBuffering: true },
+    ]);
 
     // Alive check: C's progressing ticks settle the spinner exactly once.
     fireProperty("time-pos", 1);
     fireProperty("time-pos", 1.5);
     expect(buffering).toEqual([
-      { isBuffering: true },
-      { isBuffering: true },
-      { isBuffering: false },
+      { trackId: "B", attempt: 2, isBuffering: true },
+      { trackId: "C", attempt: 3, isBuffering: true },
+      { trackId: "C", attempt: 3, isBuffering: false },
     ]);
   });
 });

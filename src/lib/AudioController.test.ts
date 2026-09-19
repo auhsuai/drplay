@@ -142,13 +142,19 @@ describe("AudioController facade over the mpv engine", () => {
     fireProperty("paused-for-cache", true);
 
     expect(timeupdate).toHaveBeenCalledWith({
+      trackId: "A",
+      attempt: 1,
       currentTime: 12,
       duration: 180,
     });
     // Display-delay tracker: the sustained mpv stall passes the 250ms window
     // before the spinner shows.
     vi.advanceTimersByTime(250);
-    expect(buffering).toHaveBeenCalledWith({ isBuffering: true });
+    expect(buffering).toHaveBeenCalledWith({
+      trackId: "A",
+      attempt: 1,
+      isBuffering: true,
+    });
   });
 
   it("on() unsubscribe removes the handler", () => {
