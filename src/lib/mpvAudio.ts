@@ -846,6 +846,15 @@ export class MpvAudioController {
     return this.currentTime;
   }
 
+  /**
+   * Identity of the track the engine is actually on (R2.4a/SC6) — null before
+   * the first load and after release(). Consumers that pair engine readings
+   * with a store track must check this first (mpvAudio.ts:103).
+   */
+  public getCurrentTrackId(): string | null {
+    return this.currentTrackId;
+  }
+
   public getDuration(): number {
     return this.duration;
   }

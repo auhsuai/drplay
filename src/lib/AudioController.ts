@@ -63,6 +63,10 @@ export class AudioController {
     return this.engine.getCurrentTime();
   }
 
+  public getCurrentTrackId(): string | null {
+    return this.engine.getCurrentTrackId();
+  }
+
   public getDuration(): number {
     return this.engine.getDuration();
   }

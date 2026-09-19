@@ -9,6 +9,7 @@ import {
 } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
 import { usePlayerSession } from "./usePlayerSession";
+import { PLAYER_STOP_EVENT } from "./usePlayerLifecycle";
 import { clearRestoreResume, consumeRestoreResume } from "./restoreResume";
 import { usePlayerStore } from "../../store/playerStore";
 import type { Track } from "../../types";
@@ -37,6 +38,7 @@ vi.mock("../../utils/errorLog", () => ({
 const audioMock = vi.hoisted(() => ({
   getCurrentTime: vi.fn(() => 0),
   getDuration: vi.fn(() => 0),
+  getCurrentTrackId: vi.fn(() => "t1"),
   on: vi.fn<(event: string, handler: () => void) => () => void>(() => () => {}),
 }));
 
@@ -676,6 +678,81 @@ describe("usePlayerSession restore race (user intent guard)", () => {
   });
 });
 
+describe("usePlayerSession restore lifecycle (SC1 — no commit after teardown)", () => {
+  it("S: PLAYER_STOP_EVENT (logout) trong lúc restore await → bỏ toàn bộ commit + không arm resume hint", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 5, duration: 100 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+    let resolveToken: (token: string) => void = () => {};
+    mockedGetValidToken.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+
+    const {
+      setCurrentTrack,
+      setOriginalQueue,
+      setPlaybackQueue,
+      setPlayMode,
+      triggerReload,
+    } = makeHook();
+    await flushMicrotasks();
+    expect(mockedGetValidToken).toHaveBeenCalledTimes(1);
+
+    // Teardown (logout) fires while the restore is still awaiting its token:
+    // the controller must be invalidated, not merely out-guarded by the store
+    // (teardown clears the store, so the emptiness guard is moot).
+    act(() => {
+      window.dispatchEvent(new Event(PLAYER_STOP_EVENT));
+    });
+
+    resolveToken("test-token");
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).not.toHaveBeenCalled();
+    expect(setOriginalQueue).not.toHaveBeenCalled();
+    expect(setPlaybackQueue).not.toHaveBeenCalled();
+    expect(setPlayMode).not.toHaveBeenCalled();
+    expect(triggerReload).not.toHaveBeenCalled();
+    expect(consumeRestoreResume("t1")).toBeUndefined();
+  });
+
+  it("T: stop chỉ vô hiệu restore đang bay — mount kế tiếp (login lại) vẫn restore bình thường", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 5, duration: 100 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+    let resolveToken: (token: string) => void = () => {};
+    mockedGetValidToken.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+
+    makeHook();
+    await flushMicrotasks();
+    act(() => {
+      window.dispatchEvent(new Event(PLAYER_STOP_EVENT));
+    });
+    resolveToken("test-token");
+    await flushMicrotasks();
+
+    // Session mới (login lại) mount controller mới: abort của session cũ
+    // không được rò sang.
+    const { setCurrentTrack, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).toHaveBeenCalledTimes(1);
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("usePlayerSession save identity (R2.1 — no {track B, time A} pairs)", () => {
   function savedSession(): { track?: Track; time?: number } | null {
     const raw = localStorage.getItem(SESSION_STORAGE_KEY);
@@ -758,5 +835,56 @@ describe("usePlayerSession save identity (R2.1 — no {track B, time A} pairs)",
       time?.();
     });
     expect(savedSession()).toMatchObject({ time: 10 });
+  });
+});
+
+describe("usePlayerSession save identity (SC6 — store/engine pair)", () => {
+  function savedSession(): { track?: Track; time?: number } | null {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as { track?: Track; time?: number }) : null;
+  }
+
+  function pauseHandler() {
+    return audioMock.on.mock.calls.find((c) => c[0] === "pause")?.[1] as
+      ((payload?: unknown) => void) | undefined;
+  }
+
+  beforeEach(() => {
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: makeTrack("t1", "q1"),
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(30);
+    vi.mocked(audioMock.getDuration).mockReturnValue(240);
+  });
+
+  it("U: engine còn ở track cũ (untagged event) → skip save, không ghi {t1, time_A}; khi engine sang t1 thì save lại bình thường", () => {
+    vi.mocked(audioMock.getCurrentTrackId).mockReturnValue("t0");
+
+    makeHook();
+    act(() => {
+      // Untagged: passes the R2.1 event filter, so this pins the SAVE-layer
+      // guard independently of the subscription filter.
+      pauseHandler()?.();
+    });
+    expect(savedSession()).toBeNull();
+
+    vi.mocked(audioMock.getCurrentTrackId).mockReturnValue("t1");
+    act(() => {
+      pauseHandler()?.();
+    });
+    expect(savedSession()).toMatchObject({ time: 30 });
+    expect(savedSession()?.track?.id).toBe("t1");
+  });
+
+  it("V: engine khớp store → save ghi đúng cặp {t1, time}", () => {
+    vi.mocked(audioMock.getCurrentTrackId).mockReturnValue("t1");
+
+    makeHook();
+    act(() => {
+      pauseHandler()?.();
+    });
+
+    expect(savedSession()).toMatchObject({ time: 30 });
+    expect(savedSession()?.track?.id).toBe("t1");
   });
 });

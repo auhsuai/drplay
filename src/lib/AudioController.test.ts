@@ -203,6 +203,7 @@ describe("AudioController facade over the mpv engine", () => {
 
     expect(ctrl.getCurrentTime()).toBe(12);
     expect(ctrl.getDuration()).toBe(180);
+    expect(ctrl.getCurrentTrackId()).toBe("A");
     const buffered = ctrl.getBuffered();
     expect(buffered.duration).toBe(180);
     expect(buffered.currentTime).toBe(12);
@@ -218,6 +219,7 @@ describe("AudioController facade over the mpv engine", () => {
     tauriMocks.invoke.mockClear();
 
     ctrl.release();
+    expect(ctrl.getCurrentTrackId()).toBeNull();
 
     const invoked = (
       tauriMocks.invoke.mock.calls as unknown as Array<[string]>

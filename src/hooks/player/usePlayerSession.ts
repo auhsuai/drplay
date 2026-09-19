@@ -9,6 +9,7 @@ import {
 import { captureError } from "../../utils/errorLog";
 import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { classifyPlayerError, isAbortError } from "./utils";
+import { PLAYER_STOP_EVENT } from "./usePlayerLifecycle";
 import { usePlayerStore } from "../../store/playerStore";
 import { AudioController } from "../../lib/AudioController";
 import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
@@ -41,6 +42,14 @@ export function usePlayerSession(
   useEffect(() => {
     const controller = new AbortController();
     const isAborted = () => controller.signal.aborted;
+    // SC1: teardown (logout/player-stop) clears the store, which defeats the
+    // "store still empty" commit guard — an in-flight restore would resurrect
+    // the previous account's track/queue. Abort the restore controller on the
+    // stop event so every post-await re-check (and the final commit) bails.
+    const handleStop = () => {
+      controller.abort();
+    };
+    window.addEventListener(PLAYER_STOP_EVENT, handleStop);
     const loadSession = async (signal: AbortSignal) => {
       try {
         const lastSessionStr = localStorage.getItem(
@@ -194,6 +203,7 @@ export function usePlayerSession(
     };
     void loadSession(controller.signal);
     return () => {
+      window.removeEventListener(PLAYER_STOP_EVENT, handleStop);
       controller.abort();
     };
   }, [
@@ -218,6 +228,11 @@ export function usePlayerSession(
       if (!currentTrack) return;
 
       const audio = AudioController.getInstance();
+      // SC6: only persist when the engine is actually on the store's track.
+      // A switch in flight (store already committed B, engine still on A)
+      // would otherwise write {track B, time A}; the next save after the
+      // engine begins the new track writes the matching pair.
+      if (audio.getCurrentTrackId() !== currentTrack.id) return;
       const time = audio.getCurrentTime();
       const duration = audio.getDuration();
 
