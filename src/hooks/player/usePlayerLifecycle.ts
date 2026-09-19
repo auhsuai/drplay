@@ -23,6 +23,8 @@ export const logUsePlayer = (
 export interface PlayerLifecycleDeps {
   isPlaying: boolean;
   playMode: PlayMode;
+  /** True once usePlayerSession settled its restore read (F7-1 gate). */
+  hydrated: boolean;
   setCurrentTrack: (
     track: Track | null | ((prev: Track | null) => Track | null),
   ) => void;
@@ -35,6 +37,7 @@ export interface PlayerLifecycleDeps {
 export function usePlayerLifecycle({
   isPlaying,
   playMode,
+  hydrated,
   setCurrentTrack,
   setIsPlaying,
   setOriginalQueue,
@@ -69,12 +72,14 @@ export function usePlayerLifecycle({
     };
   }, [isPlaying]);
 
-  // Persist playMode
+  // Persist playMode — gated until the session restore has read the persisted
+  // value, otherwise the mount-time default write clobbers it (F7-1).
   useEffect(() => {
+    if (!hydrated) return;
     idbSet(SESSION_CLEANUP_KEYS.playModeKv, playMode).catch((e: unknown) => {
       void logUsePlayer("warn", `playmode-save-fail: ${errMsg(e)}`);
     });
-  }, [playMode]);
+  }, [playMode, hydrated]);
 
   // Cleanup on logout
   useEffect(() => {

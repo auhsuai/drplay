@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import type { Track } from "../types";
@@ -63,6 +63,13 @@ export const usePlayer = (accessToken: string | null) => {
     })),
   );
 
+  // F7-1: playMode persist must wait until the session restore finished
+  // reading drplay_playmode, or the mount-time default write clobbers it.
+  const [sessionHydrated, setSessionHydrated] = useState(false);
+  const handleSessionHydrated = useCallback(() => {
+    setSessionHydrated(true);
+  }, []);
+
   // Load session from IDB
   usePlayerSession(
     setCurrentTrack,
@@ -70,6 +77,7 @@ export const usePlayer = (accessToken: string | null) => {
     setPlaybackQueue,
     setPlayMode,
     triggerReload,
+    handleSessionHydrated,
   );
 
   const handlePlayTrackRef = useRef<typeof handlePlayTrack>(undefined);
@@ -118,6 +126,7 @@ export const usePlayer = (accessToken: string | null) => {
   usePlayerLifecycle({
     isPlaying,
     playMode,
+    hydrated: sessionHydrated,
     setCurrentTrack,
     setIsPlaying,
     setOriginalQueue,

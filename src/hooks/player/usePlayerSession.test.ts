@@ -73,6 +73,7 @@ function makeHook() {
   const setPlaybackQueue = vi.fn();
   const setPlayMode = vi.fn();
   const triggerReload = vi.fn();
+  const onHydrated = vi.fn();
   renderHook(() => {
     usePlayerSession(
       setCurrentTrack,
@@ -80,6 +81,7 @@ function makeHook() {
       setPlaybackQueue,
       setPlayMode,
       triggerReload,
+      onHydrated,
     );
   });
   return {
@@ -88,6 +90,7 @@ function makeHook() {
     setPlaybackQueue,
     setPlayMode,
     triggerReload,
+    onHydrated,
   };
 }
 
@@ -124,6 +127,13 @@ describe("usePlayerSession restore (lock-behavior)", () => {
     expect(mockedGet).toHaveBeenCalledWith(SESSION_STORAGE_KEY);
     expect(mockedGetValidToken).not.toHaveBeenCalled();
     expect(mockedCaptureError).not.toHaveBeenCalled();
+  });
+
+  it("A2: không có session → onHydrated vẫn fire đúng 1 lần (gate mở, không deadlock persist) — F7-1", async () => {
+    const { onHydrated } = makeHook();
+    await flushMicrotasks();
+
+    expect(onHydrated).toHaveBeenCalledTimes(1);
   });
 
   it("B: có session localStorage + kv queue + playmode shuffle → restore track + queue shuffle qua helper (head = restored track, đủ phần tử)", async () => {
@@ -318,7 +328,7 @@ describe("usePlayerSession upgrades (new lock/guard tests)", () => {
     const removeSpy = vi.spyOn(window, "removeEventListener");
 
     const { unmount } = renderHook(() => {
-      usePlayerSession(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn());
+      usePlayerSession(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn());
     });
 
     expect(addSpy.mock.calls.some((c) => c[0] === "beforeunload")).toBe(true);

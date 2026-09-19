@@ -6,6 +6,9 @@ import {
   stop as keepAwakeStop,
 } from "tauri-plugin-keepawake-api";
 import { PLAYER_STOP_EVENT, usePlayerLifecycle } from "./usePlayerLifecycle";
+import type { PlayerLifecycleDeps } from "./usePlayerLifecycle";
+import { set as idbSet } from "../../db/kv";
+import { SESSION_CLEANUP_KEYS } from "../../utils/sessionCleanup";
 import { usePlayerStore } from "../../store/playerStore";
 
 vi.mock("tauri-plugin-keepawake-api", () => ({
@@ -28,6 +31,7 @@ vi.mock("../../lib/AudioController", () => ({
 const makeDeps = (isPlaying: boolean) => ({
   isPlaying,
   playMode: "normal" as const,
+  hydrated: true,
   setCurrentTrack: vi.fn(),
   setIsPlaying: vi.fn(),
   setOriginalQueue: vi.fn(),
@@ -110,6 +114,35 @@ describe("usePlayerLifecycle keep-awake cleanup", () => {
       vi.mocked(keepAwakeStart).mock.invocationCallOrder[0] ?? 0;
     const stopOrder = vi.mocked(keepAwakeStop).mock.invocationCallOrder[0] ?? 0;
     expect(stopOrder).toBeGreaterThan(startOrder);
+  });
+});
+
+describe("usePlayerLifecycle playMode hydration gate (F7-1)", () => {
+  it("UPL-3: chưa hydrate → không ghi playMode; hydrate xong → ghi giá trị hiện tại", async () => {
+    vi.mocked(idbSet).mockImplementation(() => Promise.resolve());
+    const deps: PlayerLifecycleDeps = {
+      ...makeDeps(false),
+      playMode: "shuffle" as const,
+      hydrated: false,
+    };
+    const { rerender } = renderHook(
+      (props: { deps: PlayerLifecycleDeps }) => {
+        usePlayerLifecycle(props.deps);
+      },
+      { initialProps: { deps } },
+    );
+    await flush();
+
+    expect(vi.mocked(idbSet)).not.toHaveBeenCalled();
+
+    rerender({ deps: { ...deps, hydrated: true } });
+    await flush();
+
+    expect(vi.mocked(idbSet)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(idbSet)).toHaveBeenCalledWith(
+      SESSION_CLEANUP_KEYS.playModeKv,
+      "shuffle",
+    );
   });
 });
 

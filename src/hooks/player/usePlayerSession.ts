@@ -34,6 +34,7 @@ export function usePlayerSession(
   setPlaybackQueue: (queue: Track[] | ((prev: Track[]) => Track[])) => void,
   setPlayMode: (mode: PlayMode | ((prev: PlayMode) => PlayMode)) => void,
   triggerReload: () => void,
+  onHydrated: () => void,
 ) {
   useEffect(() => {
     const controller = new AbortController();
@@ -173,6 +174,11 @@ export function usePlayerSession(
           source: PLAYER_SESSION_MODULE,
           message: `session-load-failed: ${classifyPlayerError(e).message}`,
         });
+      } finally {
+        // Signal the hydration gate on every settled read path (empty session,
+        // corrupt payload, user-intent guard, read error) so playMode persist
+        // can resume — F7-1.
+        if (!isAborted()) onHydrated();
       }
     };
     void loadSession(controller.signal);
@@ -185,6 +191,7 @@ export function usePlayerSession(
     setPlaybackQueue,
     setPlayMode,
     triggerReload,
+    onHydrated,
   ]);
 
   // Save session event-driven (Industry Standard)
