@@ -35,10 +35,6 @@ export class AudioController {
     await this.engine.playTrack(track, startTime);
   }
 
-  public togglePlay(): void {
-    this.engine.togglePlay();
-  }
-
   public pause(): void {
     this.engine.pause();
   }

@@ -221,19 +221,13 @@ describe("AudioController facade over the mpv engine", () => {
     expect(timeupdate).not.toHaveBeenCalled();
   });
 
-  it("pause/togglePlay delegate to the engine pause property", async () => {
+  it("pause delegates to the engine pause property", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
     tauriMocks.invoke.mockClear();
 
     ctrl.pause();
     expect(mpvCommands()).toEqual([["set_property", "pause", "yes"]]);
-
-    // Engine's paused state syncs from the mpv property event.
-    fireProperty("pause", true);
-    tauriMocks.invoke.mockClear();
-    ctrl.togglePlay();
-    expect(mpvCommands()).toEqual([["set_property", "pause", "no"]]);
   });
 });
 
