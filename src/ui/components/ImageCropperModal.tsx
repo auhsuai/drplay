@@ -8,6 +8,13 @@ import { captureError } from "../../utils/errorLog";
 
 const CROPPER_MODULE = "ImageCropperModal";
 
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 0.1;
+/** Half the rail thumb (w-3), the same half-thumb margin SeekBar applies to
+ *  keep the thumb inside the track at 1x/3x instead of overhanging its ends. */
+const THUMB_HALF_PX = 6;
+
 interface ImageCropperModalProps {
   imageSrc: string;
   onClose: () => void;
@@ -105,6 +112,8 @@ export function ImageCropperModal({
     }
   };
 
+  const zoomPercent = ((zoom - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN)) * 100;
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
@@ -157,18 +166,34 @@ export function ImageCropperModal({
             <label className="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-2 uppercase tracking-wider">
               {t("playlist.zoom")}
             </label>
-            <input
-              type="range"
-              value={zoom}
-              min={1}
-              max={3}
-              step={0.1}
-              aria-label={t("playlist.zoom")}
-              onChange={(e) => {
-                setZoom(Number(e.target.value));
-              }}
-              className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-brand-primary"
-            />
+            <div className="relative flex h-4 items-center group/zoom">
+              <input
+                type="range"
+                value={zoom}
+                min={ZOOM_MIN}
+                max={ZOOM_MAX}
+                step={ZOOM_STEP}
+                aria-label={t("playlist.zoom")}
+                onChange={(e) => {
+                  setZoom(Number(e.target.value));
+                }}
+                className="absolute inset-0 appearance-none opacity-0 cursor-pointer"
+              />
+              <div className="relative w-full h-1 bg-gray-300 dark:bg-[#2A2A2A] transition-[height] group-hover/zoom:h-1.5 pointer-events-none">
+                <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                  <div
+                    className="absolute left-0 h-full bg-brand-primary transform-gpu will-change-[width]"
+                    style={{ width: `${String(zoomPercent)}%` }}
+                  ></div>
+                </div>
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow shrink-0 pointer-events-none opacity-0 scale-75 transition-[opacity,transform,translate,scale] duration-150 group-hover/zoom:opacity-100 group-hover/zoom:scale-100 group-active/zoom:opacity-100 group-active/zoom:scale-100"
+                  style={{
+                    left: `clamp(${String(THUMB_HALF_PX)}px, ${String(zoomPercent)}%, calc(100% - ${String(THUMB_HALF_PX)}px))`,
+                  }}
+                ></div>
+              </div>
+            </div>
           </div>
 
           <div className="flex justify-end gap-3 pt-2">
