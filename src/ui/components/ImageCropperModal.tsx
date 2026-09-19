@@ -14,6 +14,9 @@ const ZOOM_STEP = 0.1;
 /** Half the rail thumb (w-3), the same half-thumb margin SeekBar applies to
  *  keep the thumb inside the track at 1x/3x instead of overhanging its ends. */
 const THUMB_HALF_PX = 6;
+/** react-easy-crop applies Δzoom = pixelY * zoomSpeed / 200 per wheel event;
+ *  a 100px notch (Chromium/WebView2) must move exactly one slider step. */
+const WHEEL_ZOOM_SPEED = ZOOM_STEP * 2;
 
 interface ImageCropperModalProps {
   imageSrc: string;
@@ -158,6 +161,7 @@ export function ImageCropperModal({
             onCropComplete={onCropComplete}
             onZoomChange={setZoom}
             objectFit="cover"
+            zoomSpeed={WHEEL_ZOOM_SPEED}
           />
         </div>
 
