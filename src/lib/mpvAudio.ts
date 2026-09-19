@@ -379,7 +379,13 @@ export class MpvAudioController {
   private detachListeners(fns: UnlistenFn[]): void {
     for (const fn of fns) {
       try {
-        fn();
+        // Why (B6): runtime unlisten returns a promise despite UnlistenFn's
+        // `() => void` signature — without this handler a rejection would
+        // surface as an unhandled rejection during teardown.
+        const call = fn as () => Promise<unknown> | undefined;
+        void Promise.resolve(call()).catch((e: unknown) => {
+          this.logWarn(`unlisten-failed: ${describeError(e)}`);
+        });
       } catch (e: unknown) {
         this.logWarn(`unlisten-failed: ${describeError(e)}`);
       }
