@@ -26,6 +26,7 @@ import {
   MPV_PROPERTY_ARGS,
   MPV_PROPERTIES,
   PROXY_ORIGIN,
+  PROXY_START_TIMEOUT_MS,
   SEEK_ACK_TIMEOUT_MS,
   SEEK_ACK_TOLERANCE_SECS,
   StallReconciler,
@@ -463,7 +464,14 @@ export class MpvAudioController {
 
   private async ensureProxyPort(): Promise<number> {
     if (this.proxyPort === null) {
-      this.proxyPort = await invoke<number>(TAURI_COMMANDS.streamProxyStart);
+      // Why (D8): a hung stream_proxy_start reply must not hold the playback
+      // attempt open forever. The timeout throws before the assignment, so
+      // proxyPort stays null — the next attempt re-invokes (Rust side is
+      // idempotent) and a late reply can never write a stale port.
+      this.proxyPort = await withStallQueryTimeout(
+        invoke<number>(TAURI_COMMANDS.streamProxyStart),
+        PROXY_START_TIMEOUT_MS,
+      );
     }
     return this.proxyPort;
   }

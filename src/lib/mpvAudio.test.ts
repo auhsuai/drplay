@@ -1436,12 +1436,15 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
 
   it("spawn initial observe (currentTrackId=null): pause=false writes no store state and arms no timer", async () => {
     const finishLoad = await parkBeforeFirstLoad();
+    // Parked proxy reply = its D8 bound timer is armed — sample the baseline
+    // so the assertion still means "the pause event added no timer".
+    const timersWhileParked = vi.getTimerCount();
 
     fireProperty("pause", false);
 
     expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
     expect(storeMocks.isPlaying).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(timersWhileParked);
 
     await finishLoad();
   });
@@ -1449,11 +1452,12 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
   it("pause=true while no active track: store untouched, timer cleanup stays idempotent", async () => {
     const finishLoad = await parkBeforeFirstLoad();
     storeMocks.isPlaying = true; // hypothetical stale store value
+    const timersWhileParked = vi.getTimerCount();
 
     fireProperty("pause", true);
 
     expect(storeMocks.setIsPlaying).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(timersWhileParked);
 
     await finishLoad();
   });

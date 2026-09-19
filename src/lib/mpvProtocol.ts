@@ -127,6 +127,11 @@ export const STALL_MIN_RESUME_SECS = 1;
  *  have no AbortSignal (tauri-apps/tauri#8351) — without a bound, a hung IPC
  *  reply would wedge the round (and keep the in-flight guard locked) forever. */
 export const STALL_QUERY_TIMEOUT_MS = 2_000;
+/** Bound for the `stream_proxy_start` invoke (D8): the Rust side only binds
+ *  localhost and mints a process-lifetime token — a healthy start is
+ *  near-instant, so this is a conservative ceiling against a hung IPC reply
+ *  holding the playback attempt open forever (not a measured budget). */
+export const PROXY_START_TIMEOUT_MS = 10_000;
 
 export type MpvRange = { start: number; end: number };
 
