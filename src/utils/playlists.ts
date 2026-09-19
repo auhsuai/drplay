@@ -204,6 +204,38 @@ export async function removeTrackFromPlaylist(
   }
 }
 
+export async function removeTracksFromPlaylist(
+  playlistId: string,
+  trackIds: readonly string[],
+): Promise<void> {
+  // Empty batch is a no-op: no transaction, no "playlists-updated" event.
+  if (trackIds.length === 0) return;
+  try {
+    await db.transaction("rw", db.playlists, async () => {
+      const playlist = await db.playlists.get(playlistId);
+      if (playlist) {
+        const drop = new Set(trackIds);
+        const tracks = (getPlaylistTracks(playlist) ?? []).filter(
+          (t) => !drop.has(t.id),
+        );
+        // put replaces the whole row, so the legacy row is healed with
+        // `tracks` on write.
+        await db.playlists.put({ ...playlist, tracks });
+        // Single event for the whole batch: listeners reload the list once.
+        window.dispatchEvent(new CustomEvent("playlists-updated"));
+      }
+    });
+  } catch (e: unknown) {
+    const { name, message } = classifyPlaylistError(e);
+    await captureError({
+      level: "error",
+      source: PLAYLIST_MODULE,
+      message: `remove-tracks-failed: ${name}: ${message}`,
+    });
+    showErrorToast(i18n.t("playlist.remove_track_error"));
+  }
+}
+
 export async function getPlaylistById(id: string): Promise<Playlist | null> {
   try {
     const row = await db.playlists.get(id);

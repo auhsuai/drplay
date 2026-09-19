@@ -33,7 +33,7 @@ export interface QueueRowProps {
   onRemoveFolderFromQueue?: (() => void) | undefined;
 }
 
-function QueueRowCheckbox({
+export function QueueRowCheckbox({
   checked,
   label,
   onToggle,

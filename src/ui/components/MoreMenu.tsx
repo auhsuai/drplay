@@ -19,6 +19,7 @@ import { DownloadDialog } from "./MoreMenu/DownloadDialog";
 import { DownloadToast } from "./MoreMenu/DownloadToast";
 import { MoreMenuTrigger } from "./MoreMenu/MoreMenuTrigger";
 import { PlayerBarMenuItems } from "./MoreMenu/PlayerBarMenuItems";
+import { PlaylistMenuItems } from "./MoreMenu/PlaylistMenuItems";
 import { QueueMenuItems } from "./MoreMenu/QueueMenuItems";
 import { RecentMenuItems } from "./MoreMenu/RecentMenuItems";
 import { useMenuMove } from "./MoreMenu/useMenuMove";
@@ -55,6 +56,7 @@ export interface MoreMenuProps {
   disableRemoveFromQueue?: boolean | undefined;
   onRemoveFolderFromQueue?: (() => void) | undefined;
   queueFolder?: { id: string; name: string } | undefined;
+  onRemoveFromPlaylist?: (() => void) | undefined;
 }
 
 export function MoreMenu({
@@ -80,6 +82,7 @@ export function MoreMenu({
   disableRemoveFromQueue,
   onRemoveFolderFromQueue,
   queueFolder,
+  onRemoveFromPlaylist,
 }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -253,6 +256,16 @@ export function MoreMenu({
           setIsOpen={setIsOpen}
           t={t}
         />
+      ) : mode === "playlist" ? (
+        <PlaylistMenuItems
+          track={track}
+          handleNavigateClick={handleNavigateClick}
+          onSelectMultiple={onSelectMultiple}
+          onRemoveFromPlaylist={onRemoveFromPlaylist}
+          setIsOpen={setIsOpen}
+          onClose={onClose}
+          t={t}
+        />
       ) : mode === "playerbar" ? (
         <PlayerBarMenuItems
           track={track}
@@ -293,21 +306,25 @@ export function MoreMenu({
         />
       )}
 
-      <AddToPlaylistItem
-        track={track}
-        showPlaylistsSubmenu={showPlaylistsSubmenu}
-        playlistSearchQuery={playlistSearchQuery}
-        setPlaylistSearchQuery={setPlaylistSearchQuery}
-        playlistCurrentPage={playlistCurrentPage}
-        setPlaylistCurrentPage={setPlaylistCurrentPage}
-        playlistSubmenuOpenLeft={playlistSubmenuOpenLeft}
-        playlists={playlists}
-        handleAddToPlaylist={handleAddToPlaylist}
-        handleToggleSubmenu={handleToggleSubmenu}
-        setIsOpen={setIsOpen}
-        onClose={onClose}
-        t={t}
-      />
+      {/* Playlist rows already belong to a playlist — adding them elsewhere
+          is not part of the playlist row menu. */}
+      {mode !== "playlist" && (
+        <AddToPlaylistItem
+          track={track}
+          showPlaylistsSubmenu={showPlaylistsSubmenu}
+          playlistSearchQuery={playlistSearchQuery}
+          setPlaylistSearchQuery={setPlaylistSearchQuery}
+          playlistCurrentPage={playlistCurrentPage}
+          setPlaylistCurrentPage={setPlaylistCurrentPage}
+          playlistSubmenuOpenLeft={playlistSubmenuOpenLeft}
+          playlists={playlists}
+          handleAddToPlaylist={handleAddToPlaylist}
+          handleToggleSubmenu={handleToggleSubmenu}
+          setIsOpen={setIsOpen}
+          onClose={onClose}
+          t={t}
+        />
+      )}
     </>
   );
 

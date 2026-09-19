@@ -299,6 +299,99 @@ describe("MoreMenu recent variant", () => {
   });
 });
 
+describe("MoreMenu playlist variant", () => {
+  it("shows exactly 3 curated items (Select Multiple / Locate File / Remove from Playlist) and no file-management or shared Add to Playlist", () => {
+    render(<MoreMenu variant="playlist" track={makeTrack()} />);
+    openTrigger();
+    expect(menuItemNames().sort()).toEqual([
+      "Locate File",
+      "Remove from Playlist",
+      "Select multiple items",
+    ]);
+    for (const absent of [
+      "Add to Playlist",
+      "Add to queue",
+      "Delete",
+      "Download Song",
+      "Move to...",
+    ]) {
+      expect(
+        within(menuEl()).queryByRole("menuitem", { name: absent }),
+      ).toBeNull();
+    }
+  });
+
+  it("dispatches locate-file with fileId/parentId/parentName on Locate File and closes the menu", () => {
+    const spy = vi.fn();
+    window.addEventListener("locate-file", spy);
+    const onClose = vi.fn();
+    render(
+      <MoreMenu variant="playlist" track={makeTrack()} onClose={onClose} />,
+    );
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("menuitem", { name: "Locate File" }),
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    const firstCall = spy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected event dispatch");
+    const detail = (
+      firstCall[0] as CustomEvent<{
+        fileId: string;
+        parentId: string;
+        parentName: string;
+      }>
+    ).detail;
+    expect(detail).toEqual({
+      fileId: "track-1",
+      parentId: "parent-1",
+      parentName: "Folder One",
+    });
+    expect(onClose).toHaveBeenCalled();
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("Select multiple items click -> onSelectMultiple + menu closes", () => {
+    const onSelectMultiple = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MoreMenu
+        variant="playlist"
+        track={makeTrack()}
+        onSelectMultiple={onSelectMultiple}
+        onClose={onClose}
+      />,
+    );
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("menuitem", { name: "Select multiple items" }),
+    );
+    expect(onSelectMultiple).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalled();
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("Remove from Playlist click -> onRemoveFromPlaylist + menu closes", () => {
+    const onRemoveFromPlaylist = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MoreMenu
+        variant="playlist"
+        track={makeTrack()}
+        onRemoveFromPlaylist={onRemoveFromPlaylist}
+        onClose={onClose}
+      />,
+    );
+    openTrigger();
+    fireEvent.click(
+      within(menuEl()).getByRole("menuitem", { name: "Remove from Playlist" }),
+    );
+    expect(onRemoveFromPlaylist).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalled();
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  });
+});
+
 describe("MoreMenu default variant regression (file list)", () => {
   it("keeps the original 6 items (Select Multiple / Add to Queue / Move to / Delete / Download / Add to Playlist)", () => {
     render(

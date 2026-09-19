@@ -103,6 +103,7 @@ import {
   updatePlaylist,
   addTrackToPlaylist,
   removeTrackFromPlaylist,
+  removeTracksFromPlaylist,
   getPlaylistById,
 } from "./playlists";
 import { db } from "../db/db";
@@ -176,6 +177,48 @@ describe("playlists (Dexie-backed)", () => {
 
     const fetched = nonNull(await getPlaylistById(p.id), "playlist");
     expect(fetched.tracks.map((t) => t.id)).toEqual(["2"]);
+  });
+
+  it("removeTracksFromPlaylist removes multiple ids in one transaction and dispatches once", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    await addTrackToPlaylist(p.id, track("1"));
+    await addTrackToPlaylist(p.id, track("2"));
+    await addTrackToPlaylist(p.id, track("3"));
+    const handler = vi.fn();
+    window.addEventListener("playlists-updated", handler);
+    const txnSpy = vi.spyOn(store, "transaction");
+
+    await removeTracksFromPlaylist(p.id, ["1", "3"]);
+
+    const fetched = nonNull(await getPlaylistById(p.id), "playlist");
+    expect(fetched.tracks.map((t) => t.id)).toEqual(["2"]);
+    expect(txnSpy).toHaveBeenCalledTimes(1);
+    const firstCall = txnSpy.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected txn call");
+    expect(firstCall[0]).toBe("rw");
+    expect(firstCall[1]).toBe(db.playlists);
+    expect(handler).toHaveBeenCalledTimes(1);
+    txnSpy.mockRestore();
+    window.removeEventListener("playlists-updated", handler);
+  });
+
+  it("removeTracksFromPlaylist with an empty id list is a no-op (no transaction, no event)", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    await addTrackToPlaylist(p.id, track("1"));
+    const handler = vi.fn();
+    window.addEventListener("playlists-updated", handler);
+    const txnSpy = vi.spyOn(store, "transaction");
+
+    await removeTracksFromPlaylist(p.id, []);
+
+    expect(txnSpy).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    const fetched = nonNull(await getPlaylistById(p.id), "playlist");
+    expect(fetched.tracks.map((t) => t.id)).toEqual(["1"]);
+    txnSpy.mockRestore();
+    window.removeEventListener("playlists-updated", handler);
   });
 
   it("updatePlaylist merges updates", async () => {
@@ -331,6 +374,22 @@ describe("playlists (Dexie-backed)", () => {
     );
     txnSpy.mockRestore();
   });
+
+  it("removeTracksFromPlaylist shows the localized toast key when the write fails (no hardcoded language)", async () => {
+    setUser(EMAIL_A);
+    const p = nonNull(await createPlaylist("Liked"), "playlist");
+    const txnSpy = vi
+      .spyOn(store, "transaction")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    await removeTracksFromPlaylist(p.id, ["1"]);
+
+    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
+    expect(showErrorToastMock).toHaveBeenCalledWith(
+      "playlist.remove_track_error",
+    );
+    txnSpy.mockRestore();
+  });
 });
 
 // Regression (B08-1): rows written before `tracks` existed lack it at runtime
@@ -366,6 +425,15 @@ describe("playlists legacy rows missing `tracks`", () => {
     seedLegacyRow();
 
     await removeTrackFromPlaylist(LEGACY_ID, "1");
+
+    expect(showErrorToastMock).not.toHaveBeenCalled();
+    expect(store.get(LEGACY_ID)?.tracks).toEqual([]);
+  });
+
+  it("removeTracksFromPlaylist heals the stored row and shows no error toast", async () => {
+    seedLegacyRow();
+
+    await removeTracksFromPlaylist(LEGACY_ID, ["1", "2"]);
 
     expect(showErrorToastMock).not.toHaveBeenCalled();
     expect(store.get(LEGACY_ID)?.tracks).toEqual([]);

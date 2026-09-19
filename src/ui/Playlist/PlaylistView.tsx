@@ -5,10 +5,14 @@ import type { Playlist } from "../../utils/playlists";
 import {
   getPlaylistById,
   removeTrackFromPlaylist,
+  removeTracksFromPlaylist,
   deletePlaylist,
   updatePlaylist,
 } from "../../utils/playlists";
 import { ImageCropperModal } from "../components/ImageCropperModal";
+import { MoreMenu } from "../components/MoreMenu";
+import { QueueRowCheckbox } from "../PlayerBar/QueueRow";
+import { QueueSelectionToolbar } from "../PlayerBar/QueueSelectionToolbar";
 import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { showErrorToast } from "../../utils/simpleToast";
@@ -38,6 +42,13 @@ export function PlaylistView({
   const [isCropperOpen, setIsCropperOpen] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    index: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const loadPlaylist = useCallback(async () => {
     try {
@@ -132,18 +143,81 @@ export function PlaylistView({
     );
   }
 
-  const handleRemove = async (e: React.MouseEvent, trackId: string) => {
-    e.stopPropagation();
+  // The playlist utils never reject (they log + toast internally), but keep
+  // the second line of defense so a programming error can never surface as an
+  // unhandled rejection from a click handler.
+  const runRemoval = async (
+    removal: () => Promise<void>,
+    failureLog: string,
+  ): Promise<void> => {
     try {
-      await removeTrackFromPlaylist(playlistId, trackId);
+      await removal();
     } catch (err) {
       void captureError({
         level: "error",
         source: PLAYLIST_VIEW_MODULE,
-        message: `remove-track-failed: ${err instanceof Error ? err.message : String(err)}`,
+        message: `${failureLog}: ${err instanceof Error ? err.message : String(err)}`,
       });
       showErrorToast(t("playlist.remove_error"));
     }
+  };
+
+  const removeTrackById = (trackId: string): Promise<void> =>
+    runRemoval(
+      () => removeTrackFromPlaylist(playlistId, trackId),
+      "remove-track-failed",
+    );
+
+  const handleRemove = (e: React.MouseEvent, trackId: string) => {
+    e.stopPropagation();
+    void removeTrackById(trackId);
+  };
+
+  const enterSelection = (trackId: string) => {
+    setSelectionMode(true);
+    setSelected(new Set([trackId]));
+  };
+
+  const exitSelection = () => {
+    setSelectionMode(false);
+    setSelected(new Set());
+  };
+
+  const toggleSelected = (trackId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(trackId)) next.delete(trackId);
+      else next.add(trackId);
+      return next;
+    });
+  };
+
+  const allSelected =
+    tracks.length > 0 && tracks.every((track) => selected.has(track.id));
+
+  const toggleSelectAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const track of tracks) {
+        if (allSelected) next.delete(track.id);
+        else next.add(track.id);
+      }
+      return next;
+    });
+  };
+
+  const handleBulkRemove = async () => {
+    if (selected.size === 0) return;
+    const ids = [...selected];
+    // Snapshot before the await: the playlist may reload while the write is
+    // in flight, and the exit decision belongs to the click's own list.
+    const removedAll = tracks.every((track) => selected.has(track.id));
+    await runRemoval(
+      () => removeTracksFromPlaylist(playlistId, ids),
+      "remove-tracks-failed",
+    );
+    if (removedAll) exitSelection();
+    else setSelected(new Set());
   };
 
   const handleDelete = async () => {
@@ -289,16 +363,30 @@ export function PlaylistView({
 
       <div className="px-8 pb-24 flex-1 min-h-0">
         {tracks.length > 0 && (
-          <button
-            onClick={() => {
-              const first = tracks[0];
-              if (first === undefined) return;
-              onPlay(first, tracks);
-            }}
-            className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg mb-8 flex-shrink-0"
-          >
-            <Play className="w-7 h-7 fill-current ml-1" />
-          </button>
+          <div className="mb-8 flex-shrink-0">
+            {selectionMode ? (
+              <QueueSelectionToolbar
+                selectedCount={selected.size}
+                allSelected={allSelected}
+                onToggleSelectAll={toggleSelectAll}
+                onRemove={() => {
+                  void handleBulkRemove();
+                }}
+                onExit={exitSelection}
+              />
+            ) : (
+              <button
+                onClick={() => {
+                  const first = tracks[0];
+                  if (first === undefined) return;
+                  onPlay(first, tracks);
+                }}
+                className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg"
+              >
+                <Play className="w-7 h-7 fill-current ml-1" />
+              </button>
+            )}
+          </div>
         )}
 
         {tracks.length === 0 ? (
@@ -320,6 +408,8 @@ export function PlaylistView({
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const track = tracks[virtualRow.index];
               if (track === undefined) return null;
+              const isContextTarget =
+                contextMenu !== null && contextMenu.index === virtualRow.index;
               return (
                 <div
                   key={virtualRow.key}
@@ -335,44 +425,55 @@ export function PlaylistView({
                     role="button"
                     tabIndex={0}
                     onClick={() => {
-                      onPlay(track, tracks);
+                      if (selectionMode) toggleSelected(track.id);
+                      else onPlay(track, tracks);
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onPlay(track, tracks);
-                      }
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      // Nested controls (checkbox, ⋯ trigger) own their keys.
+                      if (e.target !== e.currentTarget) return;
+                      e.preventDefault();
+                      if (selectionMode) toggleSelected(track.id);
+                      else onPlay(track, tracks);
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      window.dispatchEvent(
-                        new CustomEvent("locate-file", {
-                          detail: {
-                            fileId: track.id,
-                            parentId: track.parentId,
-                            parentName: track.parentName,
-                          },
-                        }),
-                      );
+                      // Selection mode replaces per-row actions entirely.
+                      if (selectionMode) return;
+                      setContextMenu({
+                        index: virtualRow.index,
+                        x: e.clientX,
+                        y: e.clientY,
+                      });
                     }}
                     className="flex items-center gap-4 p-2 rounded-lg group cursor-pointer transition-all active:scale-[0.99]"
                   >
                     <div
-                      className={`w-8 text-center text-sm ${currentTrack?.id === track.id ? "text-brand-text hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
+                      className={`w-8 text-center text-sm ${selectionMode ? "flex items-center justify-center" : currentTrack?.id === track.id ? "text-brand-text hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
                     >
-                      {currentTrack?.id === track.id ? (
+                      {selectionMode ? (
+                        <QueueRowCheckbox
+                          checked={selected.has(track.id)}
+                          label={track.title}
+                          onToggle={() => {
+                            toggleSelected(track.id);
+                          }}
+                        />
+                      ) : currentTrack?.id === track.id ? (
                         <Music className="w-4 h-4 mx-auto" />
                       ) : (
                         virtualRow.index + 1
                       )}
                     </div>
                     <div
-                      className={`w-8 text-center items-center justify-center ${currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
+                      className={`w-8 text-center items-center justify-center ${selectionMode ? "flex" : currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
                     >
-                      <Play
-                        className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white"}`}
-                        fill="currentColor"
-                      />
+                      {!selectionMode && (
+                        <Play
+                          className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white"}`}
+                          fill="currentColor"
+                        />
+                      )}
                     </div>
 
                     <div
@@ -394,15 +495,40 @@ export function PlaylistView({
                       </p>
                     </div>
 
-                    <button
-                      onClick={(e) => {
-                        void handleRemove(e, track.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all text-gray-400 hover:text-red-500"
-                      title={t("remove_from_playlist")}
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    {!selectionMode && (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            handleRemove(e, track.id);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all text-gray-400 hover:text-red-500"
+                          title={t("remove_from_playlist")}
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                        <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <MoreMenu
+                            variant="playlist"
+                            track={track}
+                            forceOpen={isContextTarget}
+                            anchorPoint={
+                              isContextTarget
+                                ? { x: contextMenu.x, y: contextMenu.y }
+                                : null
+                            }
+                            onClose={() => {
+                              setContextMenu(null);
+                            }}
+                            onRemoveFromPlaylist={() => {
+                              void removeTrackById(track.id);
+                            }}
+                            onSelectMultiple={() => {
+                              enterSelection(track.id);
+                            }}
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               );
