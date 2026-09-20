@@ -941,8 +941,8 @@ describe("Sidebar playlist more menu", () => {
     expect(mocks.updatePlaylist).not.toHaveBeenCalled();
   });
 
-  it("Delete confirms with playlist-only wording, removes the playlist and redirects the open tab", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("Delete opens the in-app confirm modal; confirming removes the playlist and redirects the open tab", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm");
     const onTabChange = vi.fn();
     render(
       <Sidebar {...baseProps({ activeTab: "playlist_pl-1", onTabChange })} />,
@@ -955,22 +955,63 @@ describe("Sidebar playlist more menu", () => {
       }),
     );
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "This removes the playlist only. Your music files are not deleted.",
-      ),
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain(
+      "This removes the playlist only. Your music files are not deleted.",
     );
+    // Least destructive control owns the initial focus (APG dialog-modal).
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Cancel" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
     await waitFor(() => {
       expect(mocks.deletePlaylist).toHaveBeenCalledWith("pl-1");
     });
     await waitFor(() => {
       expect(onTabChange).toHaveBeenCalledWith("Home");
     });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The delete confirmation is in-app now — no native script dialog.
+    expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
 
-  it("Delete does nothing when the confirmation is dismissed", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("Cancel in the confirm modal closes it without deleting", async () => {
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Alpha")).getByRole("menuitem", {
+        name: "Delete",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mocks.deletePlaylist).not.toHaveBeenCalled();
+    expect(screen.getByText("Alpha")).toBeTruthy();
+  });
+
+  it("Escape closes the confirm modal without deleting", async () => {
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Alpha");
+
+    fireEvent.click(
+      within(openMenuByRightClick("Alpha")).getByRole("menuitem", {
+        name: "Delete",
+      }),
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mocks.deletePlaylist).not.toHaveBeenCalled();
+  });
+
+  it("backdrop click (but not dialog click) closes the confirm modal without deleting", async () => {
     render(<Sidebar {...baseProps()} />);
     await screen.findByText("Alpha");
 
@@ -980,12 +1021,19 @@ describe("Sidebar playlist more menu", () => {
       }),
     );
 
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(dialog);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    const backdrop = dialog.parentElement;
+    if (!backdrop) throw new Error("confirm backdrop missing");
+    fireEvent.click(backdrop);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(mocks.deletePlaylist).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
   it("deleting a playlist that is not the open tab does not redirect", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const onTabChange = vi.fn();
     render(
       <Sidebar {...baseProps({ activeTab: "playlist_pl-1", onTabChange })} />,
@@ -997,11 +1045,11 @@ describe("Sidebar playlist more menu", () => {
         name: "Delete",
       }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() => {
       expect(mocks.deletePlaylist).toHaveBeenCalledWith("pl-2");
     });
     expect(onTabChange).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 });

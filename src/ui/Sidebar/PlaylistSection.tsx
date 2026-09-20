@@ -16,6 +16,7 @@ import type { TabKey } from "../../utils/driveConstants";
 import { MoreMenu } from "../components/MoreMenu";
 import { SIDEBAR_MODULE } from "./constants";
 import { NavItem } from "./NavItem";
+import { PlaylistDeleteConfirmModal } from "./PlaylistDeleteConfirmModal";
 
 interface PlaylistSectionProps {
   onTabChange: (tab: TabKey) => void;
@@ -44,6 +45,10 @@ export function PlaylistSection({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameName, setRenameName] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // Playlist awaiting delete confirmation (null = modal closed). Confirmation
+  // is an in-app modal on purpose: window.confirm does not reliably render in
+  // the Tauri WebView (script dialogs are host-controlled).
+  const [deleteTarget, setDeleteTarget] = useState<Playlist | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,14 +129,16 @@ export function PlaylistSection({
   };
 
   // Deleting a playlist only removes the playlist row — never the underlying
-  // files (deletePlaylist touches db.playlists only). Same confirmation copy
-  // as the playlist header delete, and the same redirect when the open
-  // playlist disappears.
-  const handleDeletePlaylist = async (playlist: Playlist) => {
-    if (!window.confirm(t("confirm_delete_playlist"))) return;
+  // files (deletePlaylist touches db.playlists only). Runs only after the
+  // in-app confirm is accepted; same redirect when the open playlist
+  // disappears.
+  const confirmDeletePlaylist = async () => {
+    const target = deleteTarget;
+    if (target === null) return;
+    setDeleteTarget(null);
     try {
-      await deletePlaylist(playlist.id);
-      if (activeTab === `playlist_${playlist.id}`) onTabChange(TABS.home);
+      await deletePlaylist(target.id);
+      if (activeTab === `playlist_${target.id}`) onTabChange(TABS.home);
     } catch (err) {
       void captureError({
         level: "error",
@@ -326,7 +333,7 @@ export function PlaylistSection({
                         setRenameName(p.name);
                       }}
                       onDeletePlaylist={() => {
-                        void handleDeletePlaylist(p);
+                        setDeleteTarget(p);
                       }}
                       onTogglePinPlaylist={() => {
                         void handleTogglePin(p);
@@ -339,6 +346,16 @@ export function PlaylistSection({
           ),
         )}
       </div>
+
+      <PlaylistDeleteConfirmModal
+        playlist={deleteTarget}
+        onClose={() => {
+          setDeleteTarget(null);
+        }}
+        onConfirm={() => {
+          void confirmDeletePlaylist();
+        }}
+      />
     </>
   );
 }
