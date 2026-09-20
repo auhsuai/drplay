@@ -195,13 +195,7 @@ function dispatchPlaylistEmpty() {
 }
 
 function renderView(playlistId = "pl-1") {
-  return render(
-    <PlaylistView
-      playlistId={playlistId}
-      onPlay={vi.fn()}
-      onDelete={vi.fn()}
-    />,
-  );
+  return render(<PlaylistView playlistId={playlistId} onPlay={vi.fn()} />);
 }
 
 describe("PlaylistView debug empty trigger", () => {
@@ -283,9 +277,7 @@ describe("PlaylistView header + row semantics (P2-13a-3/-4/-9)", () => {
   it("nút Play header truyền cả playlist làm context queue (P2-13a-4)", async () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     const onPlay = vi.fn();
-    render(
-      <PlaylistView playlistId="pl-1" onPlay={onPlay} onDelete={vi.fn()} />,
-    );
+    render(<PlaylistView playlistId="pl-1" onPlay={onPlay} />);
     await screen.findByText("Track 1");
 
     // The header play button is the only <button> carrying bg-brand-primary
@@ -295,6 +287,14 @@ describe("PlaylistView header + row semantics (P2-13a-3/-4/-9)", () => {
     fireEvent.click(playButton as HTMLButtonElement);
 
     expect(onPlay).toHaveBeenCalledWith(TRACK, [TRACK]);
+  });
+
+  it("header không còn nút Delete — xoá playlist chỉ qua sidebar ⋯ menu", async () => {
+    mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
+    renderView();
+
+    await screen.findByText("Track 1");
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
   it("playlist null sau khi load settle → hiện thông điệp load_error thay vì trắng (P2-13a-9)", async () => {
@@ -330,9 +330,7 @@ describe("PlaylistView playlist row menu + selection mode", () => {
 
   function renderWithPlay() {
     const onPlay = vi.fn();
-    render(
-      <PlaylistView playlistId="pl-1" onPlay={onPlay} onDelete={vi.fn()} />,
-    );
+    render(<PlaylistView playlistId="pl-1" onPlay={onPlay} />);
     return { onPlay };
   }
 
@@ -779,9 +777,7 @@ describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
   it("kéo group rời rạc (T2,T4) xuống cuối: giữ thứ tự nội bộ, persist đúng 1 lần/drop, không play (Case 3/4/15)", async () => {
     mocks.getPlaylistById.mockResolvedValue(FIVE_TRACK_PLAYLIST);
     const onPlay = vi.fn();
-    render(
-      <PlaylistView playlistId="pl-1" onPlay={onPlay} onDelete={vi.fn()} />,
-    );
+    render(<PlaylistView playlistId="pl-1" onPlay={onPlay} />);
     await enterArrange("Track 2", "Track 4");
 
     dragRow("Track 2", 300);

@@ -176,9 +176,6 @@ export function TabContentRouter({
             onPlay={(t: Track, c?: Track[]) => {
               onPlayTrack(t, c);
             }}
-            onDelete={() => {
-              onSwitchTab(TABS.home);
-            }}
             currentTrack={currentTrack}
           />
         ) : activeTab === TABS.settings ? (

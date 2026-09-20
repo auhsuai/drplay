@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 export function NavItem({
   icon,
   label,
+  labelIcon,
   active,
   onClick,
   isSidebarOpen,
@@ -11,6 +12,9 @@ export function NavItem({
 }: {
   icon: ReactNode;
   label: string;
+  // Optional inline marker rendered before the label text (e.g. the pin on a
+  // pinned playlist). Callers that omit it keep the exact previous markup.
+  labelIcon?: ReactNode;
   active?: boolean;
   onClick: () => void;
   isSidebarOpen: boolean;
@@ -49,7 +53,14 @@ export function NavItem({
         className={`overflow-hidden transition-all duration-300 whitespace-nowrap ${isSidebarOpen ? "max-w-[150px] opacity-100 ml-3 flex-1" : "max-w-0 opacity-0 ml-0"}`}
       >
         <span className="text-sm block truncate group-hover:text-brand-text">
-          {label}
+          {labelIcon ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              {labelIcon}
+              <span className="truncate">{label}</span>
+            </span>
+          ) : (
+            label
+          )}
         </span>
       </div>
       {action}

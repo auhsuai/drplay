@@ -3,7 +3,6 @@ import type { Track } from "../../types";
 import {
   Music,
   Play,
-  Trash2,
   Camera,
   SquareCheckBig,
   GripVertical,
@@ -13,7 +12,6 @@ import {
   getPlaylistById,
   removeTrackFromPlaylist,
   removeTracksFromPlaylist,
-  deletePlaylist,
   updatePlaylist,
 } from "../../utils/playlists";
 import { ImageCropperModal } from "../components/ImageCropperModal";
@@ -55,14 +53,12 @@ interface ArrangeDragPreview {
 interface PlaylistViewProps {
   playlistId: string;
   onPlay: (track: Track, contextQueue?: Track[]) => void;
-  onDelete: () => void;
   currentTrack?: Track | null;
 }
 
 export function PlaylistView({
   playlistId,
   onPlay,
-  onDelete,
   currentTrack,
 }: PlaylistViewProps) {
   const { t } = useTranslation();
@@ -448,22 +444,6 @@ export function PlaylistView({
     else setSelected(new Set());
   };
 
-  const handleDelete = async () => {
-    if (window.confirm(t("confirm_delete_playlist"))) {
-      try {
-        await deletePlaylist(playlistId);
-        onDelete(); // Triggers tab change in App
-      } catch (err) {
-        void captureError({
-          level: "error",
-          source: PLAYLIST_VIEW_MODULE,
-          message: `delete-playlist-failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        showErrorToast(t("playlist.delete_error"));
-      }
-    }
-  };
-
   const MAX_COVER_BYTES = 5 * 1024 * 1024;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -577,14 +557,6 @@ export function PlaylistView({
           </h1>
           <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-300 font-medium">
             <span>{t("song", { count: playlist.tracks.length })}</span>
-            <button
-              onClick={() => {
-                void handleDelete();
-              }}
-              className="text-red-500 hover:text-red-600 flex items-center gap-1 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" /> {t("delete")}
-            </button>
           </div>
         </div>
       </div>

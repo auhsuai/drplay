@@ -317,5 +317,6 @@
       "covers": "Covers & thumbnails",
       "prefetch": "Prefetched data"
     }
-  }
+  },
+  "song": "{{count}} songs"
 }

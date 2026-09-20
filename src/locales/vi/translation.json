@@ -313,5 +313,6 @@
       "covers": "Ảnh bìa & hình thu nhỏ",
       "prefetch": "Dữ liệu tải trước"
     }
-  }
+  },
+  "song": "{{count}} bài hát"
 }

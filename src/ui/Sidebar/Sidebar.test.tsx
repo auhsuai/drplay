@@ -882,6 +882,17 @@ describe("Sidebar playlist more menu", () => {
     });
   });
 
+  it("chỉ playlist pinned mới có pin marker đứng ngay trước tên", async () => {
+    mocks.getPlaylists.mockResolvedValue([{ ...BETA, pinned: true }, ALPHA]);
+    render(<Sidebar {...baseProps()} />);
+    await screen.findByText("Beta");
+
+    const pin = screen.getByTestId("playlist-pin-pl-2");
+    // Marker nằm trong cùng block tên, ngay trước text của playlist.
+    expect(pin.nextElementSibling?.textContent).toBe("Beta");
+    expect(screen.queryByTestId("playlist-pin-pl-1")).toBeNull();
+  });
+
   it("Rename opens the inline input prefilled; Enter saves the trimmed name", async () => {
     render(<Sidebar {...baseProps()} />);
     await screen.findByText("Alpha");

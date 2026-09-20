@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import type { SyntheticEvent } from "react";
-import { Plus, ListMusic } from "lucide-react";
+import { Plus, ListMusic, Pin } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Playlist } from "../../utils/playlists";
 import {
@@ -272,6 +272,17 @@ export function PlaylistSection({
                 )
               }
               label={p.name}
+              labelIcon={
+                p.pinned ? (
+                  <span
+                    data-testid={`playlist-pin-${p.id}`}
+                    className="inline-flex shrink-0 items-center"
+                    aria-hidden="true"
+                  >
+                    <Pin className="w-3.5 h-3.5" />
+                  </span>
+                ) : undefined
+              }
               active={activeTab === `playlist_${p.id}`}
               onClick={() => {
                 onTabChange(`playlist_${p.id}`);
