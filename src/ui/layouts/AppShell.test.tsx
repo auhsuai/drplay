@@ -189,3 +189,43 @@ describe("AppShell shell inert khi modal phủ (P2-13a-2)", () => {
     expect(shell.hasAttribute("inert")).toBe(false);
   });
 });
+
+describe("AppShell PlayerBar full-width layout", () => {
+  // The player wrapper lives inside "player-bar-stub".parentElement (the
+  // wrapper), so "cùng root với Sidebar" means wrapper.parentElement is the
+  // shell root — the literal stub.parentElement can never equal
+  // sidebar-stub.parentElement while the wrapper (aria-hidden/inert/collapse)
+  // still exists, as the contract requires.
+  it("wrapper PlayerBar là con của shell root (cùng cấp Sidebar) và root dùng grid", () => {
+    render(<AppShell {...baseProps()} />);
+
+    const shellRoot = screen.getByTestId("sidebar-stub")
+      .parentElement as HTMLElement;
+    const wrapper = screen.getByTestId("player-bar-stub")
+      .parentElement as HTMLElement;
+
+    expect(shellRoot.className).toContain("grid");
+    expect(wrapper.parentElement).toBe(shellRoot);
+    expect(wrapper).toBe(shellRoot.lastElementChild);
+  });
+
+  it("wrapper PlayerBar span cả 2 cột (col-span-2) để kéo full chiều ngang", () => {
+    render(<AppShell {...baseProps()} />);
+
+    const wrapper = screen.getByTestId("player-bar-stub")
+      .parentElement as HTMLElement;
+
+    expect(wrapper.className).toContain("col-span-2");
+  });
+
+  it("wrapper PlayerBar không còn nằm trong #content-area", () => {
+    render(<AppShell {...baseProps()} />);
+
+    const contentArea = document.getElementById("content-area") as HTMLElement;
+    const wrapper = screen.getByTestId("player-bar-stub")
+      .parentElement as HTMLElement;
+
+    expect(contentArea).not.toBeNull();
+    expect(contentArea.contains(wrapper)).toBe(false);
+  });
+});

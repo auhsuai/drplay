@@ -74,10 +74,16 @@ export function AppShell({
   const isShellLocked = !isLoggedIn || !appRootFolder || showFolderSelection;
 
   return (
+    // Shell grid: 2 columns × 2 rows. Row 1 = Sidebar (auto col) +
+    // #content-area (1fr col); row 2 = the PlayerBar wrapper spanning both
+    // columns (col-span-2), so the bar stretches the full window width while
+    // Sidebar/Main give up vertical space above it — in flow, not absolute.
+    // The blur/scale wrapper classes apply to the grid as a whole, so the
+    // player also locks (aria-hidden/inert) with the shell behind a modal.
     <div
       aria-hidden={isShellLocked}
       inert={isShellLocked}
-      className={`flex flex-1 overflow-hidden transition-all duration-700 ease-in-out ${!isLoggedIn || (!appRootFolder && !showFolderSelection) ? "blur-xl scale-[0.97] opacity-40 pointer-events-none" : "blur-0 scale-100 opacity-100"}`}
+      className={`grid grid-cols-[auto_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] flex-1 overflow-hidden transition-all duration-700 ease-in-out ${!isLoggedIn || (!appRootFolder && !showFolderSelection) ? "blur-xl scale-[0.97] opacity-40 pointer-events-none" : "blur-0 scale-100 opacity-100"}`}
     >
       <Sidebar
         activeTab={activeTab}
@@ -89,10 +95,7 @@ export function AppShell({
         token={token}
       />
 
-      <div
-        id="content-area"
-        className="flex-1 relative overflow-hidden flex flex-col"
-      >
+      <div id="content-area" className="relative overflow-hidden flex flex-col">
         {/* Row: tab content + queue pane side by side. The pane is an in-flow
             sibling (docked): opening it shrinks the list column
             (flex-1 min-w-0) instead of overlaying it, mirroring the sidebar
@@ -126,28 +129,28 @@ export function AppShell({
             activeTab={activeTab}
           />
         </div>
+      </div>
 
-        <div
-          aria-hidden={isNowPlayingOpen}
-          inert={isNowPlayingOpen}
-          className={`transition-all duration-700 ease-in-out shrink-0 ${isNowPlayingOpen ? "h-0 overflow-hidden pointer-events-none opacity-0" : ""}`}
-        >
-          <PlayerBar
-            currentTrack={currentTrack}
-            loadNonce={loadNonce}
-            isPlaying={isPlaying}
-            onTogglePlay={onTogglePlay}
-            onNextTrack={onNextTrack}
-            onPrevTrack={onPrevTrack}
-            isDownloading={isDownloading}
-            playMode={playMode}
-            onTogglePlayMode={onTogglePlayMode}
-            onSelectTrack={onSelectTrack}
-            onExpandNowPlaying={onExpandNowPlaying}
-            isQueueOpen={isQueueOpen}
-            onToggleQueue={onToggleQueue}
-          />
-        </div>
+      <div
+        aria-hidden={isNowPlayingOpen}
+        inert={isNowPlayingOpen}
+        className={`transition-all duration-700 ease-in-out col-span-2 ${isNowPlayingOpen ? "h-0 overflow-hidden pointer-events-none opacity-0" : ""}`}
+      >
+        <PlayerBar
+          currentTrack={currentTrack}
+          loadNonce={loadNonce}
+          isPlaying={isPlaying}
+          onTogglePlay={onTogglePlay}
+          onNextTrack={onNextTrack}
+          onPrevTrack={onPrevTrack}
+          isDownloading={isDownloading}
+          playMode={playMode}
+          onTogglePlayMode={onTogglePlayMode}
+          onSelectTrack={onSelectTrack}
+          onExpandNowPlaying={onExpandNowPlaying}
+          isQueueOpen={isQueueOpen}
+          onToggleQueue={onToggleQueue}
+        />
       </div>
     </div>
   );
