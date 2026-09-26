@@ -1354,7 +1354,7 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     expect(preview.className).not.toContain("rounded-full");
   });
 
-  it("BUG regression: buffer preview sits inside an overflow-hidden pill clip container (rounded rail)", () => {
+  it("BUG regression: buffer preview sits inside an overflow-hidden clip container (square clip — flat top rail)", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 10, duration: 100 });
@@ -1364,14 +1364,14 @@ describe("PlayerBar seekbar hover preview (tooltip + buffer preview + thumb idle
     hoverAt(bar, 150); // 75% of the bar
 
     const preview = screen.getByTestId("buffer-preview");
-    // The clip cuts the preview to the rail bounds and mirrors the default
-    // rail's pill contour (rounded-full): a flat preview head is rounded by
-    // the clipper when the negative-head pad clamps to the rail start. The
-    // clip must NOT wrap the thumb: the thumb pokes out of the track
-    // (translate-x-1/2) and would be cut by the clip.
+    // The clip still cuts the preview to the rail bounds, but slice C made the
+    // top rail SQUARE (edge-flush with the bar/window): a rounded-full clip
+    // here would re-round the rail's left end. The clip must NOT wrap the
+    // thumb: the thumb pokes out of the track (translate-x-1/2) and would be
+    // cut by the clip.
     const clip = preview.parentElement as HTMLElement;
     expect(clip.className).toContain("overflow-hidden");
-    expect(clip.className).toContain("rounded-full");
+    expect(clip.className).not.toContain("rounded-full");
     expect(clip.contains(screen.getByTestId("seek-thumb"))).toBe(false);
   });
 
@@ -1433,7 +1433,7 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
     vi.restoreAllMocks();
   });
 
-  it("BUG regression: fill is a pill (rounded-full) at mid-track widths inside the default clipper", () => {
+  it("BUG regression: fill is square (no rounded-full) at mid-track widths on the flat top rail", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 50, duration: 100 });
@@ -1441,16 +1441,16 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
 
     const fill = screen.getByTestId("progress-fill");
     expect(fill.style.width).toBe("50%");
-    // Default rail: the fill carries the pill contour (rounded-full); its
-    // overflow-hidden clipper re-cuts it to the track contour at every width
-    // (a hair-thin fill renders as a rounded sliver, not a needle). No extra
-    // right-corner classes and no conditional toggle at the rail end.
-    expect(fill.className).toContain("rounded-full");
+    // Slice C: the top rail is edge-flush with the bar/window, so the fill
+    // (and its clipper) must stay square at every width — a round cap would
+    // float inside the flat bar. No small 2px right corner and no conditional
+    // toggle when the fill reaches the rail end either.
+    expect(fill.className).not.toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
   });
 
-  it("BUG regression: fill stays a pill at the rail end (100%) on the default rail", () => {
+  it("BUG regression: fill stays square at the rail end (100%) on the flat top rail", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 100, duration: 100 });
@@ -1458,12 +1458,12 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
 
     const fill = screen.getByTestId("progress-fill");
     expect(fill.style.width).toBe("100%");
-    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
   });
 
-  it("BUG regression: dragging the fill keeps it a pill (rounded-full) (drag path)", () => {
+  it("BUG regression: dragging the fill keeps it square (no rounded-full) (drag path)", () => {
     renderPlayer();
     act(() => {
       fakeController._emit("timeupdate", { currentTime: 0, duration: 240 });
@@ -1473,7 +1473,7 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
     act(() => {
       fireEvent.pointerDown(bar, { clientX: BAR_WIDTH, pointerId: 1 });
     });
-    expect(screen.getByTestId("progress-fill").className).toContain(
+    expect(screen.getByTestId("progress-fill").className).not.toContain(
       "rounded-full",
     );
     expect(screen.getByTestId("progress-fill").className).not.toContain(
@@ -1486,13 +1486,13 @@ describe("PlayerBar fill rounding at the buffer seam", () => {
     expect(fakeController.seek).toHaveBeenCalledTimes(1);
   });
 
-  it("BUG regression: restored session near 100% keeps the fill a pill (restore path)", () => {
+  it("BUG regression: restored session near 100% keeps the fill square (restore path)", () => {
     renderPlayer({
       currentTrack: makeTrack({ restoreTime: 99.95, restoreDuration: 100 }),
     });
 
     const fill = screen.getByTestId("progress-fill");
-    expect(fill.className).toContain("rounded-full");
+    expect(fill.className).not.toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
   });
@@ -2078,8 +2078,8 @@ describe("TransportControls accessible names (P2-01-7 + P2-12-1 parity)", () => 
   });
 });
 
-describe("PlayerBar seek bar uses the in-bar default variant", () => {
-  it("T7: renders the in-flow default rail (visible clocks, pill rail, two-sided hit area)", () => {
+describe("PlayerBar seek rail is the top variant (edge-to-edge at the bar's top edge)", () => {
+  it("T7: renders an absolute full-width root, a downward-only hit area and hidden clocks", () => {
     renderPlayer();
     // Slice A: hover grow + pointer cursor are gated on a seekable track, so
     // the hover class only exists once a duration is known.
@@ -2092,24 +2092,23 @@ describe("PlayerBar seek bar uses the in-bar default variant", () => {
     const railClasses = rail.className.split(" ");
     const rootClasses = root.className.split(" ");
 
-    // In-flow root: no absolute pinning to the bar's top edge (v4 dropped the
-    // "top" variant call site — the seek bar now sits under the transport row).
-    expect(rootClasses).toContain("w-full");
-    expect(rootClasses).not.toContain("absolute");
-    expect(rootClasses).not.toContain("inset-x-0");
-    expect(rootClasses).not.toContain("top-0");
+    expect(rootClasses).toContain("absolute");
+    expect(rootClasses).toContain("inset-x-0");
+    expect(rootClasses).toContain("top-0");
 
-    expect(railClasses).toContain("h-1.5");
-    expect(railClasses).toContain("rounded-full");
-    expect(railClasses).toContain("before:-inset-y-[9px]");
-    expect(railClasses).not.toContain("before:top-0");
+    expect(railClasses).toContain("h-1");
+    expect(railClasses).toContain("hover:h-1.5");
+    expect(railClasses).toContain("transition-[height]");
+    expect(railClasses).toContain("before:top-0");
+    expect(railClasses).toContain("before:h-3");
+    expect(railClasses).not.toContain("-inset-y-[9px]");
 
     const startClock = rail.previousElementSibling as HTMLElement;
     const endClock = rail.nextElementSibling as HTMLElement;
     expect(startClock.tagName).toBe("SPAN");
     expect(endClock.tagName).toBe("SPAN");
-    expect(startClock.className.split(" ")).not.toContain("hidden");
-    expect(endClock.className.split(" ")).not.toContain("hidden");
+    expect(startClock.className.split(" ")).toContain("hidden");
+    expect(endClock.className.split(" ")).toContain("hidden");
   });
 });
 
@@ -2264,12 +2263,5 @@ describe("PlayerBar refinements v4 (playerbar-refinements-v4)", () => {
     const bar = screen.getByTestId("volume-bar");
     expect(bar.className).toContain("w-24");
     expect(bar.className).not.toContain("w-32");
-  });
-
-  it("T11: middle column gets the sized seek width (w-[min(620px,52vw)])", () => {
-    const { container } = renderPlayer();
-    const root = container.firstElementChild as HTMLElement;
-    const middleColumn = root.children[1] as HTMLElement;
-    expect(middleColumn.className).toContain("w-[min(620px,52vw)]");
   });
 });
