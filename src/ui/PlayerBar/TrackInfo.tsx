@@ -263,7 +263,7 @@ export function TrackInfo({
         </div>
       </div>
       {currentTrack && (
-        <div className="hidden lg:flex items-center gap-1 shrink-0 ml-2">
+        <div className="hidden lg:flex items-center gap-2 shrink-0 ml-4">
           <button
             type="button"
             onClick={() => {

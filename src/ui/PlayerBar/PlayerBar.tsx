@@ -122,7 +122,7 @@ function PlayerBarImpl({
       />
 
       {/* Center: Controls (auto column — centered between the two equal 1fr sides) */}
-      <div className="flex flex-col items-center justify-center">
+      <div className="flex flex-col items-center justify-center w-[min(620px,52vw)]">
         <TransportControls
           currentTrack={currentTrack}
           isPlaying={isPlaying}
@@ -136,7 +136,7 @@ function PlayerBarImpl({
           onNextTrack={handleManualNext}
           onTogglePlayMode={onTogglePlayMode}
         />
-        <SeekBar currentTrack={currentTrack} audio={audio} variant="top" />
+        <SeekBar currentTrack={currentTrack} audio={audio} />
       </div>
 
       {/* Right: Volume Controls (queue button leads the volume icon) */}
