@@ -2166,3 +2166,70 @@ describe("PlayerBar buffering display identity (R2.1 — stale-track misattribut
     expect(loaderIcon).toHaveBeenCalled();
   });
 });
+
+describe("PlayerBar 3-column layout (playerbar-3-column-layout)", () => {
+  it("T1: bar root is the 3-column grid with a top separator (no flex justify-between)", () => {
+    const { container } = renderPlayer();
+    const root = container.firstElementChild as HTMLElement;
+    const classes = root.className.split(" ");
+
+    expect(classes).toContain("grid");
+    expect(classes).toContain("grid-cols-[1fr_auto_1fr]");
+    expect(classes).toContain("border-t");
+    expect(classes).toContain("px-4");
+    expect(classes).not.toContain("justify-between");
+  });
+
+  it("T2: TransportControls is a 3-cell grid — Play is the middle (index 1) of exactly 3 cells", () => {
+    renderPlayer();
+    const play = screen.getByRole("button", { name: en.player.play });
+    const prev = screen.getByRole("button", { name: en.player.prev });
+    const next = screen.getByRole("button", { name: en.player.next });
+    const mode = screen.getByRole("button", { name: en.player.play_mode });
+
+    const transport = play.parentElement as HTMLElement;
+    expect(transport.className).toContain("grid-cols-[1fr_auto_1fr]");
+    expect(transport.children).toHaveLength(3);
+    expect(transport.children[1]).toBe(play);
+    const leftCell = transport.children[0] as HTMLElement;
+    const rightCell = transport.children[2] as HTMLElement;
+    // Cell 0 = prev only; cell 2 = next then mode-wrapper (legacy DOM order kept).
+    expect(leftCell.children).toHaveLength(1);
+    expect(leftCell.children[0]).toBe(prev);
+    expect(rightCell.children).toHaveLength(2);
+    expect(rightCell.children[0]).toBe(next);
+    expect((rightCell.children[1] as HTMLElement).contains(mode)).toBe(true);
+  });
+
+  it("T3: bar root keeps exactly 3 direct children mapped to the columns in order (TrackInfo | Play | Queue)", () => {
+    const { container } = renderPlayer();
+    const root = container.firstElementChild as HTMLElement;
+    const play = screen.getByRole("button", { name: en.player.play });
+    const queue = screen.getByRole("button", { name: en.queue.open });
+
+    // 3 columns => the root itself must own them as a grid.
+    expect(root.className).toContain("grid");
+    expect(root.children).toHaveLength(3);
+    const leftColumn = root.children[0] as HTMLElement;
+    const middleColumn = root.children[1] as HTMLElement;
+    const rightColumn = root.children[2] as HTMLElement;
+    expect(leftColumn.contains(screen.getByText("Song"))).toBe(true);
+    expect(middleColumn.contains(play)).toBe(true);
+    expect(rightColumn.contains(queue)).toBe(true);
+  });
+
+  it("T4: TrackInfo and VolumeSlider roots drop the old w-[30%] columns (grid tracks own the widths)", () => {
+    renderPlayer();
+    const trackInfoRoot = (
+      screen.getByText("Song").closest('[role="button"]') as HTMLElement
+    ).parentElement as HTMLElement;
+    const volumeRoot = screen.getByRole("button", { name: en.queue.open })
+      .parentElement as HTMLElement;
+
+    // Sanity: the climb landed on the real column roots before asserting widths.
+    expect(trackInfoRoot.className).toContain("justify-start");
+    expect(volumeRoot.className).toContain("justify-end");
+    expect(trackInfoRoot.className).not.toContain("w-[30%]");
+    expect(volumeRoot.className).not.toContain("w-[30%]");
+  });
+});

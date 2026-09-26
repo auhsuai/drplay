@@ -213,7 +213,7 @@ export function TrackInfo({
     (displayArtist ?? currentTrack?.artist) || t("unknown_artist");
 
   return (
-    <div className="flex items-center w-[30%] min-w-[140px] sm:min-w-[180px] justify-start pr-2">
+    <div className="flex items-center min-w-0 justify-start pr-2">
       <div
         role="button"
         tabIndex={0}

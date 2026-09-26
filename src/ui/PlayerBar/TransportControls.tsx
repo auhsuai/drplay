@@ -42,17 +42,24 @@ export function TransportControls({
   const { t } = useTranslation();
 
   return (
-    <div className="flex w-full mb-1 items-center justify-center gap-3 sm:gap-6">
-      <button
-        onClick={() => {
-          onPrevTrack();
-        }}
-        aria-label={t("player.prev")}
-        className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-        disabled={!currentTrack}
-      >
-        <SkipBack className="w-6 h-6" />
-      </button>
+    // 3-cell grid with EQUAL 1fr side cells: Play is the middle (auto) cell,
+    // so it sits at the exact center of this box — which itself is the
+    // centered auto column of PlayerBar's own 1fr/auto/1fr grid. Cell contents
+    // keep the legacy DOM order (prev | play | next, mode) so button-index
+    // queries and tab order stay stable.
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center mb-1 gap-x-3 sm:gap-x-6">
+      <div className="flex items-center justify-end gap-3 sm:gap-6">
+        <button
+          onClick={() => {
+            onPrevTrack();
+          }}
+          aria-label={t("player.prev")}
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
+          disabled={!currentTrack}
+        >
+          <SkipBack className="w-6 h-6" />
+        </button>
+      </div>
 
       <button
         onClick={hasError ? onRetry : onTogglePlay}
@@ -71,29 +78,31 @@ export function TransportControls({
         )}
       </button>
 
-      <button
-        onClick={() => {
-          onNextTrack(false);
-        }}
-        aria-label={t("player.next")}
-        className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
-        disabled={!currentTrack}
-      >
-        <SkipForward className="w-6 h-6" />
-      </button>
-
-      <div className="relative group flex items-center shrink-0">
+      <div className="flex items-center justify-start gap-3 sm:gap-6">
         <button
-          onClick={onTogglePlayMode}
-          aria-label={t("player.play_mode")}
-          className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== "normal" ? "text-brand-text hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
+          onClick={() => {
+            onNextTrack(false);
+          }}
+          aria-label={t("player.next")}
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0"
           disabled={!currentTrack}
         >
-          {playMode === "shuffle" && <Shuffle className="w-6 h-6" />}
-          {playMode === "repeat-all" && <Repeat className="w-6 h-6" />}
-          {playMode === "repeat-one" && <Repeat1 className="w-6 h-6" />}
-          {playMode === "normal" && <Repeat className="w-6 h-6" />}
+          <SkipForward className="w-6 h-6" />
         </button>
+
+        <div className="relative group flex items-center shrink-0">
+          <button
+            onClick={onTogglePlayMode}
+            aria-label={t("player.play_mode")}
+            className={`p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:hover:bg-transparent shrink-0 ${playMode !== "normal" ? "text-brand-text hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
+            disabled={!currentTrack}
+          >
+            {playMode === "shuffle" && <Shuffle className="w-6 h-6" />}
+            {playMode === "repeat-all" && <Repeat className="w-6 h-6" />}
+            {playMode === "repeat-one" && <Repeat1 className="w-6 h-6" />}
+            {playMode === "normal" && <Repeat className="w-6 h-6" />}
+          </button>
+        </div>
       </div>
     </div>
   );

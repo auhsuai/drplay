@@ -114,15 +114,15 @@ function PlayerBarImpl({
   });
 
   return (
-    <div className="h-20 bg-white dark:bg-[#202124] flex items-center justify-between px-2 sm:px-4 shrink-0 z-10 transition-colors duration-300 relative">
+    <div className="h-20 bg-white dark:bg-[#202124] grid grid-cols-[1fr_auto_1fr] items-center px-4 sm:px-6 shrink-0 z-10 transition-colors duration-300 relative border-t border-gray-200 dark:border-white/10">
       {/* Left: Track Info */}
       <TrackInfo
         currentTrack={currentTrack}
         onExpandNowPlaying={onExpandNowPlaying}
       />
 
-      {/* Center: Controls */}
-      <div className="flex flex-col items-center justify-center flex-1 max-w-[722px] min-w-[200px]">
+      {/* Center: Controls (auto column — centered between the two equal 1fr sides) */}
+      <div className="flex flex-col items-center justify-center">
         <TransportControls
           currentTrack={currentTrack}
           isPlaying={isPlaying}

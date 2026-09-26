@@ -139,7 +139,7 @@ export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
           : Volume2;
 
   return (
-    <div className="flex items-center justify-end w-[30%] min-w-[120px] pl-2 gap-3">
+    <div className="flex items-center justify-end min-w-0 pl-2 gap-4">
       {leading}
       <VolumeIcon
         className="w-6 h-6 text-gray-500 hover:text-white cursor-pointer"
