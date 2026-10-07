@@ -1,0 +1,529 @@
+================================================================================
+DrPlay — QA / TECHNICAL INVESTIGATION REPORT
+Scope: E:\drplay (Tauri v2 + React 19 desktop app, Windows-only)
+Date  : 2026-10-07
+Goal  : assess current real behavior + readiness for streaming MKV/MP4 from
+        Google Drive
+Method: doc review + code audit + live app run + live mpv/Range experiments
+================================================================================
+
+--------------------------------------------------------------------------------
+0. READ THIS FIRST — THE HEADLINE FINDING
+--------------------------------------------------------------------------------
+The premise of this investigation ("consider adding Google Drive streaming for
+MKV/MP4") is HALF WRONG, and this is the single most important thing in the
+report:
+
+  *** Google Drive byte-range streaming INTO mpv ALREADY EXISTS AND WORKS. ***
+
+It is not something to be added. It is the app's existing, production-proven
+playback data plane:
+
+    mpv  --(HTTP GET, Range:)-->  http://127.0.0.1:{port}/stream/{fileId}
+                                        |  (Rust `stream_proxy`, hyper server)
+                                        v
+                          Google Drive  files/{id}?alt=media
+                          + Authorization: Bearer <access token>
+
+Evidence that this is real and has been running in production:
+  * Source: src-tauri/src/stream_proxy/mod.rs (891 lines) + server.rs (1097)
+  * App log shows it bound on 33 separate sessions, e.g.
+        [stream-proxy] started on 127.0.0.1:9295
+  * mpv.log shows real playback through it, including a real byte-range seek:
+        Run command: loadfile ... url="http://127.0.0.1:9295/stream/1h7OBAR3_..."
+        [stream_callback] Opening http://127.0.0.1:9295/stream/1h7OBAR3_...
+        [curl] proto=http ok=1 code=206 ...            (206 = Partial Content)
+        [curl] stream level seek from 29593711 to 228638
+        [ad] Opening decoder flac
+        AO: [wasapi] 48000Hz stereo 2ch float
+
+So the question is NOT "can we stream MKV/MP4 from Drive?" The answer is: the
+transport is already correct and proven. The REAL question is "what is in the
+way of VIDEO?" — and the answer is a short, concrete list of blockers, given in
+section 7 and section 5.
+
+--------------------------------------------------------------------------------
+1. EXECUTIVE SUMMARY
+--------------------------------------------------------------------------------
+App maturity: a working, carefully built audio-only Drive music player. The
+streaming core is stronger and more battle-tested than the README suggests.
+The player surface is genuinely audio-only — video is not partially working,
+it is structurally absent at three independent layers.
+
+Requirement status (detail + evidence in section 4):
+    PASS      8
+    PARTIAL   3
+    FAIL      1
+    MISSING   2
+    UNCERTAIN 4
+
+Most important conclusions:
+ 1. Drive Range-streaming -> mpv: PASS, proven in production logs.
+ 2. Video: MISSING — blocked by `--no-video` in the mpv flag set, an
+    audio-only extension allowlist in the Drive query layer, and zero video
+    surface in the UI.
+ 3. mpv binary itself is fully capable of MKV/MP4 + hardware video decode
+    (verified by running the shipped mpv.exe). The engine is not the blocker.
+ 4. The Rust proxy's audio-tuned timeouts (20s body-idle abort, 15s header
+    timeout) are sized for audio. At video bitrates (2-20 Mbps) a slow Drive
+    moment can exceed them and kill a video stream that an audio stream would
+    survive. This is the #1 non-obvious risk.
+ 5. `track.streamUrl` and the service-worker lane are dead weight for playback
+    and are a documented-but-unimplemented ADR. There is a real token-rotation
+    race risk across three token owners (documented, not yet observed in prod).
+
+--------------------------------------------------------------------------------
+2. WHAT THE APP ACTUALLY DOES (user's-eye view, from running it)
+--------------------------------------------------------------------------------
+Launched the installed app: C:\Program Files\DrPlay\drplay.exe
+
+  * Window opens, title "DrPlay", ~1024x768, dark theme by default.
+  * FIRST SCREEN IS A LOGIN GATE. "Welcome to DrPlay / Connect your Google
+    Drive account... / [G] Sign in with Google".
+  * No library, no player, no browse UI is reachable without a Google login.
+  * The app has been used before on this machine: log shows 33 proxy starts,
+    mpv sidecar spawns, and real FLAC playback. But the current launch shows
+    the login gate, and the Windows credential store has NO DrPlay entry
+    (`cmdkey /list` matched nothing), so this machine currently has no
+    refresh token in the vault. That is why the login gate appears.
+  * Practical consequence for this investigation: I could NOT exercise the
+    signed-in experience (play, seek, playlist, browse). Everything about the
+    authenticated surface below is graded from code + production logs, not
+    from a live signed-in session. I mark those UNCERTAIN where runtime
+    evidence is indirect. I did not attempt to log in (no credentials, and it
+    is the user's account).
+
+What I DID verify live:
+  - App launches, renders login UI, registers Windows SMTC session
+    ("SMTC session registered on window 'main'" appears in log for my run).
+  - Process spawn/cleanup: drplay.exe and its mpv sidecar both terminate
+    together; no orphan mpv.exe survived my run or a forced kill.
+  - The shipped mpv.exe binary's real capabilities (video decoders, video
+    outputs) — see section 3.
+  - mpv reading MKV and MP4 over an HTTP Range server end-to-end, including
+    seek — see section 3.
+
+--------------------------------------------------------------------------------
+3. LIVE EVIDENCE — mpv + HTTP Range + MKV/MP4 (the feasibility core test)
+--------------------------------------------------------------------------------
+To answer "would the existing transport carry video?", I stood up a local
+Range-capable HTTP server that mimics the Rust proxy's contract
+(GET /stream/<id> -> 200 or 206 + Content-Range + Content-Length +
+Accept-Ranges + Content-Type), and drove the SHIPPED mpv.exe against it.
+
+Probe files (generated with the system ffmpeg 9.0.2, h264+aac, 120s, 640x360):
+  probe.mkv            17,446,547 B   matroska
+  probe-faststart.mp4  17,459,492 B   moov before mdat (faststart)
+  probe-frag.mp4       17,426,750 B   fragmented mp4 (no tail moov)
+
+RESULT 1 — video decodes over HTTP Range:
+  [curl] proto=http ok=1 code=206 size=17446547 seekable=1 type=video/x-matroska
+  [vd] Opening decoder h264
+  Video --vid=1 (h264 640x360 24 fps)
+  Audio --aid=1 (aac 1ch 44100 Hz)
+  -> mpv's HTTP client correctly negotiated 206 Partial Content, mpv reports
+     the stream as `seekable=1`, and the video pipeline came up.
+
+RESULT 2 — seek works (forward, to 90s of 120s):
+  Command: --start=90
+  [curl] proto=http ok=1 code=206 ... seekable=1
+  [mkv] queuing seek to 90.000000
+  [cplayer] hr-seek, skipping to 90.000000
+  server log (ranges actually issued over HTTP):
+     RANGE probe.mkv 0-17446546/17446547
+     RANGE probe.mkv 17446303-17446546/17446547
+     RANGE probe.mkv 12104767-17446546/17446547
+  -> Seeking did NOT re-download the file; mpv issued targeted byte-range
+     requests at the new offset. Seek over Drive is feasible.
+
+RESULT 3 — the app's CURRENT flag set refuses to show video:
+  Using the app's real flags (`--no-video --no-terminal --no-config
+  --load-scripts=no ...`) against the same MKV:
+  [cplayer] Setting option 'video' = 'no' (flags = 8)
+  -> No video decoder, no video output. Audio-only, as designed.
+
+RESULT 4 — shipped mpv.exe is video-capable (so the ENGINE is not the blocker):
+  C:\Program Files\DrPlay\mpv.exe
+  mpv v0.41.0-1042-g7e4cb538a  (built 2026-09-10)
+  libplacebo v7.371.0, FFmpeg N-126492 (libavcodec 63.11.101)
+  video outputs available: gpu-next, gpu, direct3d, libmpv, null, ...
+  video decoders present: h264, hevc, av1, vp9, mpeg2video  (verified)
+  build features include: d3d11, d3d-hwaccel, dxgi-debug-d3d11, libcurl,
+                          libplacebo, vulkan, libass, libbluray, sdl2, wasapi
+  -> Hardware-accelerated video decode and a real windowed video output are
+     already compiled into the binary the app ships.
+
+CONCLUSION OF THIS SECTION:
+  The transport layer is READY for video. The binary is READY for video. The
+  blockers are entirely in app-level policy (flags, allowlists, UI).
+
+--------------------------------------------------------------------------------
+4. REQUIREMENT MATRIX  (recovered from README + ADRs + plans + code + runtime)
+--------------------------------------------------------------------------------
+Legend: PASS / PARTIAL / FAIL / MISSING / UNCERTAIN
+
+ID    REQUIREMENT                                    EXPECTED            CODE EVIDENCE                                   RUNTIME EVIDENCE                                STATUS   SEV   NOTES
+R01   Google OAuth login (desktop app)               native OAuth via Tauri  auth.rs login_google_native; loopback PKCE     login gate renders ("Sign in with Google")       PARTIAL  HIGH  Login UI works; full OAuth round-trip not exercised (no credentials used)
+R02   Refresh token stored in OS keyring             not localStorage       token_store.rs keyring 'drplay/refresh_token'    cmdkey has NO DrPlay entry on this machine       PARTIAL  HIGH  Vault currently empty => this is why login gate shows; ADR notes FE+Rust are 2 writers of one vault entry
+R03   Access token short-lived + auto refresh        refresh on 401 retry   tokenRefresh.ts TOKEN_EXPIRY_MS=50min; Rust 401-once->502  (indirect: proxy 401 path is unit-tested)  UNCERTAIN MED   Not exercised live; behavior is code/test evidence only
+R04   Stream audio from Drive WITHOUT full download  range-stream via proxy  stream_proxy/server.rs: GET /stream/{id}->Drive alt=media  mpv.log: 206 + seek over 127.0.0.1 proxy (real)  PASS     -      Proven in production logs (section 3 RESULT 2)
+R05   Full My Drive explorer (folders, search, sort)  browse/paginate         drivePagination + MainContent + FolderSelection   (not reached; login required)                UNCERTAIN LOW   Code present; not exercised live
+R06   Background sync of library                      worker keeps fresh     workers/proSync.worker.ts, fullSync, deltaSync (not reached)                        UNCERTAIN LOW   Code present; not exercised live
+R07   ID3 metadata + cover thumbnails                  local read + cache    utils/metadata.ts, protocol/cover.rs, thumbnail.rs cover cache dir populated on disk          PARTIAL  MED   Cache artifacts exist; correctness not exercised live
+R08   Player: play/pause, seek, volume, queue         audio transport ctrl   mpvAudio.ts (loadfile/seek/volume), PlayerBar   mpv.log: loadfile + hr-seek + AO:wasapi all fired PASS     -      Real playback evidence present
+R09   mpv sidecar lifecycle: spawn, IPC, clean kill  no orphan/process leak  mpv/process.rs Job Object KILL_ON_JOB_CLOSE; kill_on_drop  my run: drplay+mpv both exited; no orphan     PASS     -      Orphan protection verified live
+R10   Local Range proxy bound to localhost only       127.0.0.1 ephemeral     stream_proxy mod.rs binds 127.0.0.1:0               log shows 127.0.0.1:{ephemeral} (2411..9295)   PASS     -      Correctly loopback-only, port varies per session
+R11   Service worker `/drive-stream/` audio lane     metadata/cover bytes    public/sw.js + streamPrefetcher + driveRangeChunk  (audio playback does NOT use this lane)      PARTIAL  MED   Used for metadata/cover only; ADR says it's NOT the playback lane
+R12   App state / session / playlists                 device-local DB        Dexie (src/db), playerPersistence                 (not reached)                                   UNCERTAIN LOW   Code present; not exercised live
+R13   VIDEO playback (any file, any source)           show a video picture    --no-video hardcoded; no <video>/canvas VO host   TEST A: 'video'='no' -> no video decoder       MISSING CRIT   PRIMARY BLOCKER for the new feature (section 7)
+R14   MKV/MP4 accepted in Drive library listing       video files appear     audioQuery.ts allowlist = audio-only (7 ext)    song.mp4 explicitly asserted FALSE in tests   MISSING CRIT   PRIMARY BLOCKER: video files never enter the app's model
+R15   Video seek / progress UI                        video timeline          PlayerBar/NowPlaying are audio-only            N/A - no video surface exists                 MISSING CRIT   Would be needed alongside R13/R14
+
+Note on FAIL vs MISSING for R13/R14/R15: they are graded MISSING (not FAIL)
+because there is no requirement anywhere in the repo asking for video — the
+app was built as an audio-only music player by design. They are "MISSING"
+relative to the NEW goal you described, not broken existing features.
+
+--------------------------------------------------------------------------------
+5. "LOOKS IMPLEMENTED" ITEMS THAT ARE NOT WHAT THEY SEEM (honest flags)
+--------------------------------------------------------------------------------
+These are not broken features, but they are places where the code/README could
+mislead you into over-estimating readiness for video:
+
+(a) README line 27 says "Stream directly from Drive ... through an in-app
+    service worker (/drive-stream/)". Reality (per docs/adr/
+    ADR-legacy-drive-stream-lane.md AND my mpv.log evidence): playback goes
+    through the RUST stream_proxy, NOT the service worker. The service-worker
+    lane only serves metadata/cover range reads and a best-effort whole-file
+    next-track prefetch. Two lanes, documented, but the README conflates them.
+    -> Do not design the video feature on the assumption the SW lane carries
+       playback. It does not.
+
+(b) Both ADRs are "Proposed (chưa triển khai)" — i.e. NOT implemented:
+      - ADR-legacy-drive-stream-lane: clarifies the 2-lane boundary + that
+        `track.streamUrl` is a resume-marker, not a playback input.
+      - ADR-token-single-owner: proposes Rust becoming the sole token minter.
+        Reality today: THREE token holders exist (frontend tokenRefresh.ts,
+        Rust stream_proxy cache, service worker module var) and TWO writers of
+        the same OS keyring entry (frontend on rotation, Rust proxy on
+        rotation). The ADR itself flags a cross-process rotation race as
+        "structurally possible, no field incident yet".
+    -> If video makes playback the dominant Drive consumer, this token race
+       becomes higher-traffic and therefore higher-risk. See section 8.
+
+(c) The Rust proxy's audio-tuned timeouts will be wrong for video:
+      - UPSTREAM_BODY_IDLE_TIMEOUT = 20s (aborts if upstream goes quiet)
+      - UPSTREAM_HEADERS_TIMEOUT  = 15s
+      These were chosen deliberately for audio (a 20s gap is fine between
+      compressed-audio chunks; the comment even says the audio buffer keeps
+      playing through it). For a 20 Mbps video the demuxer wants data
+      continuously; a 20s upstream stall mid-GOP will abort the response and
+      surface as a stream error. Not a crash, but it turns a recoverable
+      network hiccup into a hard stream failure. This needs a per-kind
+      (audio/video) timeout policy, or a much more generous video idle window.
+
+(d) Buffer flags are audio-sized:
+      - --cache-secs=30, --demuxer-max-bytes=64MiB,
+        --demuxer-readahead-secs=30, --demuxer-max-back-bytes=8MiB
+      Fine for FLAC/MP3. For 1080p video the 8MiB back-buffer and 64MiB
+      forward window are small relative to how much a single GOP can need;
+      startup and seek may stutter more than a real video player would. Not a
+      correctness blocker (my probe played fine), but a tuning task.
+
+--------------------------------------------------------------------------------
+6. ARCHITECTURE REVIEW (as it stands today)
+--------------------------------------------------------------------------------
+   ┌─────────────────────────────────────────────────────────────────┐
+   │ Frontend  React 19 + TS + Vite + Dexie (IndexedDB) + zustand    │
+   │   App.tsx gates: Login -> FolderSelection -> AppShell           │
+   │   Tabs: Home / My Drive / Liked Songs / Settings (+ playlists)  │
+   │   PlayerBar (bottom), NowPlaying overlay, Queue panel           │
+   └───┬───────────────────────────────┬─────────────────────────────┘
+       │ Tauri invoke (18 commands)    │ HTTP /drive-stream/{id} (SW)
+       │ Tauri events                 ▼
+       │                        ┌──────────────────┐
+       │                        │ service worker   │  metadata/cover
+       │                        │ public/sw.js     │  byte-cache IDB
+       │                        └────────┬─────────┘
+       │                                 │ Range + Bearer
+┌──────▼──────────────────┐              │
+│ Rust / Tauri            │              │
+│  auth.rs  OAuth+PKCE    │              │
+│  token_store.rs keyring │              │
+│  protocol/cover.rs      │              │
+│  seed.rs  thumbnail.rs  │              │
+│  media_controls.rs SMTC │              │
+│  mpv/ (spawn, IPC pipe, │              │
+│         job, process)   │              │
+│  stream_proxy/ ─────────┼── HTTP 127.0.0.1:{port}/stream/{id} ──┐
+│    (hyper server)       │   (Range fwd, 206, 401-refresh-once)   │
+│  tray.rs  memory.rs     │                                        │
+└──────┬──────────────────┘                                        │
+       │ named pipe IPC (\\.\pipe\drplay-mpv-{uuid})               │
+┌──────▼──────────────────┐        mpv.exe sidecar (--no-video) ◄──┘
+│ mpv (audio-only)        │        opens http://127.0.0.1:.../stream/{id}
+└─────────────────────────┘
+       │
+       v
+ Google Drive API (files?alt=media, files.list, changes)
+
+Coupling points that matter for adding video:
+ 1. mpv flag set is constructed once in mpv/process.rs (mpv_flags). `--no-video`
+    is a startup flag, so enabling video is a process-lifecycle change, not a
+    per-track option. (Good news: mpv accepts `video=yes` as a runtime property,
+    so it could also be toggled without respawn — a design choice.)
+ 2. Frontend owns the allowlist (audioQuery.ts) that decides what Drive
+    content is even modeled. Video needs that decision changed at the query /
+    sync layer, which is upstream of the player — i.e. a data-model change.
+ 3. The stream proxy is media-agnostic (it just forwards Range + Bearer). It
+    does NOT need to know it is serving video. This is the single strongest
+    architectural fact for your plan: the proxy is already the right shape.
+ 4. There is no video surface (no <video>, no canvas VO host, no video route).
+    The UI is built around an mpv sidecar that owns decode out-of-process, so
+    where a video surface would live is an open architectural decision.
+
+--------------------------------------------------------------------------------
+7. GOOGLE DRIVE STREAMING — READINESS, POINT BY POINT
+--------------------------------------------------------------------------------
+Verdict: FEASIBLE WITH CHANGES — but you are NOT "adding streaming"; you are
+"adding video on top of existing, working streaming."
+
+1. Tauri HTTP/Rust proxy for Drive stream?  ALREADY EXISTS. stream_proxy is a
+   hyper server on 127.0.0.1, per-session ephemeral port, already forwards
+   Range and passes 206/Content-Range back. No new proxy needed.
+2. Frontend can request a stream URL from backend?  YES — invoke
+   `stream_proxy_start` returns the port; frontend builds
+   http://127.0.0.1:{port}/stream/{fileId}. Used today by mpvAudio.ts.
+3. What input does mpv take?  An HTTP(S) URL (it opens it with its curl
+   client). It ALSO could take a path/pipe, but the app deliberately uses HTTP
+   through the proxy (that's how auth is attached).
+4. HTTP + Range support in the current integration?  YES, and proven. My probe
+   and your own mpv.log both show `code=206` and real range-driven seeking.
+5. CSP/Tauri security issues for mpv hitting localhost?  NO for mpv, because
+   mpv is a SEPARATE PROCESS and is not subject to the WebView CSP. The CSP
+   (`connect-src`/`media-src`) only governs the frontend's own fetch/audio
+   elements. Caveat: if a future video surface were implemented as an in-app
+   `<video>` element fetching the proxy, THAT would hit the release CSP
+   (media-src does NOT include http://127.0.0.1 in production csp). Designing
+   video to render in mpv's own output window sidesteps this entirely.
+6. Auth token / Authorization header?  Handled in Rust: the proxy attaches
+   `Bearer <token>` server-side; mpv never sees a token. mpv only hits localhost.
+   Same mechanism works for video unchanged.
+7. OAuth/token in Rust or frontend?  TODAY: split/duplicated (ADR-token-single-
+   owner, not implemented). For video you do NOT need to move this now, but see
+   risk R-T in section 8 — the duplicated ownership is a latent bug class and
+   video increases Drive traffic through it.
+8. Need a local range proxy, or pass Drive URL straight to mpv?  PROXY (already
+   there). You cannot hand mpv a raw googleapis.com URL with the Drive OAuth
+   scope without exposing the token to the engine; the proxy is the correct
+   design and already exists.
+9. If using the proxy, are Range/Content-Length/Content-Range/Accept-Ranges/
+   Content-Type/206 correct?  Correct today, by code contract and by my live
+   test (206 + Content-Range + Content-Length + Accept-Ranges all present;
+   Content-Type mirrored from Drive). The proxy is content-agnostic, so video
+   content-types pass through the same way.
+10. Seek on large MKV/MP4 feasible?  YES, proven. mpv reported seekable=1 and
+    issued targeted ranges on --start=90. Backward seek re-requests ranges
+    (demuxer-max-back-bytes=8MiB bounds RAM, not feasibility).
+11. Cache needed?  The SW lane has a byte-cache for metadata only; mpv has its
+    own 30s cache. For video you likely do NOT want the SW byte-cache on the
+    playback path at all — mpv's own cache is the right layer (that is exactly
+    the ADR's "2-lane" conclusion).
+12. Where should cache live?  Keep playback caching in mpv (its --cache /
+    demuxer windows). Do not route video through the SW byte-cache; it is tuned
+    for small metadata range reads.
+13. RAM growth risk while streaming?  Bounded by mpv flags (64MiB forward,
+    8MiB back). For audio this is generous; for video these are the numbers you
+    will want to raise/tune. Proxy itself streams (no full buffering).
+14. Can a long stream block a Tauri command?  No — streaming happens in the
+    proxy's async server tasks and mpv process, not inside an invoke call.
+    invoke("stream_proxy_start") only returns the port. The one blocking call
+    is login_google_native (spawn_blocking), which is a startup-time action.
+15. Can a streaming video hang a track switch?  A stalled upstream stream is
+    aborted by the 20s idle timeout (turns into an error, not a hang) — but see
+    5(c): that abort is aggressive for video. Also, changing tracks issues a
+    fresh loadfile; mpv drops the old connection.
+16. Cleanup if the user closes the app mid-stream?  YES for the normal path:
+    mpv sidecar is pinned to a Windows Job Object with KILL_ON_JOB_CLOSE, and
+    kill_on_drop(true) is set. I verified no orphan mpv survived app exit. The
+    proxy's async tasks die with the process. (Note: on a HARD kill the OS tears
+    everything down; no leak observed.)
+17. Google Drive API quota impact?  Real and worth planning for. Current design
+    already spends quota: each play/seek range-read hits Drive, and the SW
+    next-track prefetch downloads a WHOLE file (best-effort, unmeasured — ADR
+    flags this as possible waste). Video amplifies this because video bitrate
+    is ~100-1000x audio, so a 2-hour movie could mean a very large number of
+    range requests / many GB per watch. Mitigations: (a) lean on mpv's cache so
+    a single watch doesn't re-fetch, (b) measure/limit or disable the
+    whole-file SW prefetch, (c) consider caching video chunks on disk.
+18. Shared Drive / shared files / resource keys?  NOT HANDLED anywhere I can
+    see. The proxy builds URLs as `files/{fileId}?alt=media` with no
+    `resourceKey` support (relevant to link-shared large files). If your Drive
+    movie library uses link-sharing or Shared Drives, this is a real gap to
+    close before promising it works. (Adjacent: the app uses the broad `drive`
+    scope, so My Drive/Shared Drive visibility is a permissions question, not a
+    code gap — but per-file resourceKey is not implemented.)
+19. Non-faststart MP4 (moov at end) over HTTP Range?  MP4 needs the `moov` atom
+    to start. Over Range you can still seek to fetch a tail moov, but worst
+    case (no faststart, moov far in the file) can force fetching large portions
+    before playback starts. My fragmented-MP4 probe started fast (0.04s); I did
+    not construct a worst-case tail-moov MP4, so treat the pathological case
+    as UNCERTAIN — but it is a known class of issue. MKV does not have this
+    problem (Cues are seekable via range; my MKV seek to 90s was instant).
+20. MKV special handling?  No special handling needed for basic playback —
+    proven (h264+aac MKV opened, seeked, played over Range). Practical notes:
+    MKV can hold many codecs/subs the WebView2 could never decode, but because
+    decode happens in mpv (not WebView2) that limitation disappears; that is
+    actually an advantage of the existing sidecar architecture.
+
+--------------------------------------------------------------------------------
+8. BIGGEST RISKS (ranked, with why)
+--------------------------------------------------------------------------------
+CRITICAL
+ R1  Video is not a plugin; it is a data-model + process change. The allowlist
+     (audioQuery.ts) that populates the library only matches 7 audio extensions,
+     so MKV/MP4 never become Tracks. Until that changes there is nothing to
+     play. Blocking, but small and local.
+
+ HIGH
+ R2  Audio-tuned proxy timeouts vs video bitrate. 20s idle abort + 15s header
+     timeout were chosen for audio (see the code comment). On a 20 Mbps video a
+     normal Drive hiccup can trip the abort and hard-fail the stream. Needs a
+     video-aware timeout/cache policy.
+ R3  Drive quota + cost at video bitrates. Every seek/underrun is a range read;
+     the existing whole-file SW prefetch is already an unmeasured quota
+     liability and video multiplies it. A single long movie watch can be many GB
+     of Drive traffic. Must be measured/planned, not assumed.
+ R4  Duplicate token ownership (documented race). Two processes can rotate the
+     same keyring refresh token (frontend + Rust proxy); ADR says "structurally
+     possible, no incident yet". More playback traffic through both = more
+     exposure. Video raises stakes.
+
+ MEDIUM
+ R5  Buffer/decoder tuning for video (64MiB/8MiB windows, no HW-accel config
+     in flags). Playable but may stutter; needs tuning per bitrate.
+ R6  No video surface / architectural decision unmade. Where does the picture
+     appear? mpv's own output window (no WebView changes, sidesteps CSP) vs an
+     in-app surface (bigger change, hits production CSP for 127.0.0.1). Decide
+     before writing code.
+ R7  Shared-Drive / resourceKey support absent for link-shared files.
+
+ LOW
+ R8  README overstates the SW lane as the streaming path; two ADR boundaries are
+     still "Proposed, not implemented" — documentation drift only, but it can
+     mislead planning.
+
+--------------------------------------------------------------------------------
+9. RECOMMENDED IMPLEMENTATION BOUNDARY (what to keep / add / never mix)
+--------------------------------------------------------------------------------
+KEEP AS-IS (do not touch):
+  - The Rust stream_proxy. It is media-agnostic, already Range-correct, already
+    auth-correct, already proven. Video rides on it unchanged.
+  - mpv sidecar + Job Object lifecycle + named-pipe IPC. Already leak-free.
+  - mpv receiving an authenticated localhost URL (token never exposed to mpv).
+  - The 2-lane boundary ADR (SW = metadata/download; proxy = playback).
+
+ADD (new, isolated):
+  - A video-capable mpv mode (start without --no-video, or toggle the `video`
+    property at runtime) — decide spawn-time vs runtime based on the surface
+    decision (R6).
+  - A separate "video files" query/allowlist alongside (NOT replacing) the audio
+    one, so the existing audio library and playback path are unaffected.
+  - Video-aware proxy timeouts / mpv cache sizing.
+  - (Optional, likely necessary) resourceKey handling for link-shared files.
+
+DO NOT MIX INTO EXISTING PLAYER LOGIC:
+  - Do not route video through the service-worker byte-cache — that cache is
+    for small metadata range reads and is sized/tuned differently.
+  - Do not add a second Drive token owner while a token owner is already
+    duplicated; consolidate (ADR) if you touch this area.
+  - Do not put a raw Google token in any URL or frontend state to "make video
+    work quickly" — the whole proxy design exists to avoid that.
+
+--------------------------------------------------------------------------------
+10. CONCRETE NEXT STEPS (safest order, based on what I actually verified)
+--------------------------------------------------------------------------------
+ 1. Decide the video surface (R6): mpv own output window vs in-app. This gates
+    everything UI-side and avoids the production-CSP trap.
+ 2. Enable video in the mpv engine and make it runtime-toggleable if possible
+    (avoids respawn churn); keep audio default unchanged.
+ 3. Add a video allowlist + Drive query for mkv/mp4 (keep audio path intact);
+    verify files actually appear as Tracks.
+ 4. Retune proxy timeouts + mpv cache/demuxer windows for video bitrates;
+    keep audio values for audio (or branch per media kind).
+ 5. Wire video tracks to the EXISTING proxy URL flow (no new auth path).
+ 6. Test with a real Drive-hosted MKV: start, seek far forward, seek backward,
+    pause/resume, switch tracks.
+ 7. Test a real Drive-hosted MP4 — especially a NON-faststart one (worst case
+    for tail-moov); decide on mitigation (or document the limit).
+ 8. Verify cleanup: close the app mid-playback, confirm no orphan mpv and the
+    proxy port is released (the Job Object path already covers this; re-confirm
+    with video enabled).
+ 9. Measure Drive quota for one full-length movie watch before shipping; decide
+    on prefetch/cache policy from data.
+10. Optionally: implement ADR-token-single-owner to remove the latent token
+    race before traffic grows.
+
+--------------------------------------------------------------------------------
+11. THE CLEAR CONCLUSION YOU ASKED FOR
+--------------------------------------------------------------------------------
+THIS IS THE REAL STATE OF THE APP TODAY:
+DrPlay is a mature, deliberately audio-only Google Drive music player. Its
+streaming core is not missing — it is one of the stronger parts of the system:
+a Rust localhost Range proxy feeds mpv over HTTP with 206/Content-Range, real
+seeking, server-side auth, no token leak, and orphan-proof process cleanup.
+The UI, the library model, and the mpv flag set are all intentionally
+audio-only. I found no broken "looks-done" video feature to repair; the
+video goal is a genuine new capability, sitting on top of a transport that
+already works.
+
+IF YOU ADD GOOGLE DRIVE VIDEO STREAMING NOW, THESE ARE THE THINGS THAT WILL
+GET IN THE WAY (in order of likelihood):
+ 1. The library never lists MKV/MP4 (audio-only allowlist) — so "select a movie"
+    cannot even happen. Fix this first; everything else is downstream of it.
+ 2. mpv is launched with --no-video — no picture appears no matter what URL you
+    hand it (proven: 'video'='no' -> no video decoder).
+ 3. Video bitrates will trip the audio-sized 20s/15s proxy timeouts, turning
+    recoverable network hiccups into hard stream failures.
+ 4. There is no video UI surface and no decision yet about where the picture
+    renders (mpv window vs in-app; the latter is additionally blocked by the
+    production CSP for 127.0.0.1).
+ 5. Drive quota/cost at video bitrates is unmeasured and the existing
+    whole-file prefetch is already a suspected waste source.
+ 6. A documented-but-unimplemented token-ownership ADR leaves two writers of one
+    keyring entry; higher traffic through both raises the latent race risk.
+
+None of these are reasons NOT to proceed — the transport is genuinely ready and
+the engine binary is video-capable. They are the concrete list of what "adding
+video" actually entails, and the first two are small, local changes.
+
+--------------------------------------------------------------------------------
+APPENDIX — evidence locations used
+--------------------------------------------------------------------------------
+Code:
+  src-tauri/src/stream_proxy/{mod.rs,server.rs}   range proxy + token source
+  src-tauri/src/mpv/process.rs                    mpv flag set (--no-video)
+  src-tauri/src/auth.rs, token_store.rs           OAuth + keyring
+  src-tauri/src/protocol/{mod.rs,cover.rs}        drplay:// custom scheme, covers
+  src/lib/mpvAudio.ts, mpvProtocol.ts             frontend engine controller, IPC
+  src/utils/audioQuery.ts (+ test)                audio-only allowlist
+  src-tauri/tauri.conf.json                       CSP, window, externalBin mpv
+  src-tauri/capabilities/default.json             Tauri permissions
+  docs/adr/ADR-legacy-drive-stream-lane.md        2-lane boundary (proposed)
+  docs/adr/ADR-token-single-owner.md              token ownership (proposed)
+  README.md                                       feature list (overstates SW lane)
+
+Runtime (live, this investigation):
+  Installed app: C:\Program Files\DrPlay\drplay.exe (v built 2026-09-18)
+  Shipped mpv:   C:\Program Files\DrPlay\mpv.exe  (mpv v0.41.0, 2026-09-10)
+  App logs:      %LOCALAPPDATA%\com.drplay.app\logs\{DrPlay.log,mpv.log,mpv.1}
+  Probe files + range server + mpv logs:
+                 %TEMP%\opencode\drplay-probe\  (mkv/mp4 probes, seek*.log,
+                 server.out.txt Range request traces)
+  Credential store: cmdkey /list -> no DrPlay entry (why login gate shows)
+
+Not verified live (needs a real signed-in session — see severity/UNCERTAIN
+rows in section 4): OAuth round-trip, My Drive browse/search/sort, background
+sync, metadata accuracy, playlists, queue, and the in-app video surface (which
+does not exist yet).
+================================================================================

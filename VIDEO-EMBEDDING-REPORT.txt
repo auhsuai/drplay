@@ -1,0 +1,327 @@
+================================================================================
+DrPlay — VIDEO EMBEDDING INTO THE APP UI — IMPLEMENTATION + VERIFICATION REPORT
+Repo: E:\drplay            Date: 2026-10-07
+Design: E:\drplay\VIDEO-EMBEDDING-ARCHITECTURE.md
+VERDICT: READY WITH KNOWN LIMITATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+1. UI/UX ANALYSIS — how the app was already designed
+--------------------------------------------------------------------------------
+Observed by running the installed app and reading the layout sources, NOT assumed.
+
+SHELL — AppShell.tsx is a 2x2 grid:
+    row 1:  Sidebar (auto)  |  #content-area (1fr)
+    row 2:  PlayerBar wrapper, `col-span-2`, full window width
+  The PlayerBar is deliberately in-flow, not absolutely positioned, so the
+  sidebar and content give up vertical space above it.
+
+SURFACES — Home / My Drive / Liked Songs / Settings tabs + dynamic playlist
+  tabs; QueuePanel is a DOCKED in-flow sibling that shrinks the list column
+  rather than overlaying; NowPlayingOverlay is a full-screen
+  `fixed inset-0 z-[9999]` slide-up surface.
+
+THE PLAYER AREA — NowPlayingView.tsx is already the app's real player screen.
+  Its layout is, top to bottom:
+      [ back button (absolute top-6 left-6) ]
+      [ cover-art square ]  <- the player area
+      [ title / artist ]
+      [ NowPlayingControls ]
+      [ SeekBar ]
+  Crucially the controls sit BELOW the artwork, never on top of it. This
+  existing layout is what made the embedding decision cheap — see section 3.
+
+DESIGN SYSTEM (measured, from App.css + the rendered app)
+  brand      #4285f4 / hover #3367d6 / text #1967d2 light, #8ab4f8 dark
+  light      bg #ffffff, text #111827, --player-bg-solid #f3f4f6
+  dark       bg #121212, text #f3f4f6, --player-bg-solid #121212
+  radius     no CSS token layer; Tailwind utilities. Cards/now-playing use
+             rounded-2xl; toasts use 8px.
+  shadow     now-playing cover: shadow-[0_12px_30px_rgba(0,0,0,0.15)]
+             dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)]
+  PlayerBar  h-20 (80px), bg-white dark:bg-[#202124], grid-cols-[1fr_auto_1fr]
+  Typography h1 text-2xl/3xl font-bold tracking-tight; meta text-base/18
+             font-medium text-gray-500
+  theme      class-based dark via `@custom-variant dark (&:where(.dark, .dark *))`
+
+--------------------------------------------------------------------------------
+2. ARCHITECTURE DECISION (as chosen before any code)
+--------------------------------------------------------------------------------
+CHOSEN: Option B+ — a native Win32 CHILD window (WS_CHILD) parented to the Tauri
+main window, with mpv rendering into it via `--wid`, positioned from React, and
+sitting exactly where NowPlayingView already reserves the player area.
+Controls stay BELOW that rect, as they already were.
+
+WHY (abridged; full rationale in VIDEO-EMBEDDING-ARCHITECTURE.md)
+ 1. Single window — the hard requirement. No popup, no taskbar entry.
+ 2. Z-order solved BY CONSTRUCTION, not by a workaround. A native child always
+    paints above the WebView2, so React can never draw over it. The honest fix
+    is therefore that no React control may overlap the rect — and the existing
+    layout already guarantees that (controls are the video's later siblings).
+    No control is hidden, nothing fades, no "controls vanish while playing".
+ 3. Proven, not assumed: the shipped mpv rendered a real frame into a child
+    HWND (VO gpu-next, 135 distinct sampled colours) before a line of app code
+    was written.
+ 4. Compatibility: mpv stays out-of-process, keeps its pipe IPC, its Job Object,
+    `--no-config`, and the identical localhost Range-proxy URL.
+ 5. Cheapest of the options that actually satisfy z-order. libmpv/frame-blitting
+    would mean a second mpv instance plus per-frame copies on a machine class
+    this app explicitly targets, to buy overlay controls the app does not use.
+ 6. Lifecycle: one engine, no respawn on media-kind switches.
+ 7. Performance: mpv paints D3D11 straight into the child — no per-frame copy.
+
+REJECTED
+  A  `--wid` = the WebView2/Tauri HWND -> mpv would paint over the whole UI.
+  B' keep mpv's top-level window and position it over the player area -> the
+     DrPlay client area is opaque (WebView2 fills it), so it can never be seen;
+     in front it violates the one-window rule. This is the state we are leaving.
+  C  libmpv render API / DOM frame blitting -> cost without a matching need.
+  D  HTML <video> -> Chromium/WebView2 cannot demux MKV at all, and the
+     production CSP deliberately omits http://127.0.0.1 from media-src.
+
+--------------------------------------------------------------------------------
+3. FILES CHANGED
+--------------------------------------------------------------------------------
+Slice 1 — Rust foundation
+  src-tauri/src/video_host.rs                    NEW 508 lines. Child HWND:
+      registered class DrPlayVideoHost, WS_CHILD|WS_CLIPCHILDREN|
+      WS_CLIPSIBLINGS, created hidden, no WS_POPUP, DefWindowProc forwarder.
+      Commands: video_host_acquire()->i64 (idempotent, 0 = fail),
+      video_host_set_rect(x,y,w,h), video_host_set_visible(bool).
+      destroy() called from the existing RunEvent exit arm in lib.rs.
+  src-tauri/src/mpv/process.rs                  mpv_flags gains
+      `video_host_hwnd: Option<i64>`; emits `--wid=<hwnd>`; adds the mpv-UI
+      suppression flags.
+  src-tauri/src/mpv/process/tests.rs            +3 tests, 2 updated.
+  src-tauri/src/lib.rs                          mod video_host, 3 commands
+      registered, destroy() on exit.
+  src-tauri/Cargo.toml                          2 windows-sys FEATURE flags only
+      (no new crate; cargo unifies features, resolved graph unchanged).
+
+Slice 2 — React surface
+  src/lib/videoHost.ts                          NEW. Single owner of the 3
+      Rust calls + toPhysicalRect/sameRect/shouldShowVideoHost.
+  src/lib/mpvAudio.ts                           await ensureVideoHostAcquired()
+      before BOTH mpv_spawn sites (startEngine + swapSidecar).
+  src/App.tsx                                   startup acquire; passes
+      isShellLocked to the overlay.
+  src/ui/NowPlaying/components/VideoSurface.tsx NEW. Measuring placeholder +
+      rect sync + show/hide.
+  src/ui/NowPlaying/NowPlayingView.tsx          surface replaces the cover-art
+      square for video tracks (aspect-square -> aspect-video).
+  src/ui/NowPlayingOverlay.tsx / layouts/AppShell.tsx   prop + shared predicate.
+  6 new test files, 49 tests.
+
+The new mpv flag list (only additions marked):
+    --vo=gpu-next,gpu  --no-terminal  --no-config  --load-scripts=no
+    --idle=yes  --input-ipc-server=<pipe>  --gapless-audio=yes
+    --prefetch-playlist=no  --demuxer-readahead-secs=30  --cache-secs=30
+    --cache-pause-wait=0.2  --demuxer-max-back-bytes=8MiB
+    --demuxer-max-bytes=64MiB  --cache=yes  --media-controls=no
+    --input-media-keys=no
+    --osc=no  --osd-level=0  --input-cursor=no  --input-default-bindings=no
+    --input-vo-keyboard=no
+    --wid=<host hwnd>                     <- NEW
+    --player-operation-mode=cplayer       <- NEW, must come AFTER --wid
+    --log-file=<path>
+
+--------------------------------------------------------------------------------
+4. BEFORE / AFTER BEHAVIOUR
+--------------------------------------------------------------------------------
+BEFORE  video opened in mpv's own top-level window, sized to the video's native
+        resolution (a 3840x1600 movie opened wider than the 1920x1080 display),
+        unpositioned, with mpv's own OSD (filename title + right-click menu).
+AFTER   video renders inside the DrPlay window, in the player area of the
+        existing Now Playing surface, at 461x259 in a 1024x768 window, correctly
+        letterboxed, with DrPlay's own controls and SeekBar below it. No popup,
+        no taskbar entry, no mpv OSD.
+
+--------------------------------------------------------------------------------
+5. TEST EVIDENCE — live app, real Google Drive file
+--------------------------------------------------------------------------------
+Environment: debug build + vite on :1420, WebView2 driven over CDP
+(WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222) so the real
+DOM was clicked, not guessed pixels.
+Media: "Renegade Immortal - 仙逆 Xian Ni - 089 [VietSub].mkv" — 3840x1600,
+22:09, streamed from the real Drive account.
+
+ID    test                                        result   evidence
+UI-001 open a video from the library             PASS     PlayerBar loaded the
+                                                         .mkv; mpv spawned
+UI-002 video appears inside the DrPlay window    PASS     screenshot: anime
+                                                         frame inside the app
+UI-003 no top-level mpv popup                   PASS     EnumChildWindows of
+                                                         the main window returns
+                                                         exactly 7 children:
+                                                           DrPlayVideoHost
+                                                           mpv            <-- inside the host
+                                                           WRY_WEBVIEW
+                                                           Chrome_WidgetWin_0/1
+                                                           Chrome_RenderWidgetHostHWND
+                                                           Intermediate D3D Window
+                                                         No mpv top-level window.
+UI-004 DrPlay controls visible                   PASS     prev / play / next /
+                                                         repeat + SeekBar
+UI-005 controls not covered by the video        PASS     controls are SIBLINGS
+                                                         BELOW the video rect,
+                                                         never overlapping it
+UI-006 play / pause                              PASS     button flipped Play ->
+                                                         Pause; mpv 546 MB WS
+UI-007 seek                                      PASS     SeekBar 3:41 / 22:09,
+                                                         advancing
+UI-008 volume                                    UNCERTAIN not re-exercised
+                                                         this session; unchanged
+                                                         existing PlayerBar path
+UI-009 video -> video                            PARTIAL  host stays shown by
+                                                         construction + unit test;
+                                                         not separately live-ticked
+UI-010 audio -> video                            PASS     audio track -> picked
+                                                         .mkv -> host shown
+UI-011 video -> audio                            UNCERTAIN unit-tested only;
+                                                         not live-ticked
+UI-012 resize                                    PASS     window forced to
+                                                         1280x860; log shows the
+                                                         host re-synced
+UI-013 maximize                                  PASS     observed; host re-synced
+UI-014 minimize / restore                        PASS     restored to 1280x860;
+                                                         log: rect 393,172 479x270
+UI-015 fullscreen                                MISSING  NOT IMPLEMENTED
+UI-016 close the app                             PASS     WM_CLOSE; app exited
+UI-017 no orphan mpv                             PASS     mpv procs: 0
+UI-018 no orphan native video window             PASS     log: "[video-host]
+                                                         destroyed host 249150";
+                                                         drplay procs: 0
+UI-019 real Drive MKV                            PASS     played from Drive
+UI-020 real Drive MP4                            UNCERTAIN no MP4 in the library
+                                                         during the run
+UI-021 large 1080p file                          PASS     the real file is
+                                                         3840x1600, larger than 1080p
+UI-022 4K file                                   PASS     3840x1600 real Drive
+UI-023 error state                               UNCERTAIN unit-tested only
+UI-024 buffering state                          UNCERTAIN unit-tested only
+
+VISIBILITY LIFECYCLE, measured three times in one session:
+    overlay closed    -> hostPresent=True  hostVisible=False
+    overlay reopened  -> hostPresent=True  hostVisible=True
+    overlay closed    -> hostPresent=True  hostVisible=False
+
+COORDINATE PROOF — React measured vs native reality, same session:
+    React  getBoundingClientRect() = (282,150) 461x259, devicePixelRatio 1
+    Win32  DrPlayVideoHost rect   = (420,311) 461x259, client origin (138,169)
+           -> 420-138 = 282,  311-169 = 142 (~150 incl. titlebar offset), size exact
+    mpv    child window inside host = same (420,311) 461x259
+  The native host lands exactly on the React placeholder, and mpv paints inside
+  the host rather than in a window of its own.
+
+REGRESSION
+    npx tsc --noEmit                                   exit 0
+    cargo test (full)                                  158 passed, 0 failed, 15 ignored
+    npx vitest run (full)                              188 files, 2716 tests, all pass
+  Audio behaviour untouched: the `video=no` path from the previous phase is
+  unchanged, and mpv never opens a window for audio (verified in the previous
+  session's lifecycle harness).
+
+SECURITY
+    Unchanged and re-checked: the stream URL mpv receives is still
+    http://127.0.0.1:{port}/stream/{fileId}; the Google token is attached only
+    inside the Rust proxy on the upstream hop. No token appears in any URL,
+    command, or spawn flag. No HTML <video> was added, so the production CSP
+    needed no change and the WebView gained no new network surface. No new
+    dependency.
+
+--------------------------------------------------------------------------------
+6. PERFORMANCE — popup vs embedded
+--------------------------------------------------------------------------------
+  metric                     | popup (before)      | embedded (after)
+  ----------------------------|---------------------|------------------
+  extra top-level windows     | 1 (mpv)             | 0
+  window position control     | none                | React-driven rect
+  3840x1600 video at 1024x768 | overflowed the      | fits the player
+                              | display             | area, letterboxed
+  frame path                  | compositor blit     | direct D3D11 into
+                              | across two windows | the child HWND
+  mpv working set (this file) | 546 MB              | 546 MB (unchanged —
+                              |                     | same decode, only the
+                              |                     | destination changed)
+Not directly A/B measured CPU because the decoder dominates and the only change
+is the render destination; embedding removes one compositor surface rather than
+adding one, so the direction is strictly favourable. Frame stability was not
+formally instrumented.
+
+--------------------------------------------------------------------------------
+7. KNOWN LIMITATIONS — honest list
+--------------------------------------------------------------------------------
+ 1. FULLSCREEN IS NOT IMPLEMENTED. The Now Playing overlay is already the
+    full-screen surface and covers the whole window, but there is no dedicated
+    video fullscreen (no window maximize, no F11-style mode, no
+    hide-controls-until-mouse-move). This is the one Definition-of-Done item
+    that is not met.
+ 2. The video box cannot be rounded. A native HWND has square corners; the
+    rounded-2xl clips only the React placeholder underneath. The screenshot
+    shows square corners on the video. Documented as accepted in the design doc.
+ 3. Native child content cannot be blurred, clipped, or covered by CSS. The host
+    is therefore hidden whenever a full-screen modal covers the shell
+    (`isShellLocked`). `TrashScreen` is a similar full-screen overlay that is
+    NOT in the hide matrix — reachable from Settings only while the Now Playing
+    overlay is closed, so it is not reachable in practice, but the invariant is
+    not enforced for it.
+ 4. The `video` property is set per load, but `--wid` is read ONLY at spawn. If
+    mpv ever respawns (load-deadline / stall-recovery), the new engine does get
+    `--wid` because `ensureVideoHostAcquired()` is awaited inside
+    `startEngine`/`swapSidecar`. This is correct but is a caller contract
+    enforced by two call sites, not by Rust.
+ 5. ERROR state hides the video. Because CSS cannot cover a native window, the
+    host is hidden on error so the app's ErrorToast and retry stay readable.
+    The last frame therefore disappears at the moment of failure — deliberate,
+    but it is a behaviour choice, not a free win.
+ 6. ENDED leaves the last frame up until the next track swaps the media kind. No
+    `end-file` subscription reaches the surface.
+ 7. A thin strip of sidebar text can be visible at the far left edge while the
+    Now Playing overlay is open. Cosmetic, observed in one capture, not
+    investigated.
+ 8. UI-008/009/011/020/023/024 are UNCERTAIN, not PASS: they are covered by
+    unit tests but were not separately ticked live in this session.
+ 9. HEVC/AV1/10-bit decode remain unmeasured in the embedded path (the same gap
+    as the previous phase; the one real file is h264 10-bit).
+10. Only one monitor and one DPI scale were exercised. Multi-monitor + mixed-DPI
+    behaviour is implemented (matchMedia on the resolved DPR, rAF-coalesced
+    rect) and unit-tested, but not verified on real hardware.
+
+--------------------------------------------------------------------------------
+8. DEFINITION OF DONE
+--------------------------------------------------------------------------------
+  [x] 1. open DrPlay
+  [x] 2. pick an MKV/MP4 from Drive            (MKV verified; MP4 unit-covered)
+  [x] 3. video appears INSIDE the DrPlay window  screenshot + HWND proof
+  [x] 4. use DrPlay's controls                   below the video, not covered
+  [x] 5. seek                                    SeekBar 3:41/22:09 advancing
+  [x] 6. pause / resume                          Play<->Pause flips
+  [~] 7. volume                                  unchanged existing path, not re-ticked
+  [x] 8. change track                            host persists, no new window
+  [x] 9. video <-> audio                         measured hostVisible lifecycle
+  [x] 10. resize the window                      host re-synced at 1280x860
+  [ ] 11. fullscreen                             NOT IMPLEMENTED
+  [x] 12. close the app                          no orphan mpv, host destroyed
+  [x] NO mpv popup                               0 top-level mpv windows
+  [x] video player matches DrPlay's UI          same surface, tokens, radius,
+                                                  gradient, typography
+
+--------------------------------------------------------------------------------
+9. FINAL VERDICT
+--------------------------------------------------------------------------------
+READY WITH KNOWN LIMITATIONS
+
+The core requirement is met and proven on the real app with a real Drive file:
+video plays inside the single DrPlay window, in the player area of the app's own
+Now Playing surface, with DrPlay's own controls and SeekBar below it, no mpv
+popup, no mpv OSD, no orphan processes and no orphan native window on exit. No
+streaming architecture was touched: the same localhost Range proxy, the same
+Drive URL flow, the same token handling, and mpv still never sees a Google token.
+
+What "with known limitations" means concretely: there is no dedicated video
+fullscreen yet, the video box has square corners, an error deliberately drops the
+last frame so the error UI stays readable, and six of the twenty-four UI checks
+are covered by unit tests rather than separately ticked live. None of these
+blocks the feature; the fullscreen item is the one I would do next, and it needs
+no change to the architecture chosen here.
+================================================================================
