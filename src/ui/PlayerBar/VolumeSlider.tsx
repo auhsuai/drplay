@@ -8,9 +8,21 @@ export interface VolumeSliderProps {
   audio: AudioController;
   /** Optional control rendered left of the volume icon (e.g. the queue button). */
   leading?: React.ReactNode;
+  /**
+   * Always render the drag rail. The PlayerBar's copy hides it below `xl`
+   * (`hidden xl:flex`), because the 1024x768 window never reaches that
+   * breakpoint and the bar would grow. The full-screen player surface has the
+   * room (and needs the control), so it opts in. Additive: omitting this keeps
+   * the PlayerBar exactly as it was.
+   */
+  alwaysShowRail?: boolean;
 }
 
-export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
+export function VolumeSlider({
+  audio,
+  leading,
+  alwaysShowRail = false,
+}: VolumeSliderProps) {
   // Volume UI state is owned here: it only feeds this component's icon +
   // bar width, so updates stay local instead of re-rendering the whole
   // PlayerBar tree (render-critical isolation).
@@ -148,7 +160,7 @@ export function VolumeSlider({ audio, leading }: VolumeSliderProps) {
       <div
         ref={volumeBarRef}
         data-testid="volume-bar"
-        className="hidden xl:flex w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center"
+        className={`${alwaysShowRail ? "flex" : "hidden xl:flex"} w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center`}
         onPointerDown={handleVolumePointerDown}
       >
         <div

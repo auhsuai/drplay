@@ -4,9 +4,9 @@ use std::path::Path;
 #[test]
 fn flags_match_the_chosen_engine_config() {
     let pipe = r"\\.\pipe\drplay-mpv-test";
-    let flags = mpv_flags(pipe, None);
+    let flags = mpv_flags(pipe, None, None);
     let expected_static = [
-        "--no-video",
+        "--hwdec=auto-safe",
         "--no-terminal",
         "--no-config",
         "--load-scripts=no",
@@ -35,15 +35,161 @@ fn flags_match_the_chosen_engine_config() {
     );
 }
 
+/// Video is enabled PER TRACK over IPC (`set_property video`), never by a
+/// startup flag: `--no-video`/`--video=no` would make the choice a
+/// process-lifecycle decision and force a respawn on every audio<->video
+/// switch (see mpvFlags docs). The frontend is the only place that decides a
+/// track's kind, so the flag set must leave the door open — and must still
+/// pick a video output explicitly instead of relying on mpv auto-detection.
+#[test]
+fn flags_do_not_pin_the_video_choice_and_do_pin_a_video_output() {
+    let flags = mpv_flags(r"\\.\pipe\drplay-mpv-test", None, None);
+
+    for disabling in ["--no-video", "--video=no", "--video=0"] {
+        assert!(
+            !flags.iter().any(|flag| flag == disabling),
+            "{disabling} must not be a startup flag: the `video` property is set per track over IPC"
+        );
+    }
+
+    let vo_flags: Vec<&String> = flags.iter().filter(|flag| flag.starts_with("--vo=")).collect();
+    assert_eq!(
+        vo_flags.len(),
+        1,
+        "exactly one --vo must be requested (so output never depends on mpv auto-detection), got {vo_flags:?}"
+    );
+    assert_eq!(
+        vo_flags[0].as_str(),
+        format!("--vo={MPV_VIDEO_OUTPUT}"),
+        "video output must be the documented, compiled-in driver with its fallback"
+    );
+}
+
+/// Hardware decoding is a soft POLICY, never a hard dependency: with
+/// `--hwdec=auto-safe` mpv engages a whitelisted hardware decoder when the GPU
+/// and codec support it, and falls back to software decoding by itself when
+/// they don't (measured on the test machine: H.264 1080p 35% -> 6.8% of one
+/// core with d3d11va engaged; unsupported HEVC 10-bit simply stays software,
+/// playback and seeks unchanged, no respawn). Exactly ONE `--hwdec` flag may
+/// exist — a second one would make the effective policy depend on argv order —
+/// and its value must stay `auto-safe`: no hard-coded backend (e.g. d3d11va),
+/// so mpv always picks and falls back on its own.
+#[test]
+fn flags_request_hwdec_auto_safe_as_a_soft_policy() {
+    let pipe = r"\\.\pipe\drplay-mpv-test";
+    for with_host in [None, Some(918_992)] {
+        let flags = mpv_flags(pipe, None, with_host);
+        assert_eq!(
+            flags.iter().filter(|flag| flag.starts_with("--hwdec")).count(),
+            1,
+            "exactly one --hwdec flag must exist (host={with_host:?}), got: {flags:?}"
+        );
+        assert!(
+            flags.contains(&format!("--hwdec={MPV_HWDEC}")),
+            "hwdec must be the soft auto-safe policy (host={with_host:?}), got: {flags:?}"
+        );
+    }
+}
+
 #[test]
 fn flags_add_the_sidecar_log_when_a_path_is_given() {
     let pipe = r"\\.\pipe\drplay-mpv-test";
     let log = Path::new(r"C:\logs\mpv.log");
-    let flags = mpv_flags(pipe, Some(log));
+    let flags = mpv_flags(pipe, Some(log), None);
     assert!(
         flags.contains(&r"--log-file=C:\logs\mpv.log".to_string()),
         "the sidecar must log to the given path, got: {flags:?}"
     );
+}
+
+/// The video host HWND is passed to mpv so it paints into OUR child window
+/// instead of creating a top-level window of its own. A HWND of 0 is not a
+/// window, so it must be treated exactly like "no host".
+#[test]
+fn flags_target_the_video_host_when_one_was_acquired() {
+    let flags = mpv_flags(r"\\.\pipe\drplay-mpv-test", None, Some(918_992));
+    assert!(
+        flags.contains(&"--wid=918992".to_string()),
+        "the engine must render into the acquired video host, got: {flags:?}"
+    );
+    assert_eq!(
+        flags.iter().filter(|flag| flag.starts_with("--wid")).count(),
+        1,
+        "exactly one --wid may be requested, got: {flags:?}"
+    );
+}
+
+/// Audio must keep working when there is no video host at all (never acquired,
+/// or acquisition failed). mpv then falls back to its own window for video —
+/// today's behavior — and audio is unaffected. The app must never fail to
+/// start because a paint target could not be created.
+#[test]
+fn flags_omit_the_video_host_when_there_is_none() {
+    for none in [None, Some(0)] {
+        let flags = mpv_flags(r"\\.\pipe\drplay-mpv-test", None, none);
+        assert!(
+            !flags.iter().any(|flag| flag.starts_with("--wid")),
+            "--wid must be absent when no host exists ({none:?}), got: {flags:?}"
+        );
+        assert!(
+            !flags.iter().any(|flag| flag == "--no-video" || flag == "--video=no"),
+            "an absent host must not disable video output either, got: {flags:?}"
+        );
+        assert!(
+            flags.iter().any(|flag| flag.starts_with("--vo=")),
+            "video output stays pinned even without a host, got: {flags:?}"
+        );
+    }
+}
+
+/// mpv's OWN UI must never appear: `--wid` makes mpv imply
+/// `--player-operation-mode=pseudo-gui`, which turns on a right-click context
+/// menu, an OSC and an OSD title line. DrPlay's React UI is the only player UI,
+/// so every one of those is pinned off. Each string is asserted EXACTLY (not a
+/// count): a renamed or defaulted flag would silently re-enable mpv's UI.
+#[test]
+fn flags_suppress_every_piece_of_mpvs_own_ui() {
+    let expected = [
+        // Re-asserted AFTER --wid, because --wid implies pseudo-gui. Always
+        // present (it is mpv's default anyway when there is no host).
+        "--player-operation-mode=cplayer",
+        // The built-in On-Screen Controller (script + overlay).
+        "--osc=no",
+        // Every OSD message: the filename title, the seek bar, volume OSD.
+        "--osd-level=0",
+        // mpv must not own the mouse cursor over the video area.
+        "--input-cursor=no",
+        // mpv's default key bindings. DrPlay drives the engine over its own
+        // named-pipe IPC (loadfile / seek / set_property only), so nothing in
+        // the app depends on them.
+        "--input-default-bindings=no",
+        // The video output window must not take keyboard input from the host.
+        "--input-vo-keyboard=no",
+    ];
+    for with_host in [None, Some(918_992)] {
+        let flags = mpv_flags(r"\\.\pipe\drplay-mpv-test", None, with_host);
+        for flag in expected {
+            assert!(
+                flags.iter().any(|candidate| candidate == flag),
+                "mpv UI suppression flag {flag} missing (host={with_host:?}), got: {flags:?}"
+            );
+        }
+        let mode = flags
+            .iter()
+            .position(|flag| flag == "--player-operation-mode=cplayer")
+            .expect("the cplayer mode is asserted above");
+        if with_host.is_some() {
+            let wid = flags
+                .iter()
+                .position(|flag| flag.starts_with("--wid"))
+                .expect("--wid is asserted above");
+            assert!(
+                mode > wid,
+                "--player-operation-mode must come AFTER --wid: --wid implies pseudo-gui, \
+                 so only a later cplayer overrides it (host={with_host:?}), got: {flags:?}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -210,3 +210,6 @@ async fn running_ipc() -> Result<Arc<MpvIpc>, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod video_lifecycle;

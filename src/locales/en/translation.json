@@ -154,7 +154,9 @@
     "next": "Next track",
     "play": "Play",
     "pause": "Pause",
-    "play_mode": "Playback mode"
+    "play_mode": "Playback mode",
+    "fullscreen": "Fullscreen video",
+    "exit_fullscreen": "Exit fullscreen"
   },
   "queue": {
     "title": "Play Queue",

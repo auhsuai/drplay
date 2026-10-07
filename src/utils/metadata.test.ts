@@ -1303,6 +1303,62 @@ describe("metadata fetch disabled (settings toggle OFF)", () => {
   });
 });
 
+describe("Phase A: a video file never enters the AUDIO metadata path", () => {
+  const fresh = () => import("./metadata");
+
+  // music-metadata is an AUDIO tag parser. Forcing a container through it
+  // yields no usable artist/title for a movie and costs a head range fetch
+  // per mounted card (SongCard/NowPlaying/TrackInfo all mount). A video row
+  // must therefore be served straight from its filename: no fetch, no
+  // tokenizer, no garbage metadata, no crash.
+  it(".mkv is served a filename-titled placeholder with zero network work", async () => {
+    const tokenizersBefore = tokenizerConstructions.length;
+    const { mock } = makeFetchMock(new Uint8Array(512).fill(0xde));
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata(
+      "video-mkv",
+      "tok",
+      2048,
+      "Big Buck Bunny.mkv",
+    );
+    expect(r.v).toBe(V_PLACEHOLDER);
+    expect(r.title).toBe("Big Buck Bunny");
+    expect(r.artist).toBe("Unknown Artist");
+    expect(r.duration).toBe(0);
+    expect(r.durationEstimated).toBe(true);
+    expect(r.size).toBe(2048);
+    expect(r.pictureData).toBeNull();
+    expect(r.pictureDataFull).toBeNull();
+    expect(mock).not.toHaveBeenCalled();
+    expect(tokenizerConstructions.length).toBe(tokenizersBefore);
+    expect(vi.mocked(captureError)).not.toHaveBeenCalled();
+  });
+
+  it(".mp4 (and the Drive-preserved uppercase form) take the same path", async () => {
+    const { mock } = makeFetchMock(new Uint8Array(512).fill(0xde));
+    const { getTrackMetadata } = await fresh();
+
+    for (const name of ["Clip.mp4", "Clip.MP4", "Clip.mkv"]) {
+      const r = await getTrackMetadata(`video-${name}`, "tok", 2048, name);
+      expect(r.v, name).toBe(V_PLACEHOLDER);
+      expect(r.title, name).toBe("Clip");
+      expect(r.artist, name).toBe("Unknown Artist");
+    }
+    expect(mock).not.toHaveBeenCalled();
+  });
+
+  it("regression: audio still goes through the real parse", async () => {
+    makeFetchMock(buildMp3Fixture("Song Title", "Song Artist", "Song Album"));
+    const { getTrackMetadata } = await fresh();
+
+    const r = await getTrackMetadata("audio-ok", "tok", 2048, "song.mp3");
+    expect(r.v).toBe(8);
+    expect(r.title).toBe("Song Title");
+    expect(r.artist).toBe("Song Artist");
+  });
+});
+
 describe("getTrackMetadata head fetch + transient network failures", () => {
   const fresh = () => import("./metadata");
 

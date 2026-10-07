@@ -15,6 +15,7 @@ import {
   mpegCbrDurationFromSize,
   type AudioFormat,
 } from "../audioFormat";
+import { classifyMediaKind, MEDIA_KIND_VIDEO } from "../mediaKind";
 import {
   cacheTrackMetadata,
   classifyMetaError,
@@ -69,6 +70,20 @@ async function getTrackMetadataImpl(
   const cachedEntry = await readCachedEntry(fileId, forceNetwork);
   if (cachedEntry) {
     return cachedEntry;
+  }
+
+  // Phase A: a VIDEO file is not an audio-metadata problem, so it never
+  // reaches the pipeline below. music-metadata is an AUDIO tag parser — for
+  // .mkv/.mp4 it produces no usable artist/title, and getting there costs a
+  // blind 1.5MB head range fetch per mounted card (SongCard / NowPlaying /
+  // TrackInfo all mount for the same fileId). Return the filename as the
+  // title instead: zero network, zero tokenizer, and a video row can neither
+  // crash the UI nor display a garbage artist. Pinned in the memory cache
+  // like any other placeholder, so the decision is made once per fileId.
+  if (classifyMediaKind(safeName) === MEDIA_KIND_VIDEO) {
+    const videoEntry = makePlaceholder(safeName, _size);
+    setMetadataCache(fileId, videoEntry);
+    return videoEntry;
   }
 
   const size = _size ?? 0;

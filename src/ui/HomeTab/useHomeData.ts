@@ -9,7 +9,7 @@ import {
 } from "../../utils/history";
 import { db } from "../../db/db";
 import { getCurrentUserEmail } from "../../utils/storageKeys";
-import { hasAudioExtension } from "../../utils/audioQuery";
+import { isPlayableMediaFile } from "../../utils/mediaKind";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { DRIVE_FILES_CHANGED_EVENT } from "../../utils/driveConstants";
 import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
@@ -183,7 +183,12 @@ export function useHomeData(token: string | null) {
             rows
               .filter(
                 (row) =>
-                  !row.isFolder && !row.trashed && hasAudioExtension(row.name),
+                  // Phase A: both kinds qualify — an audio-only predicate here
+                  // hides every freshly uploaded movie from "Recently Added"
+                  // even though its row is in the mirror.
+                  !row.isFolder &&
+                  !row.trashed &&
+                  isPlayableMediaFile(row.name),
               )
               .sort((a, b) => {
                 const at = a.modifiedTime ?? "";

@@ -154,7 +154,9 @@
     "next": "Bài tiếp theo",
     "play": "Phát",
     "pause": "Tạm dừng",
-    "play_mode": "Chế độ phát"
+    "play_mode": "Chế độ phát",
+    "fullscreen": "Xem toàn màn hình",
+    "exit_fullscreen": "Thoát toàn màn hình"
   },
   "queue": {
     "title": "Hàng đợi phát",

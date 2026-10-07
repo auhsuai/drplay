@@ -1,6 +1,6 @@
 import type { Track } from "../types";
 import { FOLDER_MIME } from "./driveTypes";
-import { hasAudioExtension } from "./audioQuery";
+import { isPlayableMediaFile } from "./mediaKind";
 import { stripAudioExtension } from "./pathUtils";
 import { listFolderAudioFiles } from "./drivePagination";
 
@@ -84,8 +84,9 @@ export async function collectFolderTracks(
         continue;
       }
       // Defensive: the query already filters by extension, but a malformed or
-      // stale response must not queue something WebView2 cannot decode.
-      if (!hasAudioExtension(entry.name)) continue;
+      // stale response must not queue something the engine cannot play. Both
+      // kinds qualify (Phase A) — a movie folder queues its movies.
+      if (!isPlayableMediaFile(entry.name)) continue;
 
       tracks.push({
         id: entry.id,

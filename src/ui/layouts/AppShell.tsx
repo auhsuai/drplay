@@ -7,6 +7,21 @@ import { Sidebar } from "../Sidebar/Sidebar";
 import { PlayerBar } from "../PlayerBar/PlayerBar";
 import { QueuePanel } from "../PlayerBar/QueuePanel";
 
+/**
+ * Single source of truth for "a full-screen modal covers the shell".
+ * AppShell uses it for inert/blur; App reuses the SAME predicate to hand
+ * `isShellLocked` down to the Now Playing overlay, so the native video host
+ * (which CSS cannot blur or clip) can never stay up behind a modal.
+ * Extracted rather than duplicated because the two must not drift.
+ */
+export function isShellLocked(
+  isLoggedIn: boolean,
+  appRootFolder: string | null,
+  showFolderSelection: boolean,
+): boolean {
+  return !isLoggedIn || !appRootFolder || showFolderSelection;
+}
+
 interface AppShellProps {
   isLoggedIn: boolean;
   appRootFolder: string | null;
@@ -71,7 +86,11 @@ export function AppShell({
   // (isLoggedIn && (!appRootFolder || showFolderSelection), see the gate).
   // inert/aria-hidden keep keyboard/AT (and pointer) out of the blurred
   // shell behind the modal, mirroring the QueuePanel drawer pattern.
-  const isShellLocked = !isLoggedIn || !appRootFolder || showFolderSelection;
+  const shellLocked = isShellLocked(
+    isLoggedIn,
+    appRootFolder,
+    showFolderSelection,
+  );
 
   return (
     // Shell grid: 2 columns × 2 rows. Row 1 = Sidebar (auto col) +
@@ -81,8 +100,8 @@ export function AppShell({
     // The blur/scale wrapper classes apply to the grid as a whole, so the
     // player also locks (aria-hidden/inert) with the shell behind a modal.
     <div
-      aria-hidden={isShellLocked}
-      inert={isShellLocked}
+      aria-hidden={shellLocked}
+      inert={shellLocked}
       className={`grid grid-cols-[auto_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] flex-1 overflow-hidden transition-all duration-700 ease-in-out ${!isLoggedIn || (!appRootFolder && !showFolderSelection) ? "blur-xl scale-[0.97] opacity-40 pointer-events-none" : "blur-0 scale-100 opacity-100"}`}
     >
       <Sidebar

@@ -57,10 +57,23 @@ export const MPV_COMMANDS = {
 export const MPV_PROPERTY_ARGS = {
   volume: "volume",
   pause: "pause",
+  video: "video",
 } as const;
 
 /** mpv boolean properties parse string args like command-line values. */
 export const MPV_BOOL = { yes: "yes", no: "no" } as const;
+
+/**
+ * Values for the `video` property, which is mpv's process-global video
+ * on/off option (Phase B). NOT MPV_BOOL: verified against the shipped sidecar
+ * (mpv v0.41.0) that `set_property video "yes"` is REJECTED with
+ * `unsupported format for accessing property`, while `"1"` and `"no"` are
+ * both accepted and take effect before the next loadfile. An A/B run over a
+ * real MKV: `video=no` -> 0 video decoders (audio-only, exactly the old
+ * `--no-video` behavior), `video=1` -> `vd: Opening decoder h264` +
+ * `VO: gpu-next`.
+ */
+export const MPV_VIDEO = { on: "1", off: "no" } as const;
 
 export const PROXY_ORIGIN = "http://127.0.0.1";
 export const STREAM_PATH = "/stream/";

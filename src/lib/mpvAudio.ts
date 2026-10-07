@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Track } from "../types";
 import { captureError } from "../utils/errorLog";
+import { classifyMediaKind, MEDIA_KIND_VIDEO } from "../utils/mediaKind";
+import { ensureVideoHostAcquired } from "./videoHost";
 import type { BufferedSource } from "../utils/bufferedRange";
 import type {
   AudioEventIdentity,
@@ -27,6 +29,7 @@ import {
   MPV_COMMANDS,
   MPV_PROPERTY_ARGS,
   MPV_PROPERTIES,
+  MPV_VIDEO,
   parseProxyError,
   PROXY_START_TIMEOUT_MS,
   SEEK_ACK_TIMEOUT_MS,
@@ -547,6 +550,15 @@ export class MpvAudioController {
         }),
       );
       if (this.isStale(epoch)) return this.disposeStaleStart(attached);
+      // ORDERING CONTRACT (Slice 2): mpv reads `--wid` ONCE, at spawn, so the
+      // native video host must exist BEFORE this call — otherwise video opens
+      // in mpv's own top-level window for the whole engine session. The
+      // acquire resolves 0 (never throws) when the host is unavailable, which
+      // degrades to exactly that pre-Slice-1 behavior instead of failing the
+      // spawn. App also acquires on startup (src/App.tsx), so by the time a
+      // first play reaches here the handle is usually already memoized.
+      await ensureVideoHostAcquired();
+      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
       const reply = await invoke(TAURI_COMMANDS.mpvSpawn);
       if (this.isStale(epoch)) return this.disposeStaleStart(attached);
       // Fix B3: a fresh sidecar's load epoch restarts at 0 (the Rust counter
@@ -767,8 +779,26 @@ export class MpvAudioController {
   ): Promise<void> {
     const port = await this.ensureProxyPort();
     if (this.isStale(epoch)) return;
+    // Phase B: mpv's `video` is a PROCESS-GLOBAL option (like `pause`), so it
+    // is set on EVERY load — a video->audio switch must turn the video output
+    // back off or the last movie's window stays up. Set before the loadfile so
+    // the engine never even opens a video decoder for an audio track: `no` is
+    // byte-identical to the `--no-video` startup flag this replaced, and the
+    // value comes from the track's own kind (unknown name -> audio).
+    const videoValue =
+      classifyMediaKind(track.originalName ?? track.title) === MEDIA_KIND_VIDEO
+        ? MPV_VIDEO.on
+        : MPV_VIDEO.off;
+    await this.sendCommand([
+      MPV_COMMANDS.setProperty,
+      MPV_PROPERTY_ARGS.video,
+      videoValue,
+    ]);
+    if (this.isStale(epoch)) return;
     const reply = await this.sendCommand([
       MPV_COMMANDS.loadfile,
+      // Same localhost Range proxy URL as audio — video needs no new scheme,
+      // no token and no Drive URL.
       buildProxyStreamUrl(track.id, port),
       MPV_COMMANDS.replace,
     ]);
@@ -1098,6 +1128,11 @@ export class MpvAudioController {
       invoke(TAURI_COMMANDS.mpvShutdown),
       LOADFILE_RESTART_TIMEOUT_MS,
     );
+    if (this.isStale(epoch)) return;
+    // Same `--wid` ordering contract as startEngine: the replacement sidecar
+    // reads the flag at ITS spawn too. Memoized, so this is a no-op resolve
+    // for every restart after the first.
+    await ensureVideoHostAcquired();
     if (this.isStale(epoch)) return;
     const reply = await withStallQueryTimeout(
       invoke(TAURI_COMMANDS.mpvSpawn),

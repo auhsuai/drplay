@@ -24,6 +24,26 @@ const WIN32_ERROR_FILE_NOT_FOUND: i32 = 2;
 const WIN32_ERROR_PIPE_BUSY: i32 = 231;
 /// Creation flag hiding the console window a child process would flash.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Video output driver requested at spawn. `gpu-next` is mpv's recommended
+/// output and the default since 0.41; `gpu` stays in the list as mpv's own
+/// documented fallback (an mpv priority list falls back on the drivers after
+/// it), so video output never depends on auto-detection and never dies with
+/// the build.
+pub(crate) const MPV_VIDEO_OUTPUT: &str = "gpu-next,gpu";
+/// Hardware-decoding policy requested at spawn. `auto-safe` = use a
+/// hardware decoder when one is safe and available, fall back to software
+/// decoding automatically when it is not (mpv manual: `auto-safe` is "exactly
+/// the same as `auto`", and `auto` "tries to automatically enable hardware
+/// decoding using the first available method" while it "may disable hardware
+/// decoding in other situations when it's known to cause problems"). Never a
+/// hard GPU dependency and no codec is special-cased: an unsupported GPU or
+/// codec simply keeps software decoding, with transport, audio and IPC
+/// untouched. Measured on the low-end Ivy Bridge test machine (Intel HD, 2015
+/// driver): H.264 1080p 35% -> 6.8% of one core (d3d11va engaged), 4K 76.4%
+/// -> 4.0%; unsupported HEVC 10-bit/4K stayed software after mpv's own probe
+/// failed ("Failed to allocate hw frames"), playback and seek unchanged, no
+/// respawn.
+pub(crate) const MPV_HWDEC: &str = "auto-safe";
 
 /// Fresh per-session pipe name: `\\.\pipe\drplay-mpv-{uuid-v4}`.
 pub(crate) fn new_pipe_name() -> String {
@@ -59,15 +79,38 @@ pub(crate) fn rotate_mpv_log(log_file: &Path) -> Result<(), String> {
     })
 }
 
-/// The exact flag set chosen for the DrPlay audio-only engine (plan 1.3).
+/// The exact flag set chosen for the DrPlay engine (plan 1.3).
 /// `mpv_log` adds `--log-file` (diagnostics only, never behavior): without it
 /// the sidecar's stdout/stderr go to null and a wedged playback chain leaves
 /// zero evidence behind (2026-09-17 freeze report D2). The log level for
 /// `--log-file` is at least `-v -v` per the mpv manual, so no `--msg-level`
 /// companion is needed — it could only raise it further.
-pub(crate) fn mpv_flags(pipe_name: &str, mpv_log: Option<&Path>) -> Vec<String> {
+///
+/// VIDEO is decided PER TRACK over IPC, not here. There is deliberately no
+/// `--no-video` (and no `--video=no`): mpv's `video` property is a runtime
+/// property, so the frontend sets it from the track's media kind right before
+/// `loadfile` — `no` for audio (byte-identical to the old startup flag) and
+/// `1` for video. One engine, no respawn when the kind changes. The frontend
+/// is the only layer that knows a track's kind, so keeping the choice out of
+/// the spawn-time flag set keeps one source of truth. (`1`, not `yes`:
+/// verified against this sidecar that mpv v0.41.0 REJECTS
+/// `set_property video "yes"` with "unsupported format for accessing
+/// property", while `"1"` and `"no"` are both accepted.)
+/// `--vo=` is still pinned so video output never depends on mpv
+/// auto-detection (and never on a user mpv.conf — see `--no-config`).
+/// `--hwdec=auto-safe` (see `MPV_HWDEC`) is the hardware-decoding policy:
+/// hardware when the GPU and codec support it, automatic software fallback
+/// when they don't — a measured 35% -> 6.8% of one core on H.264 1080p, and
+/// merely a software decode on unsupported codecs, so it is never a hard
+/// dependency and no codec is special-cased.
+pub(crate) fn mpv_flags(
+    pipe_name: &str,
+    mpv_log: Option<&Path>,
+    video_host_hwnd: Option<i64>,
+) -> Vec<String> {
     let mut flags = vec![
-        "--no-video".to_string(),
+        format!("--vo={MPV_VIDEO_OUTPUT}"),
+        format!("--hwdec={MPV_HWDEC}"),
         "--no-terminal".to_string(),
         // Never read the user's %APPDATA%\mpv\mpv.conf / watch-later state:
         // e.g. a stray `pause=yes` would freeze every track drplay loads.
@@ -105,7 +148,49 @@ pub(crate) fn mpv_flags(pipe_name: &str, mpv_log: Option<&Path>) -> Vec<String> 
         // the app session. Audio playback itself is unchanged.
         "--media-controls=no".to_string(),
         "--input-media-keys=no".to_string(),
+        // ---- mpv's OWN UI, suppressed -------------------------------------
+        // `--wid` makes mpv imply `--player-operation-mode=pseudo-gui`, which
+        // turns on mpv's own player UI: a right-click context menu
+        // (Pause/Stop/Open/Playlist/Tracks/...), the on-screen controller and
+        // an OSD title line with the filename. All of it was OBSERVED with the
+        // shipped mpv 0.41.0 against a real child HWND. DrPlay's React UI is
+        // the only player UI, so each piece is pinned off. Every flag below was
+        // verified to exist in this exact build (mpv --list-options + a real
+        // option-parse run), not guessed.
+        "--osc=no".to_string(),
+        // Level 0 removes every OSD message: the filename title line, the seek
+        // bar and the volume OSD. The app reads mpv PROPERTIES over IPC, never
+        // the OSD, so nothing in DrPlay depends on it.
+        "--osd-level=0".to_string(),
+        // mpv must not claim or change the mouse cursor over the video area:
+        // DrPlay's own controls are the only pointer target there.
+        "--input-cursor=no".to_string(),
+        // mpv's DEFAULT key bindings are dead weight (and would make the
+        // embedded window eat keystrokes). Safe to drop: the frontend drives
+        // the engine exclusively over its own named-pipe IPC and only ever
+        // sends loadfile / seek / set_property (src/lib/mpvProtocol.ts), never
+        // an input command, and keyboard shortcuts are DOM handlers in the
+        // WebView. Verified by grep: no bindkey/keypress path exists.
+        "--input-default-bindings=no".to_string(),
+        // Belt-and-suspenders on the keyboard: the video output must not take
+        // keyboard input from the window it is embedded in.
+        "--input-vo-keyboard=no".to_string(),
     ];
+    // The video host HWND (video_host.rs): mpv paints into OUR child window
+    // instead of creating a top-level window of its own. None means no host
+    // exists (never acquired, or acquisition failed) — that is not an error:
+    // audio is unaffected and mpv falls back to its own window, which is the
+    // pre-video-host behavior. 0 is not a window either, so it is treated as
+    // "no host".
+    if let Some(hwnd) = video_host_hwnd.filter(|hwnd| *hwnd != 0) {
+        flags.push(format!("--wid={hwnd}"));
+    }
+    // MUST come after `--wid`: `--wid` implies `--player-operation-mode=
+    // pseudo-gui`, which switches mpv's own player UI back on (right-click
+    // context menu, OSC, OSD title). Only a LATER cplayer overrides the
+    // implication. Asserted unconditionally — without a host it is already
+    // mpv's default, so it costs nothing and documents the invariant.
+    flags.push("--player-operation-mode=cplayer".to_string());
     if let Some(log_file) = mpv_log {
         flags.push(format!("--log-file={}", log_file.display()));
     }
@@ -160,7 +245,16 @@ pub(crate) fn spawn_mpv(pipe_name: &str, mpv_log: Option<&Path>) -> Result<Spawn
             log::warn!("[mpv] {rotate_error}");
         }
     }
-    let flags = mpv_flags(pipe_name, mpv_log);
+    // The host is only READ here, never created: `spawn_mpv` runs on a tokio
+    // worker (mpv_spawn is an async command) and a window created there would
+    // have no message pump. Slice 2 calls `video_host_acquire` before the first
+    // `mpv_spawn`; when there is none, mpv falls back to its own window and
+    // audio is unaffected.
+    let video_host_hwnd = crate::video_host::current_hwnd();
+    if video_host_hwnd.is_none() {
+        log::info!("[mpv] no video host acquired — video (if any) uses mpv's own window");
+    }
+    let flags = mpv_flags(pipe_name, mpv_log, video_host_hwnd);
     log::info!(
         "[mpv] spawning sidecar {} ({} flags, pipe {pipe_name})",
         exe.display(),

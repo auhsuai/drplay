@@ -1,6 +1,7 @@
 import { db } from "../db/db";
 import { upsertFileRows } from "../db/fileRows";
-import { getAudioQuery, hasAudioExtension } from "../utils/audioQuery";
+import { getMediaQuery } from "../utils/audioQuery";
+import { isPlayableMediaFile } from "../utils/mediaKind";
 import { FOLDER_MIME } from "../utils/driveApi";
 import { parseDriveJson } from "./driveFetch";
 import type { DriveFile as DriveFileItem } from "./driveMapping";
@@ -67,7 +68,7 @@ export async function performFullSync(ownerEmail: string) {
   try {
     do {
       const url = new URL(DRIVE_FILES_URL);
-      url.searchParams.append("q", getAudioQuery());
+      url.searchParams.append("q", getMediaQuery());
       url.searchParams.append("fields", `nextPageToken,files(${FILES_FIELDS})`);
       url.searchParams.append("pageSize", "1000");
       if (pageToken) url.searchParams.append("pageToken", pageToken);
@@ -178,9 +179,14 @@ export async function performFullSync(ownerEmail: string) {
   // this change may hold formats Chromium/WebView2 cannot decode
   // (wma/aiff/alac/ape/dsf/dff/wv/tak). Delete every non-folder row whose
   // name has no playable extension (folders keep their rows — isFolder
-  // exempts them even though their names have no audio extension). Runs only
+  // exempts them even though their names have no media extension). Runs only
   // at full-sync completion (delta sync never mass-deletes) and is
   // best-effort: a cleanup failure must not fail the whole sync.
+  //
+  // Phase A: "playable" is now BOTH kinds — isPlayableMediaFile, not
+  // hasAudioExtension. An audio-only predicate here would delete every .mkv /
+  // .mp4 row the union query above just inserted, so the library would appear
+  // and then silently self-empty on every full sync.
   //
   // Per-user scoping (schema v10): filesV2 is now keyed [userEmail+id], so
   // the table is shared across accounts and this sweep MUST be scoped to the
@@ -196,7 +202,7 @@ export async function performFullSync(ownerEmail: string) {
         (f) =>
           f.userEmail === ownerEmail &&
           !f.isFolder &&
-          !hasAudioExtension(f.name),
+          !isPlayableMediaFile(f.name),
       )
       .delete();
   } catch (err) {

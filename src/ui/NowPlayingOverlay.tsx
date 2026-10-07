@@ -12,6 +12,10 @@ interface NowPlayingOverlayProps {
   onTogglePlayMode: () => void;
   onBack: () => void;
   token: string | null;
+  isShellLocked: boolean;
+  /** Player fullscreen — a refinement of this overlay, never a second surface. */
+  isFullscreen?: boolean;
+  onToggleFullscreen?: (() => void) | undefined;
 }
 
 export function NowPlayingOverlay({
@@ -25,6 +29,9 @@ export function NowPlayingOverlay({
   onTogglePlayMode,
   onBack,
   token,
+  isShellLocked,
+  isFullscreen = false,
+  onToggleFullscreen,
 }: NowPlayingOverlayProps) {
   return (
     <div
@@ -45,6 +52,9 @@ export function NowPlayingOverlay({
         onBack={onBack}
         isOpen={isOpen}
         token={token}
+        isShellLocked={isShellLocked}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={onToggleFullscreen}
       />
     </div>
   );

@@ -110,6 +110,9 @@ describe("AudioController facade over the mpv engine", () => {
     // Freshly spawned mpv gets the facade volume re-applied before loadfile.
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      // Phase B: every load pins mpv's process-global `video` first — `no`
+      // for an audio track, the exact behavior the old `--no-video` gave.
+      ["set_property", "video", "no"],
       [
         "loadfile",
         `http://127.0.0.1:${String(PROXY_PORT)}/stream/A`,

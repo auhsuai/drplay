@@ -1,4 +1,4 @@
-﻿//! Localhost stream proxy for mpv: mpv opens `http://127.0.0.1:{port}/stream/{fileId}`
+//! Localhost stream proxy for mpv: mpv opens `http://127.0.0.1:{port}/stream/{fileId}`
 //! and this proxy forwards the request to Google Drive `files/{id}?alt=media`,
 //! attaching the Bearer access token, forwarding the client `Range` header and
 //! passing the upstream status (206/Content-Range) back untouched.
@@ -10,7 +10,10 @@
 //! 302 to a different origin and clients strip `Authorization` on cross-origin
 //! redirects, so each hop is followed manually with the header re-applied.
 
-mod server;
+// `pub(crate)` so the mpv module's real-sidecar measurement harness
+// (src/mpv/video_lifecycle.rs) can start the REAL proxy and drive a real mpv
+// against it, instead of a second re-implementation of the same server.
+pub(crate) mod server;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -747,6 +750,117 @@ mod tests {
         let response = get(port, "after-idle", None).await;
         assert_eq!(response.status(), 200);
         assert_eq!(response.bytes().await.unwrap(), b"recycled-ok".as_slice());
+    }
+
+    /// (i) MEASURED STALL THRESHOLD (F.1 / R2). The investigation report claims
+    /// the audio-tuned `UPSTREAM_BODY_IDLE_TIMEOUT` "may hard-fail a video
+    /// stream" because video bitrates are high. That claim is only true if the
+    /// deadline is a BYTE budget. It is not: it is a wall-clock gap detector, so
+    /// the threshold must be exactly the configured duration REGARDLESS of how
+    /// fast the upstream delivers. These two tests pin that down at the PRODUCTION
+    /// value (20s, not a shrunken test value):
+    ///
+    /// - a gap BELOW the deadline must complete the body untouched (no
+    ///   premature abort, whatever the byte rate);
+    /// - a gap ABOVE it must abort, and the measured moment of the abort must
+    ///   land on the configured 20s (not earlier, not 20s + headers timeout).
+    ///
+    /// The byte rate differs by ~2000x between the two cases, which is the whole
+    /// point: rate does not move the threshold.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn measured_stall_threshold_is_the_configured_deadline_not_a_byte_budget() {
+        /// A gap comfortably inside the deadline.
+        const SUB_DEADLINE_GAP: Duration = Duration::from_secs(2);
+        /// Body size for the sub-deadline case: 64 bytes per millisecond of the
+        /// pause, so the upstream is a "fast" one (about 0.5 Mbit/s) and the
+        /// byte budget is 2000x the stalled case's.
+        const COMPLETE_LEN: usize = SUB_DEADLINE_GAP.as_millis() as usize * 64;
+        /// How much slack the measured abort moment may drift by. Timer
+        /// granularity plus one poll interval, nothing more.
+        const TOLERANCE: Duration = Duration::from_millis(750);
+
+        // (1) Below the deadline: an upstream that delivers its whole body and
+        // only then pauses 2s before EOF MUST complete. `first_bytes ==
+        // total_length` keeps Content-Length honest, so the only reason the read
+        // could fail is an abort — and it must not happen.
+        let (upstream_port, _recorded) = spawn_fixture(vec![respond_stalling(
+            206,
+            &[7u8; COMPLETE_LEN],
+            COMPLETE_LEN,
+            SUB_DEADLINE_GAP,
+        )]);
+        let tokens = StubTokens::new("stale-token-a", &[]);
+        let (port, _events) = start_proxy(
+            format!("http://127.0.0.1:{upstream_port}"),
+            tokens,
+            Duration::from_secs(2),
+            UPSTREAM_BODY_IDLE_TIMEOUT,
+        )
+        .await;
+        let response = get(port, "sub-deadline", Some(&format!("bytes=0-{}", COMPLETE_LEN - 1))).await;
+        assert_eq!(response.status(), 206);
+        let started = Instant::now();
+        let body = tokio::time::timeout(
+            UPSTREAM_BODY_IDLE_TIMEOUT + ABORT_MARGIN,
+            response.bytes(),
+        )
+        .await
+        .expect("a gap below the idle deadline must NOT abort");
+        assert_eq!(
+            body.map(|bytes| bytes.len()).unwrap_or(0),
+            COMPLETE_LEN,
+            "a sub-deadline pause must deliver the full body (an abort would surface as an Err)"
+        );
+        println!(
+            "[evidence] F.1 gap {SUB_DEADLINE_GAP:?} < {UPSTREAM_BODY_IDLE_TIMEOUT:?}: body completed in {:?}",
+            started.elapsed()
+        );
+
+        // (2) Above the deadline: the SAME fixture shape but a gap that outlives
+        // the production deadline. The abort must land ON the deadline.
+        let overshoot = Duration::from_secs(10);
+        let (upstream_port, _recorded) = spawn_fixture(vec![respond_stalling(
+            206,
+            &[0u8; STALLED_FIRST_BYTES],
+            STALLED_TOTAL_LENGTH,
+            UPSTREAM_BODY_IDLE_TIMEOUT + overshoot,
+        )]);
+        let tokens = StubTokens::new("stale-token-a", &[]);
+        let (port, events) = start_proxy(
+            format!("http://127.0.0.1:{upstream_port}"),
+            tokens,
+            Duration::from_secs(2),
+            UPSTREAM_BODY_IDLE_TIMEOUT,
+        )
+        .await;
+        let response = get(port, "over-deadline", Some("bytes=0-4095")).await;
+        assert_eq!(response.status(), 206);
+        let started = Instant::now();
+        let body = tokio::time::timeout(
+            UPSTREAM_BODY_IDLE_TIMEOUT + overshoot + ABORT_MARGIN,
+            response.bytes(),
+        )
+        .await
+        .expect("the client read must terminate once the idle deadline fires");
+        let measured = started.elapsed();
+        assert!(
+            body.is_err(),
+            "a gap past the deadline must abort, got {} bytes",
+            body.map(|bytes| bytes.len()).unwrap_or(0)
+        );
+        assert!(
+            measured >= UPSTREAM_BODY_IDLE_TIMEOUT - TOLERANCE
+                && measured <= UPSTREAM_BODY_IDLE_TIMEOUT + TOLERANCE,
+            "the abort must land on the configured {UPSTREAM_BODY_IDLE_TIMEOUT:?}, measured {measured:?}"
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![("over-deadline".to_string(), server::IDLE_ABORT_STATUS)],
+            "exactly one idle-abort event at the configured deadline"
+        );
+        println!(
+            "[evidence] F.1 gap > {UPSTREAM_BODY_IDLE_TIMEOUT:?}: aborted after {measured:?} (budget {UPSTREAM_BODY_IDLE_TIMEOUT:?} + headers {UPSTREAM_HEADERS_TIMEOUT:?})"
+        );
     }
 
     /// R04-5/R04-6/R04-7: a `DriveTokenSource` wired to stubs instead of the

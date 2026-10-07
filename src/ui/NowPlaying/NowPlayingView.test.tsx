@@ -48,6 +48,12 @@ const audioMock = vi.hoisted(() => {
       for (const h of handlers[event] ?? []) h(payload);
     },
     playTrack: vi.fn(() => Promise.resolve()),
+    // The surface renders the shared VolumeSlider, which reads the engine
+    // through this same facade.
+    getVolume: vi.fn(() => 0.5),
+    isMuted: vi.fn(() => false),
+    toggleMute: vi.fn(() => false),
+    setVolume: vi.fn(),
   };
 });
 
@@ -114,6 +120,7 @@ function baseProps() {
     onBack: vi.fn(),
     isOpen: true,
     token: "tok",
+    isShellLocked: false,
   };
 }
 
@@ -230,6 +237,39 @@ describe("NowPlayingView storm guard parity (F7-7)", () => {
     fireEvent.click(screen.getByRole("button", { name: en.player.play }));
     expect(props.onTogglePlay).toHaveBeenCalledTimes(1);
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+  });
+});
+
+// The full-screen player surface is where the controls actually live (the
+// PlayerBar collapses to h-0 behind it), so a missing control here is a
+// missing control during playback — not a cosmetic gap.
+describe("NowPlayingView transport completeness in the full-screen surface", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("carries volume next to the transport row (F3: the PlayerBar is off-screen here)", () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={makeTrack()} />,
+    );
+    // The shared control, not a second one: same testid as the PlayerBar's.
+    const rail = container.querySelector<HTMLElement>(
+      "[data-testid='volume-bar']",
+    );
+    expect(rail).not.toBeNull();
+    // Reachable here — the PlayerBar hides its own rail below the xl breakpoint.
+    expect(rail?.className).not.toContain("hidden");
+  });
+
+  it("still owns prev / play / next / play-mode (unchanged transport surface)", () => {
+    render(<NowPlayingView {...baseProps()} currentTrack={makeTrack()} />);
+
+    expect(screen.getByRole("button", { name: en.player.prev })).toBeTruthy();
+    expect(screen.getByRole("button", { name: en.player.play })).toBeTruthy();
+    expect(screen.getByRole("button", { name: en.player.next })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: en.player.play_mode }),
+    ).toBeTruthy();
   });
 });
 

@@ -176,17 +176,30 @@ describe("MpvAudioController — terminal failure semantics (F8-5/F8-6)", () => 
 
   it("(F8-6) engine closes while the loadfile command is in flight: one failure surface, not two", async () => {
     let rejectLoad!: (e: Error) => void;
-    tauriMocks.invoke.mockImplementation((command: string) => {
-      if (command === "stream_proxy_start") return Promise.resolve(PROXY_PORT);
-      if (command === "mpv_command")
-        return new Promise<never>((_, reject) => {
-          rejectLoad = reject;
-        });
-      return Promise.resolve(undefined);
-    });
+    // Hang ONLY the loadfile: the per-load `video` set (Phase B) precedes it
+    // and must resolve, otherwise the loadfile is never issued and this test
+    // would no longer be "a failure while the loadfile is in flight".
+    tauriMocks.invoke.mockImplementation(
+      (command: string, args?: { cmd?: string[] }) => {
+        if (command === "stream_proxy_start")
+          return Promise.resolve(PROXY_PORT);
+        if (command === "mpv_command") {
+          if (args?.cmd?.[0] === "loadfile") {
+            return new Promise<never>((_, reject) => {
+              rejectLoad = reject;
+            });
+          }
+          return Promise.resolve(undefined);
+        }
+        return Promise.resolve(undefined);
+      },
+    );
 
     const play = ctrl.playTrack(trackA);
-    await flushMicrotasks(); // spawn/proxy done, loadfile awaiting its reply
+    // spawn/proxy done, then the per-load `video` set and the loadfile are
+    // awaiting their replies (both mpv_commands hang in this mock)
+    await flushMicrotasks();
+    expect(mpvCommands().some((cmd) => cmd[1] === "video")).toBe(true);
     expect(mpvCommands().some((cmd) => cmd[0] === "loadfile")).toBe(true);
 
     fireMpvEvent("ipc-closed", "eof"); // mpv dies mid-loadfile

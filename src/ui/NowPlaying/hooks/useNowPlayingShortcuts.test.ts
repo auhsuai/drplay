@@ -120,3 +120,91 @@ describe("useNowPlayingShortcuts", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+// Escape is the universal "step back" key and the app already owns it here
+// (one hook, one place). Fullscreen inserts a level between the overlay and
+// the app, so Escape must peel ONE level at a time: fullscreen -> overlay ->
+// nothing. It must not close the whole surface on the first press.
+describe("useNowPlayingShortcuts fullscreen layer (TASK 1)", () => {
+  it("Escape in fullscreen exits fullscreen and does NOT close the overlay", () => {
+    const onClose = vi.fn();
+    const onToggle = vi.fn();
+    const onExitFullscreen = vi.fn();
+    renderHook(() => {
+      useNowPlayingShortcuts({
+        isOpen: true,
+        onClose,
+        onToggle,
+        isFullscreen: true,
+        onExitFullscreen,
+      });
+    });
+    pressKey("Escape");
+    expect(onExitFullscreen).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("Escape outside fullscreen closes the overlay (unchanged behaviour)", () => {
+    const onClose = vi.fn();
+    const onExitFullscreen = vi.fn();
+    renderHook(() => {
+      useNowPlayingShortcuts({
+        isOpen: true,
+        onClose,
+        onToggle: vi.fn(),
+        isFullscreen: false,
+        onExitFullscreen,
+      });
+    });
+    pressKey("Escape");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onExitFullscreen).not.toHaveBeenCalled();
+  });
+
+  it("Escape in fullscreen is IGNORED while a text field has focus", () => {
+    const onClose = vi.fn();
+    const onExitFullscreen = vi.fn();
+    renderHook(() => {
+      useNowPlayingShortcuts({
+        isOpen: true,
+        onClose,
+        onToggle: vi.fn(),
+        isFullscreen: true,
+        onExitFullscreen,
+      });
+    });
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    pressKey("Escape");
+    expect(onExitFullscreen).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("f in fullscreen still toggles the overlay (not stolen by the new layer)", () => {
+    const onToggle = vi.fn();
+    const onExitFullscreen = vi.fn();
+    renderHook(() => {
+      useNowPlayingShortcuts({
+        isOpen: true,
+        onClose: vi.fn(),
+        onToggle,
+        isFullscreen: true,
+        onExitFullscreen,
+      });
+    });
+    pressKey("f");
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onExitFullscreen).not.toHaveBeenCalled();
+  });
+
+  it("omitting the fullscreen options keeps the original two-arg contract", () => {
+    const onClose = vi.fn();
+    renderHook(() => {
+      useNowPlayingShortcuts({ isOpen: true, onClose, onToggle: vi.fn() });
+    });
+    pressKey("Escape");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

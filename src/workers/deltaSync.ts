@@ -1,6 +1,6 @@
 import { db } from "../db/db";
 import { upsertFileRows } from "../db/fileRows";
-import { isAudioFile } from "../utils/audioQuery";
+import { isPlayableMediaFile } from "../utils/mediaKind";
 import { FOLDER_MIME } from "../utils/driveApi";
 import { parseDriveJson } from "./driveFetch";
 import { isValidDriveFile } from "./driveMapping";
@@ -113,7 +113,12 @@ export async function performDeltaSync(
             }
             const isFolder = file.mimeType === FOLDER_MIME;
 
-            if (isFolder || isAudioFile(file.mimeType, file.name as string)) {
+            // Phase A: the mirror holds BOTH kinds (the full-sync query is the
+            // audio|video union), so this gate must accept a playable video
+            // file too. An audio-only predicate here would drop every .mkv /
+            // .mp4 change from Drive — movies would appear after a full sync
+            // and then never update, rename or delete in place.
+            if (isFolder || isPlayableMediaFile(file.name as string)) {
               // Per-change helper call keeps the one-bad-change isolation of
               // the previous per-change put (a batched page-wide upsert would
               // let one poisoned row abort its valid siblings).

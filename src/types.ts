@@ -1,7 +1,14 @@
 /**
- * A playable audio item (or the audio half of a Drive item). The minimal
- * contract every consumer agrees on: identity, display title/artist, and
- * where the stream comes from.
+ * A playable media item — an audio track OR a video file (Phase A), or the
+ * audio half of a Drive item. The minimal contract every consumer agrees on:
+ * identity, display title/artist, and where the stream comes from.
+ *
+ * The media kind is NOT a field: it is derived from `originalName` (else
+ * `title`) via `classifyMediaKind` (src/utils/mediaKind.ts) at the point it is
+ * needed (mpv's `video` property). Every Track source already carries the
+ * Drive filename, and the whole Track object is persisted verbatim in
+ * db.recentTracks/db.playCounts — so a derived value needs no optional field,
+ * no Dexie change and no migration of persisted sessions.
  */
 export type Track = {
   id: string;

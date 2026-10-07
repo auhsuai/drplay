@@ -24,6 +24,7 @@ function baseProps() {
     onTogglePlayMode: vi.fn(),
     onBack: vi.fn(),
     token: null,
+    isShellLocked: false,
   };
 }
 

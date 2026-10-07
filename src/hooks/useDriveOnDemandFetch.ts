@@ -4,7 +4,7 @@ import { upsertFileRows, type UpsertableFileRow } from "../db/fileRows";
 import { driveFetch, FOLDER_MIME } from "../utils/driveApi";
 import type { DriveFileItem, DriveFilesListResponse } from "../utils/driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
-import { getFolderAudioQuery } from "../utils/audioQuery";
+import { getFolderMediaQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import { DRIVE_FILES_CHANGED_EVENT } from "../utils/driveConstants";
@@ -47,7 +47,10 @@ export function useDriveOnDemandFetch({
         // to clear it instead of showing the skeleton until this fetch settles.
         setIsLoadingTracks(count === 0);
 
-        const q = getFolderAudioQuery(currentFolderId);
+        // Phase A: the folder listing is the audio|video union (not audio-only) —
+        // an audio-only query here means browsing a folder that holds movies
+        // shows nothing for them, so they can never be selected.
+        const q = getFolderMediaQuery(currentFolderId);
         let hasMore = true;
         let pageToken: string | undefined = undefined;
 

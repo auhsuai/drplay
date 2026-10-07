@@ -138,11 +138,15 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
 
     expect(commandNames().filter((name) => name !== "mpv_command")).toEqual([
       "mpv_shutdown",
+      // Slice 2: the replacement sidecar reads `--wid` at ITS spawn too, so
+      // the host is re-confirmed between the shutdown and the spawn.
+      "video_host_acquire",
       "mpv_spawn",
     ]);
     expect(mpvCommands()).toEqual([
       // Fresh mpv starts at volume 100 — the engine re-applies the facade.
       ["set_property", "volume", "100"],
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -266,6 +270,7 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
     // The load comes up pinned: never pause=no, the pause intent wins.
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       ["set_property", "pause", "yes"],
     ]);
@@ -285,10 +290,14 @@ describe("MpvAudioController — load deadline + sidecar restart (H1)", () => {
 
     expect(commandNames().filter((name) => name !== "mpv_command")).toEqual([
       "mpv_shutdown",
+      // Slice 2: the replacement sidecar reads `--wid` at ITS spawn too, so
+      // the host is re-confirmed between the shutdown and the spawn.
+      "video_host_acquire",
       "mpv_spawn",
     ]);
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       // The reload honors the pause intent — the old forced pause=no here is
       // what dragged the store back to playing after the restart.
@@ -327,6 +336,7 @@ describe("MpvAudioController — switch clears mpv's pause flag without a pause 
     await ctrl.playTrack(trackB);
 
     expect(mpvCommands()).toEqual([
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -403,6 +413,9 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
     await flushMicrotasks();
     expect(commandNames().filter((name) => name !== "mpv_command")).toEqual([
       "mpv_shutdown",
+      // Slice 2: the replacement sidecar reads `--wid` at ITS spawn too, so
+      // the host is re-confirmed between the shutdown and the spawn.
+      "video_host_acquire",
       "mpv_spawn",
     ]);
     expect(mpvCommands()).toEqual([]); // still parked — replacement not up
@@ -413,6 +426,7 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
     // B loads on the replacement sidecar; A's stale reload never happens.
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -429,6 +443,9 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
     await flushMicrotasks();
     expect(commandNames().filter((name) => name !== "mpv_command")).toEqual([
       "mpv_shutdown",
+      // Slice 2: the replacement sidecar reads `--wid` at ITS spawn too, so
+      // the host is re-confirmed between the shutdown and the spawn.
+      "video_host_acquire",
       "mpv_spawn",
     ]);
 
@@ -441,6 +458,7 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
 
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -484,6 +502,7 @@ describe("MpvAudioController — load-deadline supersede + resume (F8-1/F3-9)", 
     // not be mistaken for a supersede.
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       ["set_property", "pause", "no"],
     ]);

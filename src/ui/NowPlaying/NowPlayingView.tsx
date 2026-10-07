@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import type { PlayMode, Track } from "../../types";
-import { Music, ChevronDown } from "lucide-react";
+import { Music, ChevronDown, Maximize, Minimize } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
 import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
@@ -8,8 +8,12 @@ import { usePlayerStore } from "../../store/playerStore";
 import { resetAdvanceGuard, retryCurrentTrack } from "../../utils/playerError";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
+import { VideoSurface } from "./components/VideoSurface";
 import { SeekBar } from "../components/SeekBar";
+import { VolumeSlider } from "../PlayerBar/VolumeSlider";
 import { ErrorToast } from "../PlayerBar/ErrorToast";
+import { classifyMediaKind, MEDIA_KIND_VIDEO } from "../../utils/mediaKind";
+import { shouldShowVideoHost } from "../../lib/videoHost";
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -22,6 +26,21 @@ interface NowPlayingViewProps {
   onBack: () => void;
   isOpen: boolean;
   token: string | null;
+  /** A full-screen modal covers the shell (login / folder selection). The
+   *  native video host must hide then: CSS cannot blur or clip native child
+   *  content, so the host would punch an unblurred hole through the modal. */
+  isShellLocked: boolean;
+  /**
+   * Player fullscreen. A REFINEMENT of this overlay, not a second surface: it
+   * is only ever true while `isOpen` (App opens the overlay when entering it),
+   * and it never changes what `shouldShowVideoHost` decides. Owned by App so
+   * the Escape handler (useNowPlayingShortcuts) can peel one layer at a time.
+   */
+  isFullscreen?: boolean;
+  /** Enter/leave fullscreen. Omitted => no toggle is offered.
+   *  Spelled `| undefined` rather than `?:` so a caller that has no handler
+   *  can pass `undefined` through under exactOptionalPropertyTypes. */
+  onToggleFullscreen?: (() => void) | undefined;
 }
 
 export const NowPlayingView = memo(function NowPlayingView({
@@ -35,6 +54,9 @@ export const NowPlayingView = memo(function NowPlayingView({
   onBack,
   isOpen,
   token,
+  isShellLocked,
+  isFullscreen = false,
+  onToggleFullscreen,
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
 
@@ -49,6 +71,51 @@ export const NowPlayingView = memo(function NowPlayingView({
   // the retry affordance — without duplicating the audio error subscription
   // or the storm guard (those stay single-owner in PlayerBar/playerError).
   const errorInfo = usePlayerStore((state) => state.errorInfo);
+
+  // Media kind of the loaded track (same derivation mpvAudio.loadTrack uses for
+  // the `video` property). A video track replaces the cover-art square with the
+  // VideoSurface; an audio track is untouched by anything in this slice.
+  const isVideoTrack =
+    currentTrack !== null &&
+    classifyMediaKind(currentTrack.originalName ?? currentTrack.title) ===
+      MEDIA_KIND_VIDEO;
+
+  // Ended (F5): mpv's `end-file` already reaches the app as the `ended` engine
+  // event (mpvProtocol -> mpvAudio -> AudioController.on("ended")) — the very
+  // same event that drives auto-advance in usePlayerPlaybackPolicy. The surface
+  // listens to it here rather than inventing a second subscription, so a
+  // finished video stops showing a live-looking surface (frozen last frame)
+  // while the queue advances. Cleared on the next track, because the store's
+  // currentTrack changing means playback restarted.
+  const [isEnded, setIsEnded] = useState(false);
+  useEffect(() => {
+    const audio = AudioController.getInstance();
+    return audio.on("ended", (identity) => {
+      if (
+        isForeignTrackEvent(
+          identity,
+          usePlayerStore.getState().currentTrack?.id,
+        )
+      ) {
+        return;
+      }
+      setIsEnded(true);
+    });
+  }, []);
+
+  const currentTrackId = currentTrack?.id;
+  useEffect(() => {
+    setIsEnded(false);
+  }, [currentTrackId]);
+
+  const showVideoHost = shouldShowVideoHost({
+    hasTrack: currentTrack !== null,
+    isVideo: isVideoTrack,
+    isOpen,
+    isShellLocked,
+    hasError: errorInfo !== null,
+    hasEnded: isEnded,
+  });
 
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
@@ -111,6 +178,11 @@ export const NowPlayingView = memo(function NowPlayingView({
     );
   }
 
+  // Fullscreen is offered for the VIDEO surface only: it exists to give the
+  // video the window's space. Enlarging the audio cover-art square is not the
+  // same affordance and is not asked for, so the toggle stays hidden there.
+  const showFullscreenToggle = isVideoTrack && onToggleFullscreen !== undefined;
+
   return (
     <main
       className="h-full overflow-hidden flex flex-col relative transition-all duration-1000 ease-in-out"
@@ -150,33 +222,87 @@ export const NowPlayingView = memo(function NowPlayingView({
         </button>
       </div>
 
+      {/* Fullscreen toggle (video only). Mirrors the back button's placement,
+          styling and icon weight, so the exit affordance reads as part of the
+          same surface rather than new chrome. It sits ABOVE the video rect in
+          the content flow, so it never overlaps the native host (which cannot
+          be covered by CSS). */}
+      {showFullscreenToggle && (
+        <div className="absolute top-6 right-6 z-50">
+          <button
+            data-testid="fullscreen-toggle"
+            onClick={onToggleFullscreen}
+            aria-label={
+              isFullscreen
+                ? t("player.exit_fullscreen")
+                : t("player.fullscreen")
+            }
+            className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
+          >
+            {isFullscreen ? (
+              <Minimize className="w-6 h-6" />
+            ) : (
+              <Maximize className="w-6 h-6" />
+            )}
+          </button>
+        </div>
+      )}
+
       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
-        {/* Content group: centered vertically when room, scrolls when not */}
-        <div className="w-full flex flex-col items-center pt-24 md:pt-28 pb-24 md:pb-28">
-          {/* Cover Art Container */}
-          <div className="w-full flex items-center justify-center mt-4 md:mt-8">
-            <div
-              className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center relative" : "bg-gray-100 dark:bg-[#202124]"}`}
-            >
-              {coverUrl ? (
-                <img
-                  src={coverUrl}
-                  alt={t("common.cover_alt")}
-                  decoding="async"
-                  // Single always-visible image: no lazy loading needed (it is
-                  // the LCP candidate). A drplay:// miss (204 NoCover) or a
-                  // decode error falls back to the Music icon — no broken img.
-                  onError={() => {
-                    setCoverUrl(null);
-                  }}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <>
-                  <Music className="w-20 h-20 text-brand-text/40 drop-shadow-sm" />
-                </>
-              )}
-            </div>
+        {/* Content group: centered vertically when room, scrolls when not.
+            In fullscreen the generous pt/pb padding is dropped so the video
+            actually gets the window's height instead of the space left over
+            between the margins. */}
+        <div
+          className={`w-full flex flex-col items-center ${
+            isFullscreen ? "h-full pt-14 pb-4" : "pt-24 md:pt-28 pb-24 md:pb-28"
+          }`}
+        >
+          {/* Player area. A VIDEO track gets the measured surface the native
+              video host is positioned over; an AUDIO track keeps the cover-art
+              square exactly as before. Either way this slot is the FIRST thing
+              in the centered content group and everything below it (info,
+              controls, seekbar) stays structurally outside the video rect —
+              that is what guarantees no React control ever overlaps the HWND. */}
+          <div
+            className={`w-full flex items-center justify-center mt-4 md:mt-8 ${
+              isFullscreen ? "flex-1 min-h-0" : ""
+            }`}
+          >
+            {isVideoTrack ? (
+              <VideoSurface
+                active={showVideoHost}
+                fullscreen={isFullscreen}
+                isPlaying={isPlaying}
+                isBuffering={isBuffering}
+                isDownloading={isDownloading}
+                hasError={errorInfo !== null}
+                isEnded={isEnded}
+              />
+            ) : (
+              <div
+                className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center relative" : "bg-gray-100 dark:bg-[#202124]"}`}
+              >
+                {coverUrl ? (
+                  <img
+                    src={coverUrl}
+                    alt={t("common.cover_alt")}
+                    decoding="async"
+                    // Single always-visible image: no lazy loading needed (it is
+                    // the LCP candidate). A drplay:// miss (204 NoCover) or a
+                    // decode error falls back to the Music icon — no broken img.
+                    onError={() => {
+                      setCoverUrl(null);
+                    }}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <>
+                    <Music className="w-20 h-20 text-brand-text/40 drop-shadow-sm" />
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="w-full max-w-4xl px-4 shrink-0 mt-6 md:mt-8 pb-8">
@@ -214,6 +340,21 @@ export const NowPlayingView = memo(function NowPlayingView({
                 active={isOpen}
                 keyboardSeek={false}
               />
+
+              {/* Volume (F3): the PlayerBar collapses to h-0 while this
+                  overlay is open, so there was NO way to change volume during
+                  full-screen playback (its buttons measured at y=1076 in a
+                  1057px-tall viewport — off-screen). This is the SAME
+                  VolumeSlider the PlayerBar renders, not a second control:
+                  same engine facade, same drag/mute/key handling, and
+                  `alwaysShowRail` because the PlayerBar hides its rail below
+                  `xl`, a breakpoint a 1024x768 window never reaches. */}
+              <div className="flex justify-center mt-4">
+                <VolumeSlider
+                  audio={AudioController.getInstance()}
+                  alwaysShowRail
+                />
+              </div>
             </div>
           </div>
         </div>

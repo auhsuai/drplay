@@ -8,7 +8,7 @@ import { captureError } from "./utils/errorLog";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
 import { useShallow } from "zustand/react/shallow";
 import { TabContentRouter } from "./ui/layouts/TabContentRouter";
-import { AppShell } from "./ui/layouts/AppShell";
+import { AppShell, isShellLocked } from "./ui/layouts/AppShell";
 import { DEBUG_EVENTS, onDebugEvent } from "./ui/debug/debugEvents";
 
 import "./App.css";
@@ -30,6 +30,7 @@ import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
 import { useDriveStore } from "./store/driveStore";
 import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
+import { ensureVideoHostAcquired } from "./lib/videoHost";
 
 import type { Track, TabKey } from "./types";
 
@@ -167,6 +168,11 @@ function App() {
   // value; anything else (missing/corrupt) opens — see sidebarState.
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
+  // Player fullscreen (TASK 1). A REFINEMENT of the overlay, not a second
+  // surface: it is owned here so the Escape handler can peel exactly one
+  // layer (fullscreen -> overlay -> nothing), and it never reaches Rust or
+  // mpv — the native host stays inside the app window either way.
+  const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
 
@@ -228,10 +234,28 @@ function App() {
     activeTab,
   ]);
   const onExpandNowPlaying = useCallback(() => {
-    setIsNowPlayingOpen((prev) => !prev);
+    // `f` collapses as well as expands, so it also leaves fullscreen — the
+    // overlay closing must never leave the fullscreen flag latched.
+    setIsNowPlayingOpen((prev) => {
+      if (prev) setIsPlayerFullscreen(false);
+      return !prev;
+    });
   }, []);
-  const onCloseNowPlaying = useCallback(() => {
+  // Leaving the overlay always leaves fullscreen too: fullscreen is only
+  // meaningful while the overlay is up, and keeping the flag would re-enter it
+  // on the next open.
+  const stableHandleCloseNowPlaying = useCallback(() => {
     setIsNowPlayingOpen(false);
+    setIsPlayerFullscreen(false);
+  }, []);
+  // Entering fullscreen opens the overlay in the same commit, so there is no
+  // frame where `isPlayerFullscreen` is true while the surface is hidden.
+  const stableHandleToggleFullscreen = useCallback(() => {
+    setIsNowPlayingOpen(true);
+    setIsPlayerFullscreen((prev) => !prev);
+  }, []);
+  const stableHandleExitFullscreen = useCallback(() => {
+    setIsPlayerFullscreen(false);
   }, []);
   // Queue drawer state lives at App level: the pane is docked in AppShell's
   // content row, not inside the memoized PlayerBar. Both wrappers keep a
@@ -245,8 +269,10 @@ function App() {
   }, []);
   useNowPlayingShortcuts({
     isOpen: isNowPlayingOpen,
-    onClose: onCloseNowPlaying,
+    onClose: stableHandleCloseNowPlaying,
     onToggle: onExpandNowPlaying,
+    isFullscreen: isPlayerFullscreen,
+    onExitFullscreen: stableHandleExitFullscreen,
   });
 
   const handlePlayTrack = (
@@ -261,6 +287,16 @@ function App() {
   useEffect(() => {
     setAppRootFolderRef.current = setAppRootFolder;
   }, [setAppRootFolder]);
+
+  // Ordering contract (Slice 2): mpv reads `--wid` only at spawn, so the
+  // native video host must exist before the FIRST `mpv_spawn`. Acquiring on
+  // the app-startup path — not lazily on first video play — is what makes that
+  // true: the host exists even in a session that never plays video, and the
+  // engine's own await in startEngine is then a memoized no-op. Fire-and-forget
+  // because a missing host degrades to mpv's own window, never to a failed boot.
+  useEffect(() => {
+    void ensureVideoHostAcquired();
+  }, []);
 
   useEffect(() => {
     saveMinimizeToTrayState(minimizeToTray);
@@ -411,10 +447,15 @@ function App() {
         onPrevTrack={stableHandlePrevTrack}
         playMode={playMode}
         onTogglePlayMode={stableHandleTogglePlayMode}
-        onBack={() => {
-          setIsNowPlayingOpen(false);
-        }}
+        onBack={stableHandleCloseNowPlaying}
         token={accessToken}
+        isShellLocked={isShellLocked(
+          isLoggedIn,
+          appRootFolder,
+          showFolderSelection,
+        )}
+        isFullscreen={isPlayerFullscreen}
+        onToggleFullscreen={stableHandleToggleFullscreen}
       />
     </div>
   );

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DRIVE_FILES_URL } from "./driveFiles";
 import { PAGINATION_PAGE_SIZE } from "./driveConstants";
-import { getFolderAudioQuery } from "./audioQuery";
+import { getFolderMediaQuery } from "./audioQuery";
 import { listFolderAudioFiles } from "./drivePagination";
 import type { DriveFileItem } from "./driveTypes";
 
@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 
 describe("listFolderAudioFiles", () => {
-  it("requests the folder audio query with a nextPageToken-aware mask and follows page tokens", async () => {
+  it("requests the folder MEDIA query with a nextPageToken-aware mask and follows page tokens", async () => {
     driveFetchMock
       .mockResolvedValueOnce(
         jsonResponse({ files: [file("f1", "a.mp3")], nextPageToken: "tok-2" }),
@@ -51,7 +51,11 @@ describe("listFolderAudioFiles", () => {
 
     const first = callUrl(0);
     expect(first.origin + first.pathname).toBe(DRIVE_FILES_URL);
-    expect(first.searchParams.get("q")).toBe(getFolderAudioQuery("folder-1"));
+    // Phase A: the folder walk is the audio|video UNION (add-folder-to-queue
+    // must reach movies too), not the audio-only query.
+    expect(first.searchParams.get("q")).toBe(getFolderMediaQuery("folder-1"));
+    expect(first.searchParams.get("q")).toContain("name contains '.mp3'");
+    expect(first.searchParams.get("q")).toContain("name contains '.mkv'");
     expect(first.searchParams.get("fields")).toBe(
       "nextPageToken,files(id,name,mimeType,size)",
     );

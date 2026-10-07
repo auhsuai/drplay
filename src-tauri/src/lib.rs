@@ -14,6 +14,8 @@ mod seed;
 mod mpv;
 #[cfg(windows)]
 mod media_controls;
+#[cfg(windows)]
+mod video_host;
 mod stream_proxy;
 
 use auth::{login_google_native, refresh_google_token};
@@ -22,6 +24,8 @@ use memory::{apply_window_activity, WindowActivityEvent};
 use mpv::{mpv_command, mpv_get_property, mpv_kill_sync_best_effort, mpv_shutdown, mpv_spawn};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
+#[cfg(windows)]
+use video_host::{video_host_acquire, video_host_set_rect, video_host_set_visible};
 
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
@@ -250,6 +254,9 @@ pub fn run() {
             #[cfg(windows)] mpv_get_property,
             #[cfg(windows)] mpv_shutdown,
             #[cfg(windows)] media_controls::media_controls_update,
+            #[cfg(windows)] video_host_acquire,
+            #[cfg(windows)] video_host_set_rect,
+            #[cfg(windows)] video_host_set_visible,
         ])
         .build(tauri::generate_context!());
 
@@ -270,6 +277,12 @@ pub fn run() {
                 // this handler entirely are still covered by KILL_ON_JOB_CLOSE.
                 #[cfg(windows)]
                 mpv_kill_sync_best_effort(app_handle);
+                // The video host is OUR child window, not mpv's, so nothing
+                // else reclaims it: destroying it here is what keeps a
+                // painting surface from outliving the app. A no-op when no host
+                // was ever acquired (audio-only session).
+                #[cfg(windows)]
+                video_host::destroy();
             }
             _ => {}
     });

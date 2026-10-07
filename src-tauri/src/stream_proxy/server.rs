@@ -45,7 +45,9 @@ const BODY_ERROR_STATUS: u16 = 502;
 /// Status reported to the error sink when the upstream body goes idle
 /// mid-stream and the response is aborted. The client has already received
 /// 200/206 and sees a broken body instead; 499 never appears on the wire.
-const IDLE_ABORT_STATUS: u16 = 499;
+/// `pub(crate)` so stream_proxy's own tests can assert the exact reported status
+/// instead of hardcoding 499 next to the constant.
+pub(crate) const IDLE_ABORT_STATUS: u16 = 499;
 
 /// Redirect hops we are willing to follow manually before giving up (502).
 const MAX_REDIRECTS: usize = 5;
@@ -305,6 +307,14 @@ where
     }
 }
 
+/// KNOWN LIMITATION (verified 2026-10-07 by grep: `resourceKey` appears nowhere
+/// in this crate): a link-shared file that needs `?resourceKey=` cannot be
+/// streamed. `handle_request` takes `uri().path()` only, so a client cannot even
+/// pass one through, and the upstream URL below is built from the file id alone.
+/// That matches R7 in the investigation report and is deliberately NOT fixed
+/// here: wiring resourceKey means changing the Drive/auth layer, which is out of
+/// this slice's scope. Consequence: a Shared-Drive or link-shared movie shows up
+/// in the library but fails to play with a 404/403 from the proxy.
 fn build_upstream_url(base_url: &str, file_id: &str) -> Result<url::Url, (u16, String)> {
     url::Url::parse(&format!("{base_url}/drive/v3/files/{file_id}?alt=media"))
         .map_err(|e| (400u16, format!("failed to build upstream URL: {e}")))

@@ -118,15 +118,110 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
     // A freshly spawned mpv starts at volume 100 — the engine re-applies the
     // facade volume (default 1.0) right after spawn, before the loadfile.
     expect(commandNames().filter((n) => n !== "mpv_command")).toEqual([
+      // Slice 2: mpv reads `--wid` at spawn, so the native video host is
+      // acquired first — the whole reason this call exists ahead of spawn.
+      "video_host_acquire",
       "mpv_spawn",
       "stream_proxy_start",
     ]);
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      // Phase B: `video` is process-global like `pause`, so every load sets it
+      // first — `no` for an audio track, exactly the old `--no-video` behavior.
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       // H2 fix: a fresh load always clears mpv's process-global pause flag.
       ["set_property", "pause", "no"],
     ]);
+  });
+
+  // --- Phase B: the `video` property is set per track, before the loadfile ---
+  //
+  // mpv's `video` is a PROCESS-GLOBAL option (exactly like `pause`), so it must
+  // be set on every load — a video->audio switch would otherwise keep the
+  // video output open. It is a runtime property, not a spawn flag, so this is
+  // one command on the existing IPC with no respawn.
+  const videoTrack: Track = {
+    id: "V",
+    title: "Movie",
+    artist: "",
+    streamUrl: "/drive-stream/V",
+    originalName: "Movie.mkv",
+  };
+  const mp4Track: Track = { ...videoTrack, id: "P", originalName: "Clip.MP4" };
+
+  it("an AUDIO track sets video=no before its loadfile (byte-identical to the old --no-video)", async () => {
+    await ctrl.playTrack(trackA);
+
+    const cmds = mpvCommands();
+    const videoIdx = cmds.findIndex(
+      (c) => c[0] === "set_property" && c[1] === "video",
+    );
+    const loadIdx = cmds.findIndex((c) => c[0] === "loadfile");
+    expect(
+      videoIdx,
+      `no video set in ${JSON.stringify(cmds)}`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(cmds[videoIdx]).toEqual(["set_property", "video", "no"]);
+    expect(videoIdx).toBeLessThan(loadIdx);
+  });
+
+  it("a VIDEO track sets video on before its loadfile", async () => {
+    await ctrl.playTrack(videoTrack);
+
+    const cmds = mpvCommands();
+    const videoIdx = cmds.findIndex(
+      (c) => c[0] === "set_property" && c[1] === "video",
+    );
+    const loadIdx = cmds.findIndex((c) => c[0] === "loadfile");
+    expect(cmds[videoIdx]).toEqual(["set_property", "video", "1"]);
+    expect(videoIdx).toBeLessThan(loadIdx);
+  });
+
+  it("a video track streams from the SAME localhost proxy URL — no new scheme, no token", async () => {
+    await ctrl.playTrack(videoTrack);
+
+    expect(mpvCommands()).toContainEqual([
+      "loadfile",
+      `${PROXY_URL_PREFIX}V`,
+      "replace",
+    ]);
+    const loadCmd = mpvCommands().find((c) => c[0] === "loadfile");
+    expect(loadCmd?.[1]).toBe(
+      `http://127.0.0.1:${String(PROXY_PORT)}/stream/V`,
+    );
+    expect(loadCmd?.join(" ")).not.toMatch(/googleapis|access_token|Bearer/i);
+  });
+
+  it("case-insensitive: Clip.MP4 is video too", async () => {
+    await ctrl.playTrack(mp4Track);
+    expect(mpvCommands()).toContainEqual(["set_property", "video", "1"]);
+  });
+
+  it("video -> audio switch turns the video output back off (process-global property)", async () => {
+    await ctrl.playTrack(videoTrack);
+    tauriMocks.invoke.mockClear();
+
+    await ctrl.playTrack(trackA);
+
+    const cmds = mpvCommands();
+    const videoCmds = cmds.filter((c) => c[1] === "video");
+    expect(videoCmds).toEqual([["set_property", "video", "no"]]);
+    const videoIdx = cmds.findIndex((c) => c[1] === "video");
+    const loadIdx = cmds.findIndex((c) => c[0] === "loadfile");
+    expect(videoIdx).toBeLessThan(loadIdx);
+  });
+
+  it("an unknown/unclassifiable name defaults to video=no (today's behavior)", async () => {
+    await ctrl.playTrack({ ...trackA, originalName: "notes.txt" });
+    expect(mpvCommands()).toContainEqual(["set_property", "video", "no"]);
+  });
+
+  it("a track with NO name at all still sets video=no (never throws)", async () => {
+    const noName = { ...trackA };
+    delete (noName as { originalName?: string }).originalName;
+    await ctrl.playTrack(noName);
+    expect(mpvCommands()).toContainEqual(["set_property", "video", "no"]);
   });
 
   it("second playTrack: port cached and mpv NOT respawned — only the loadfile command", async () => {
@@ -135,8 +230,15 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
 
     await ctrl.playTrack(trackB);
 
-    expect(commandNames()).toEqual(["mpv_command", "mpv_command"]);
+    // No respawn and no second proxy start: just the per-load video property
+    // and the loadfile itself.
+    expect(commandNames()).toEqual([
+      "mpv_command",
+      "mpv_command",
+      "mpv_command",
+    ]);
     expect(mpvCommands()).toEqual([
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -160,6 +262,7 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
     await ctrl.playTrack(trackA);
 
     expect(mpvCommands()).toEqual([
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -173,6 +276,7 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
     await ctrl.playTrack(trackB);
 
     expect(mpvCommands()).toEqual([
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -753,6 +857,7 @@ describe("MpvAudioController — transport", () => {
     // before asserting the recorded commands.
     await vi.advanceTimersByTimeAsync(0);
     expect(mpvCommands()).toEqual([
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}A`, "replace"],
       ["set_property", "pause", "no"],
     ]);
@@ -810,11 +915,15 @@ describe("MpvAudioController — release lifecycle", () => {
     await ctrl.playTrack(trackB);
 
     expect(commandNames().filter((n) => n !== "mpv_command")).toEqual([
+      // Slice 2: mpv reads `--wid` at spawn, so the native video host is
+      // acquired first — the whole reason this call exists ahead of spawn.
+      "video_host_acquire",
       "mpv_spawn",
       "stream_proxy_start",
     ]);
     expect(mpvCommands()).toEqual([
       ["set_property", "volume", "100"],
+      ["set_property", "video", "no"],
       ["loadfile", `${PROXY_URL_PREFIX}B`, "replace"],
       ["set_property", "pause", "no"],
     ]);
