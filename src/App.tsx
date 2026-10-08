@@ -30,7 +30,19 @@ import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
 import { useDriveStore } from "./store/driveStore";
 import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
+import { usePlayerCommands } from "./player/usePlayerCommands";
+import {
+  openVideoMenuSection,
+  useVideoContextMenu,
+} from "./player/useVideoContextMenu";
+import type { MenuSection } from "./player/menuModel";
+import { onPlayerUi } from "./player/playerUiBus";
+import type { PlayerCommandContext } from "./player/commands";
+import { MediaInfoDialog } from "./ui/NowPlaying/components/MediaInfoDialog";
+import { AudioController } from "./lib/AudioController";
 import { ensureVideoHostAcquired } from "./lib/videoHost";
+import { classifyMediaKind, MEDIA_KIND_VIDEO } from "./utils/mediaKind";
+import { showErrorToast, showSuccessToast } from "./utils/simpleToast";
 
 import type { Track, TabKey } from "./types";
 
@@ -158,6 +170,7 @@ function App() {
     handlePrevTrack,
     handleTogglePlay,
     handleTogglePlayMode,
+    handleSetPlayMode,
     loadNonce,
   } = usePlayer(accessToken);
 
@@ -175,6 +188,12 @@ function App() {
   const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
+  // Media Information dialog (D2b): owned here because the player-ui bus
+  // (PLAYER_MEDIA_INFO command) and the menu both open it.
+  const [isMediaInfoOpen, setIsMediaInfoOpen] = useState(false);
+  const handleCloseMediaInfo = useCallback(() => {
+    setIsMediaInfoOpen(false);
+  }, []);
 
   // F1 fix — TRUE ref-delegate wrappers (pattern: usePlayer.ts
   // stableHandlePlayTrack/handlePlayTrackRef). The PlayerBar memo comparator
@@ -270,10 +289,77 @@ function App() {
   useNowPlayingShortcuts({
     isOpen: isNowPlayingOpen,
     onClose: stableHandleCloseNowPlaying,
-    onToggle: onExpandNowPlaying,
     isFullscreen: isPlayerFullscreen,
     onExitFullscreen: stableHandleExitFullscreen,
   });
+
+  // Single global player keydown registry (transport, seek, volume, video
+  // controls). Escape stays with useNowPlayingShortcuts above — the registry
+  // deliberately ignores it. The callbacks are the exact ones the PlayerBar /
+  // NowPlaying controls already use, so keyboard and buttons cannot drift.
+  // The SAME context object feeds the D2b video context menu: one wiring, two
+  // consumers, so a command can never mean different things per surface.
+  const playerCommandContext: PlayerCommandContext = {
+    audio: AudioController.getInstance(),
+    isFullscreen: isPlayerFullscreen,
+    toggleFullscreen: stableHandleToggleFullscreen,
+    toggleQueue: stableHandleToggleQueue,
+    isQueueOpen,
+    selectTrack: stableHandleSelectTrack,
+    togglePlay: stableHandleTogglePlay,
+    next: stableHandleNextTrack,
+    previous: stableHandlePrevTrack,
+    togglePlayMode: stableHandleTogglePlayMode,
+    setPlayMode: handleSetPlayMode,
+  };
+  usePlayerCommands(playerCommandContext);
+
+  // Right-click on the native video host (event from video_host.rs) opens the
+  // native context menu. Only active while a VIDEO track is loaded — the host
+  // (and thus the event) only exists in that state anyway.
+  const isVideoActive =
+    currentTrack !== null &&
+    classifyMediaKind(currentTrack.originalName ?? currentTrack.title) ===
+      MEDIA_KIND_VIDEO;
+  useVideoContextMenu({ ctx: playerCommandContext, isVideoActive });
+
+  // D3: the video playerbar's Audio/Subtitle/More buttons open the same native
+  // menu sections as the right-click submenus. Stable identity through a
+  // ref-delegate (the same F1 pattern the transport wrappers use) so the
+  // memoized NowPlayingView is not invalidated on every App render; the ref
+  // always holds the freshest command context + fullscreen state.
+  const openVideoPlayerMenuRef =
+    useRef<(section: MenuSection) => void>(undefined);
+  const stableOpenVideoPlayerMenu = useCallback((section: MenuSection) => {
+    openVideoPlayerMenuRef.current?.(section);
+  }, []);
+  useEffect(() => {
+    openVideoPlayerMenuRef.current = (section: MenuSection) => {
+      void openVideoMenuSection(
+        section,
+        playerCommandContext,
+        isPlayerFullscreen,
+      );
+    };
+  });
+
+  // Player-ui bus: commands that need a React effect instead of an mpv call.
+  // Subscribed once (App is the only owner of the dialog/toast surfaces).
+  useEffect(() => {
+    return onPlayerUi((event) => {
+      if (event.kind === "media-info") {
+        setIsMediaInfoOpen(true);
+        return;
+      }
+      if (event.kind === "toast") {
+        if (event.payload.variant === "success") {
+          showSuccessToast(event.payload.message);
+        } else {
+          showErrorToast(event.payload.message);
+        }
+      }
+    });
+  }, []);
 
   const handlePlayTrack = (
     track: Track,
@@ -456,6 +542,18 @@ function App() {
         )}
         isFullscreen={isPlayerFullscreen}
         onToggleFullscreen={stableHandleToggleFullscreen}
+        isMediaInfoOpen={isMediaInfoOpen}
+        onOpenPlayerMenu={stableOpenVideoPlayerMenu}
+      />
+
+      {/* Media Information dialog (D2b). Rendered above the z-[9999] overlay;
+          while open, NowPlayingView hides the native video host so the dialog
+          is not painted over by it. Keyed by open-state so every open starts
+          from a fresh (loading) component — no stale-data frame. */}
+      <MediaInfoDialog
+        key={isMediaInfoOpen ? "media-info-open" : "media-info-closed"}
+        open={isMediaInfoOpen}
+        onClose={handleCloseMediaInfo}
       />
     </div>
   );

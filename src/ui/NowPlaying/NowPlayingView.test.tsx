@@ -121,6 +121,7 @@ function baseProps() {
     isOpen: true,
     token: "tok",
     isShellLocked: false,
+    isMediaInfoOpen: false,
   };
 }
 

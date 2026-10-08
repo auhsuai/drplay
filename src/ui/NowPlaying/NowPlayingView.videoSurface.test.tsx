@@ -63,7 +63,9 @@ vi.mock("./hooks/useNowPlayingMetadata", () => ({
     bgPalette: [],
   }),
 }));
-vi.mock("../components/SeekBar", () => ({ SeekBar: () => null }));
+vi.mock("../components/SeekBar", () => ({
+  SeekBar: () => <div data-testid="seekbar-stub" />,
+}));
 
 const AUDIO: Track = {
   id: "a",
@@ -93,6 +95,7 @@ function baseProps() {
     isOpen: true,
     token: "tok",
     isShellLocked: false,
+    isMediaInfoOpen: false,
   };
 }
 
@@ -210,7 +213,7 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     ).toBeNull();
   });
 
-  it("entering fullscreen swaps the surface size class and KEEPS the controls", () => {
+  it("entering fullscreen swaps the fill rounding and KEEPS the controls", () => {
     const props = baseProps();
     const { container, rerender } = render(
       <NowPlayingView
@@ -221,7 +224,15 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     );
 
     const before = surfaceBox(container).className;
-    expect(before).toContain("xl:w-[min(560px,60vh)]");
+    // D3 media-player layout: the video fills its flow area in BOTH states —
+    // only the rounding changes when going edge-to-edge.
+    expect(before).toContain("w-full");
+    expect(before).toContain("h-full");
+    expect(before).toContain("rounded-xl");
+    expect(before).not.toContain("aspect-video");
+    expect(
+      container.querySelector("[data-testid='video-player-bar']"),
+    ).not.toBeNull();
 
     rerender(
       <NowPlayingView
@@ -232,11 +243,14 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
       />,
     );
 
-    expect(surfaceBox(container).className).toContain("w-full");
+    expect(surfaceBox(container).className).toContain("rounded-none");
     // DrPlay's own chrome is still there — fullscreen does not hide it.
     expect(container.querySelector("button.bg-brand-primary")).not.toBeNull();
     expect(
       container.querySelector("[data-testid='fullscreen-toggle']"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("[data-testid='video-player-bar']"),
     ).not.toBeNull();
     // Still exactly ONE surface.
     expect(
@@ -309,7 +323,7 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     expect(visibleCalls()).toEqual([true]);
   });
 
-  it("leaving fullscreen restores the capped size and keeps the host up", () => {
+  it("leaving fullscreen restores the rounded fill and keeps the host up", () => {
     const props = baseProps();
     const { container, rerender } = render(
       <NowPlayingView
@@ -319,7 +333,7 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
         onToggleFullscreen={vi.fn()}
       />,
     );
-    expect(surfaceBox(container).className).toContain("w-full");
+    expect(surfaceBox(container).className).toContain("rounded-none");
 
     rerender(
       <NowPlayingView
@@ -329,7 +343,9 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
       />,
     );
 
-    expect(surfaceBox(container).className).toContain("xl:w-[min(560px,60vh)]");
+    expect(surfaceBox(container).className).toContain("rounded-xl");
+    expect(surfaceBox(container).className).not.toContain("rounded-none");
+    expect(surfaceBox(container).className).not.toContain("aspect-video");
     expect(visibleCalls()).toEqual([true]);
   });
 
@@ -429,6 +445,18 @@ describe("host visibility matrix", () => {
     rerender(<NowPlayingView {...baseProps()} currentTrack={VIDEO_2} />);
 
     expect(visibleCalls()).toEqual([true]);
+  });
+
+  it("opening the media info dialog hides the host, closing it brings the video back", () => {
+    const { rerender } = render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
+    );
+    rerender(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} isMediaInfoOpen />,
+    );
+    rerender(<NowPlayingView {...baseProps()} currentTrack={VIDEO} />);
+
+    expect(visibleCalls()).toEqual([true, false, true]);
   });
 });
 
@@ -549,37 +577,31 @@ describe("ended: the surface stops looking live", () => {
 // control), and the PlayerBar keeps its own untouched.
 // ---------------------------------------------------------------------------
 describe("volume is reachable in the player surface", () => {
-  it("renders the shared VolumeSlider rail inside the surface", () => {
+  it("renders the shared VolumeSlider rail inside the video bar (default responsive form)", () => {
     const { container } = render(
       <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
     );
     // Same data-testid as the PlayerBar's, so it is provably the same control.
-    expect(
-      container.querySelector("[data-testid='volume-bar']"),
-    ).not.toBeNull();
+    const rail = container.querySelector<HTMLElement>(
+      "[data-testid='volume-bar']",
+    );
+    expect(rail).not.toBeNull();
+    // D3/§33: the video bar keeps VolumeSlider's DEFAULT responsive rail
+    // (appears from the xl breakpoint up) — the mute icon stays clickable.
+    expect(rail?.className).toContain("hidden");
+    expect(rail?.className).toContain("xl:flex");
   });
 
   it("is present for AUDIO too — the whole surface lacked volume, not just video", () => {
     const { container } = render(
       <NowPlayingView {...baseProps()} currentTrack={AUDIO} />,
     );
-    expect(
-      container.querySelector("[data-testid='volume-bar']"),
-    ).not.toBeNull();
-  });
-
-  it("the rail is REACHABLE here: the PlayerBar hides its track below xl", () => {
-    const { container } = render(
-      <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
-    );
     const rail = container.querySelector<HTMLElement>(
       "[data-testid='volume-bar']",
     );
-    if (!rail) throw new Error("volume rail not rendered");
-    // PlayerBar's copy is `hidden xl:flex` (1024x768 window -> never reaches
-    // xl). In the surface it must be unconditionally visible.
-    expect(rail.className).not.toContain("hidden");
-    expect(rail.className).toContain("flex");
+    expect(rail).not.toBeNull();
+    // Audio keeps the old alwaysShowRail contract: no hidden rail.
+    expect(rail?.className).not.toContain("hidden");
   });
 
   it("stays present in fullscreen", () => {
@@ -594,5 +616,97 @@ describe("volume is reachable in the player surface", () => {
     expect(
       container.querySelector("[data-testid='volume-bar']"),
     ).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Media-player video layout (D3 / spec §15/§16/§34). Video mode becomes a
+// single column: the video fills the flexible area, ONE horizontal bar with
+// every control sits at the bottom. Audio mode is untouched.
+// ---------------------------------------------------------------------------
+describe("video mode uses the horizontal media-player layout (D3)", () => {
+  function surface(container: HTMLElement): HTMLElement {
+    const box = container.querySelector<HTMLElement>(
+      "[data-testid='video-surface']",
+    );
+    if (!box) throw new Error("video surface not rendered");
+    return box;
+  }
+
+  it("renders the bottom bar and drops the stacked info/controls/seekbar", () => {
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+
+    expect(
+      container.querySelector("[data-testid='video-player-bar']"),
+    ).not.toBeNull();
+    // The old vertical stack (big title/artist block) is gone…
+    expect(container.querySelector("h1")).toBeNull();
+    // …and the ONE seekbar lives inside the bar, not standalone.
+    expect(
+      container.querySelectorAll("[data-testid='seekbar-stub']"),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector(
+        "[data-testid='video-player-bar'] [data-testid='seekbar-stub']",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("puts the video in the flexible area directly above the bar (flex-1 min-h-0)", () => {
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+
+    const area = surface(container).parentElement;
+    if (!area) throw new Error("video area not found");
+    expect(area.className).toContain("flex-1");
+    expect(area.className).toContain("min-h-0");
+    // The bar is the area's NEXT sibling: no overlap with the native rect.
+    expect(area.nextElementSibling).toBe(
+      container.querySelector("[data-testid='video-player-bar']"),
+    );
+    // No aspect-video on the fill surface (spec §16).
+    expect(surface(container).className).not.toContain("aspect-video");
+  });
+
+  it("keeps the same structure in fullscreen (bar stays at the bottom, §17)", () => {
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+
+    const area = surface(container).parentElement;
+    if (!area) throw new Error("video area not found");
+    expect(area.className).toContain("flex-1");
+    expect(area.className).toContain("min-h-0");
+    expect(
+      container.querySelector("[data-testid='video-player-bar']"),
+    ).not.toBeNull();
+  });
+
+  it("AUDIO mode never renders the video bar — the old stacked layout is intact", () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={AUDIO} />,
+    );
+
+    expect(
+      container.querySelector("[data-testid='video-player-bar']"),
+    ).toBeNull();
+    // The stacked info block (big title) is still there for audio.
+    expect(container.querySelector("h1")).not.toBeNull();
   });
 });

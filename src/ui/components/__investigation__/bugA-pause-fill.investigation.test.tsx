@@ -133,12 +133,7 @@ describe("Bug A investigation — pause + fill/clock", () => {
 
     const track = makeTrack({ id: "track-A" });
     const { rerender } = render(
-      <SeekBar
-        currentTrack={track}
-        audio={audio}
-        active={false}
-        keyboardSeek={false}
-      />,
+      <SeekBar currentTrack={track} audio={audio} active={false} />,
     );
 
     // While the view is closed the track played to 1:03 — the inactive
@@ -151,14 +146,7 @@ describe("Bug A investigation — pause + fill/clock", () => {
     // User PAUSES at 1:03 (from now on mpv pushes nothing), then opens the
     // NowPlaying view. Activation re-subscribes to timeupdate but no event
     // will ever arrive — the bar must resync from the engine clock instead.
-    rerender(
-      <SeekBar
-        currentTrack={track}
-        audio={audio}
-        active={true}
-        keyboardSeek={false}
-      />,
-    );
+    rerender(<SeekBar currentTrack={track} audio={audio} active={true} />);
 
     expect(screen.getByTestId("progress-fill").style.width).toBe("26.25%");
     expect(screen.getByText("1:03")).toBeTruthy();
@@ -172,12 +160,7 @@ describe("Bug A investigation — pause + fill/clock", () => {
 
     const track = makeTrack({ id: "track-A" });
     const { rerender } = render(
-      <SeekBar
-        currentTrack={track}
-        audio={audio}
-        active={false}
-        keyboardSeek={false}
-      />,
+      <SeekBar currentTrack={track} audio={audio} active={false} />,
     );
 
     act(() => {
@@ -185,14 +168,7 @@ describe("Bug A investigation — pause + fill/clock", () => {
     });
     expect(screen.getByTestId("progress-fill").style.width).toBe("0%");
 
-    rerender(
-      <SeekBar
-        currentTrack={track}
-        audio={audio}
-        active={true}
-        keyboardSeek={false}
-      />,
-    );
+    rerender(<SeekBar currentTrack={track} audio={audio} active={true} />);
     expect(screen.getByTestId("progress-fill").style.width).toBe("26.25%");
     expect(screen.getByText("1:03")).toBeTruthy();
 

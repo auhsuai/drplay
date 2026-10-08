@@ -3,28 +3,23 @@ import { useEffect } from "react";
 export interface UseNowPlayingShortcutsParams {
   isOpen: boolean;
   onClose: () => void;
-  onToggle: () => void;
   /** Player fullscreen is active (a refinement of the overlay). */
   isFullscreen?: boolean;
   /** Leave fullscreen, staying in the Now Playing overlay. */
   onExitFullscreen?: () => void;
 }
 
-// Global NowPlaying overlay shortcuts (f to toggle, Escape to close).
-// Mirrors the guard order of useKeyboardShortcuts / useSeekKeyboard:
-// editable focus first, then modifier chords, so typing "f" in a field and
-// Ctrl+F search are never stolen. Shift is intentionally NOT treated as a
-// blocking modifier so Shift+F (e.key "F") still toggles.
+// Global NowPlaying overlay Escape handling (layering: fullscreen -> overlay ->
+// nothing). F/f moved to the player command registry (PLAYER_FULLSCREEN), so
+// this hook is the ONLY Escape owner and cannot fight the registry, which
+// deliberately ignores Escape.
 //
 // Escape peels ONE layer at a time: fullscreen -> overlay -> nothing. A single
 // Escape must never close the whole surface from inside fullscreen; that is
-// what makes fullscreen escapable without a mouse. Owning this here (rather
-// than in a second keydown listener) is why it cannot fight
-// useKeyboardShortcuts: there is exactly one Escape handler in the app.
+// what makes fullscreen escapable without a mouse.
 export function useNowPlayingShortcuts({
   isOpen,
   onClose,
-  onToggle,
   isFullscreen = false,
   onExitFullscreen,
 }: UseNowPlayingShortcutsParams): void {
@@ -38,26 +33,19 @@ export function useNowPlayingShortcuts({
       )
         return;
 
-      if (e.key === "Escape") {
-        // Deepest layer first. isFullscreen implies the overlay is open, so
-        // this needs no separate open check.
-        if (isFullscreen && onExitFullscreen) {
-          onExitFullscreen();
-          return;
-        }
-        if (isOpen) onClose();
+      if (e.key !== "Escape") return;
+
+      // Deepest layer first. isFullscreen implies the overlay is open, so
+      // this needs no separate open check.
+      if (isFullscreen && onExitFullscreen) {
+        onExitFullscreen();
         return;
       }
-
-      if (e.key === "f" || e.key === "F") {
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.repeat) return;
-        onToggle();
-      }
+      if (isOpen) onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, onClose, onToggle, isFullscreen, onExitFullscreen]);
+  }, [isOpen, onClose, isFullscreen, onExitFullscreen]);
 }

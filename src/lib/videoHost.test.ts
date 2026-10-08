@@ -90,6 +90,7 @@ describe("shouldShowVideoHost — the whole visibility rule", () => {
     isShellLocked: false,
     hasError: false,
     hasEnded: false,
+    isMediaInfoOpen: false,
   };
 
   const cases: Array<[string, Partial<typeof shown>, boolean]> = [
@@ -106,6 +107,11 @@ describe("shouldShowVideoHost — the whole visibility rule", () => {
     [
       "ended -> hidden (a frozen last frame must not keep looking live)",
       { hasEnded: true },
+      false,
+    ],
+    [
+      "media info dialog open -> hidden (the dialog must cover the video area)",
+      { isMediaInfoOpen: true },
       false,
     ],
     ["audio + open -> hidden", { isVideo: false, hasError: false }, false],

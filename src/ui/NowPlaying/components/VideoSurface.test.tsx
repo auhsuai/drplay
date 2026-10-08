@@ -485,3 +485,52 @@ describe("VideoSurface fullscreen sizing", () => {
     expect(fs).toContain("overflow-hidden");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fill mode (D3). Inside the media-player layout the surface is the flexible
+// row's only child: it fills the box the parent already owns instead of the
+// fixed 16:9 ladder, so the video takes the window it has (spec §16/§34).
+// fill=false (the default) must keep the old classes for every other caller.
+// ---------------------------------------------------------------------------
+describe("VideoSurface fill mode (media-player layout)", () => {
+  function classes(props: { fill?: boolean; fullscreen?: boolean }): string {
+    const { container } = render(<VideoSurface active {...props} />);
+    const box = container.querySelector<HTMLElement>(
+      "[data-testid='video-surface']",
+    );
+    if (!box) throw new Error("surface not rendered");
+    return box.className;
+  }
+
+  it("fill=true stretches to the parent box: no aspect-video, no width ladder", () => {
+    const cls = classes({ fill: true });
+
+    expect(cls).toContain("w-full");
+    expect(cls).toContain("h-full");
+    expect(cls).not.toContain("aspect-video");
+    expect(cls).not.toContain("w-[min(16rem,60vh)]");
+    expect(cls).not.toContain("xl:w-[min(560px,60vh)]");
+    // The design language the surface always had is untouched.
+    expect(cls).toContain("rounded-xl");
+    expect(cls).toContain("overflow-hidden");
+  });
+
+  it("fill + fullscreen goes edge-to-edge (rounded-none), still without the 16:9 box", () => {
+    const cls = classes({ fill: true, fullscreen: true });
+
+    expect(cls).toContain("w-full");
+    expect(cls).toContain("h-full");
+    expect(cls).toContain("rounded-none");
+    expect(cls).not.toContain("rounded-xl");
+    expect(cls).not.toContain("aspect-video");
+    expect(cls).toContain("overflow-hidden");
+  });
+
+  it("fill=false keeps the default (old) ladder exactly", () => {
+    const cls = classes({});
+
+    expect(cls).toContain("aspect-video");
+    expect(cls).toContain("xl:w-[min(560px,60vh)]");
+    expect(cls).toContain("rounded-2xl");
+  });
+});

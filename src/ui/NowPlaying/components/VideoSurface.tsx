@@ -28,6 +28,14 @@ interface VideoSurfaceProps {
    * letterboxes inside it exactly as before — only the box grew.
    */
   fullscreen?: boolean;
+  /**
+   * Fill the parent's box instead of the fixed 16:9 ladder (D3 media-player
+   * layout): the Now Playing video mode owns a flexible area and puts its bar
+   * outside it, so the surface takes exactly that area — no `aspect-video`
+   * (spec §16), and `fullscreen` only changes the corner rounding then.
+   * Default `false` keeps every existing class for other callers.
+   */
+  fill?: boolean;
   /** Playback is running (paused is NOT loading — see the spinner condition). */
   isPlaying?: boolean;
   /** mpv's `paused-for-cache` is set (the engine buffering event). */
@@ -60,6 +68,7 @@ interface VideoSurfaceProps {
 export function VideoSurface({
   active,
   fullscreen = false,
+  fill = false,
   isPlaying = false,
   isBuffering = false,
   isDownloading = false,
@@ -232,20 +241,26 @@ export function VideoSurface({
   const isLoading =
     !hasError && !isEnded && (isDownloading || (isBuffering && isPlaying));
 
-  return (
-    // Measuring box. Sizing ladder matches the cover-art container verbatim
-    // (aspect-video instead of aspect-square); fullscreen swaps ONLY the width
-    // cap for `w-full` so the video fills the window it already has. The rect
-    // synchroniser above is size-agnostic, so it re-sends the new rect on the
-    // same rAF-coalesced path as any other resize.
-    <div
-      ref={boxRef}
-      data-testid="video-surface"
-      className={`${
+  // Fill mode (D3): the parent already owns the space, so the box follows it
+  // (`w-full h-full`) and only the rounding distinguishes windowed (rounded-xl)
+  // from fullscreen (edge-to-edge). Default mode keeps the cover-art ladder
+  // verbatim, with `aspect-video` instead of `aspect-square`.
+  const sizeClasses = fill
+    ? `w-full h-full ${fullscreen ? "rounded-none" : "rounded-xl"}`
+    : `${
         fullscreen
           ? "w-full max-w-full max-h-full"
           : "w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full"
-      } aspect-video h-auto rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center`}
+      } aspect-video h-auto rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)]`;
+
+  return (
+    // Measuring box. The rect synchroniser above is size-agnostic, so it
+    // re-sends the new rect on the same rAF-coalesced path as any other
+    // resize — fill mode only changes the class box.
+    <div
+      ref={boxRef}
+      data-testid="video-surface"
+      className={`${sizeClasses} overflow-hidden transition-all duration-700 bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center`}
     >
       {isLoading && (
         <>

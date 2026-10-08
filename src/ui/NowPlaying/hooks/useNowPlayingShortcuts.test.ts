@@ -12,111 +12,44 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("useNowPlayingShortcuts", () => {
+describe("useNowPlayingShortcuts (Escape layering only)", () => {
   it("calls onClose once on Escape when open", () => {
     const onClose = vi.fn();
-    const onToggle = vi.fn();
     renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: true, onClose, onToggle });
+      useNowPlayingShortcuts({ isOpen: true, onClose });
     });
     pressKey("Escape");
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onToggle).not.toHaveBeenCalled();
   });
 
   it("does nothing on Escape when closed", () => {
     const onClose = vi.fn();
-    const onToggle = vi.fn();
     renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: false, onClose, onToggle });
+      useNowPlayingShortcuts({ isOpen: false, onClose });
     });
     pressKey("Escape");
-    expect(onClose).not.toHaveBeenCalled();
-    expect(onToggle).not.toHaveBeenCalled();
-  });
-
-  it("calls onToggle on f when closed", () => {
-    const onClose = vi.fn();
-    const onToggle = vi.fn();
-    renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: false, onClose, onToggle });
-    });
-    pressKey("f");
-    expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it("calls onToggle on f when open", () => {
-    const onClose = vi.fn();
-    const onToggle = vi.fn();
-    renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: true, onClose, onToggle });
-    });
-    pressKey("f");
-    expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it("toggles on uppercase F (case-insensitive)", () => {
-    const onClose = vi.fn();
-    const onToggle = vi.fn();
-    renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: false, onClose, onToggle });
-    });
-    pressKey("F");
-    expect(onToggle).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores f while focus is inside an input", () => {
-    const onClose = vi.fn();
-    const onToggle = vi.fn();
-    renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: false, onClose, onToggle });
-    });
-    const input = document.createElement("input");
-    document.body.appendChild(input);
-    input.focus();
-    pressKey("f");
-    expect(onToggle).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
 
   it("ignores Escape while focus is inside an input", () => {
     const onClose = vi.fn();
-    const onToggle = vi.fn();
     renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: true, onClose, onToggle });
+      useNowPlayingShortcuts({ isOpen: true, onClose });
     });
     const input = document.createElement("input");
     document.body.appendChild(input);
     input.focus();
     pressKey("Escape");
     expect(onClose).not.toHaveBeenCalled();
-    expect(onToggle).not.toHaveBeenCalled();
   });
 
-  it("ignores Ctrl+F and does not preventDefault (search keeps working)", () => {
+  it("does not touch f/F (owned by the player command registry now)", () => {
     const onClose = vi.fn();
-    const onToggle = vi.fn();
     renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: false, onClose, onToggle });
+      useNowPlayingShortcuts({ isOpen: true, onClose });
     });
-    const event = new KeyboardEvent("keydown", { key: "f", ctrlKey: true });
-    const preventSpy = vi.spyOn(event, "preventDefault");
-    window.dispatchEvent(event);
-    expect(onToggle).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(preventSpy).not.toHaveBeenCalled();
-  });
-
-  it("ignores repeated f keydown (e.repeat)", () => {
-    const onClose = vi.fn();
-    const onToggle = vi.fn();
-    renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: false, onClose, onToggle });
-    });
-    pressKey("f", { repeat: true });
-    expect(onToggle).not.toHaveBeenCalled();
+    pressKey("f");
+    pressKey("F");
     expect(onClose).not.toHaveBeenCalled();
   });
 });
@@ -128,13 +61,11 @@ describe("useNowPlayingShortcuts", () => {
 describe("useNowPlayingShortcuts fullscreen layer (TASK 1)", () => {
   it("Escape in fullscreen exits fullscreen and does NOT close the overlay", () => {
     const onClose = vi.fn();
-    const onToggle = vi.fn();
     const onExitFullscreen = vi.fn();
     renderHook(() => {
       useNowPlayingShortcuts({
         isOpen: true,
         onClose,
-        onToggle,
         isFullscreen: true,
         onExitFullscreen,
       });
@@ -142,7 +73,6 @@ describe("useNowPlayingShortcuts fullscreen layer (TASK 1)", () => {
     pressKey("Escape");
     expect(onExitFullscreen).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
-    expect(onToggle).not.toHaveBeenCalled();
   });
 
   it("Escape outside fullscreen closes the overlay (unchanged behaviour)", () => {
@@ -152,7 +82,6 @@ describe("useNowPlayingShortcuts fullscreen layer (TASK 1)", () => {
       useNowPlayingShortcuts({
         isOpen: true,
         onClose,
-        onToggle: vi.fn(),
         isFullscreen: false,
         onExitFullscreen,
       });
@@ -169,7 +98,6 @@ describe("useNowPlayingShortcuts fullscreen layer (TASK 1)", () => {
       useNowPlayingShortcuts({
         isOpen: true,
         onClose,
-        onToggle: vi.fn(),
         isFullscreen: true,
         onExitFullscreen,
       });
@@ -182,27 +110,10 @@ describe("useNowPlayingShortcuts fullscreen layer (TASK 1)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("f in fullscreen still toggles the overlay (not stolen by the new layer)", () => {
-    const onToggle = vi.fn();
-    const onExitFullscreen = vi.fn();
-    renderHook(() => {
-      useNowPlayingShortcuts({
-        isOpen: true,
-        onClose: vi.fn(),
-        onToggle,
-        isFullscreen: true,
-        onExitFullscreen,
-      });
-    });
-    pressKey("f");
-    expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onExitFullscreen).not.toHaveBeenCalled();
-  });
-
   it("omitting the fullscreen options keeps the original two-arg contract", () => {
     const onClose = vi.fn();
     renderHook(() => {
-      useNowPlayingShortcuts({ isOpen: true, onClose, onToggle: vi.fn() });
+      useNowPlayingShortcuts({ isOpen: true, onClose });
     });
     pressKey("Escape");
     expect(onClose).toHaveBeenCalledTimes(1);

@@ -25,6 +25,7 @@ function baseProps() {
     onBack: vi.fn(),
     token: null,
     isShellLocked: false,
+    isMediaInfoOpen: false,
   };
 }
 

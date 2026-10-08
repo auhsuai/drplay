@@ -547,44 +547,6 @@ describe("PlayerBar seek redraws buffer bar immediately (no empty blink)", () =>
     fakeController.getDuration.mockReturnValue(240);
   });
 
-  it("BUG regression: ArrowLeft seek redraws the buffer bar synchronously (no empty-blink, stale ranges filtered)", () => {
-    renderPlayer();
-    const buffer = screen.getByTestId("buffer-fill");
-
-    setBuffered([[0, 300]]);
-    act(() => {
-      fakeController._emit("progress");
-    });
-    expect(buffer.childElementCount).toBe(1);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowLeft" });
-    });
-
-    expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    // Immediate redraw at seek time — the bar never flashes empty.
-    expect(buffer.childElementCount).toBe(1);
-  });
-
-  it("BUG regression: ArrowRight seek redraws the buffer bar synchronously (no empty-blink, stale ranges filtered)", () => {
-    renderPlayer();
-    const buffer = screen.getByTestId("buffer-fill");
-
-    setBuffered([[0, 300]]);
-    act(() => {
-      fakeController._emit("progress");
-    });
-    expect(buffer.childElementCount).toBe(1);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "ArrowRight" });
-    });
-
-    expect(fakeController.seek).toHaveBeenCalledTimes(1);
-    // Immediate redraw at seek time — the bar never flashes empty.
-    expect(buffer.childElementCount).toBe(1);
-  });
-
   it("BUG regression: drag commit (pointerup) redraws the buffer bar synchronously after seek", () => {
     renderPlayer();
     act(() => {
@@ -757,47 +719,6 @@ describe("PlayerBar manual transport actions reset the storm guard (Fix I parity
     vi.useRealTimers();
   });
 
-  it("Fix I: manual next (phím n) reset guard", () => {
-    const onNext = vi.fn();
-    renderPlayer({ onNextTrack: onNext });
-
-    tripAdvanceGuard();
-    expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
-
-    // Manual next = user chủ động → guard reset, không còn bị giữ
-    act(() => {
-      fireEvent.keyDown(window, { key: "n" });
-    });
-    expect(onNext).toHaveBeenCalledTimes(1);
-    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
-  });
-
-  it("Fix I: manual prev (phím p) reset guard", () => {
-    const onPrev = vi.fn();
-    renderPlayer({ onPrevTrack: onPrev });
-
-    tripAdvanceGuard();
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "p" });
-    });
-    expect(onPrev).toHaveBeenCalledTimes(1);
-    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
-  });
-
-  it("Fix I: manual toggle play (phím cách) reset guard", () => {
-    const onTogglePlay = vi.fn();
-    renderPlayer({ onTogglePlay });
-
-    tripAdvanceGuard();
-
-    act(() => {
-      fireEvent.keyDown(window, { key: " " });
-    });
-    expect(onTogglePlay).toHaveBeenCalledTimes(1);
-    expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
-  });
-
   it("Fix I: manual retry (nút phát giữa khi đang có lỗi) reset guard", () => {
     usePlayerStore.setState({
       errorInfo: { code: "format_error", message: "boom" },
@@ -815,7 +736,7 @@ describe("PlayerBar manual transport actions reset the storm guard (Fix I parity
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
 
-  it("F8-3: manual action reset guard → banner storm clear ngay, không đợi cooldown", () => {
+  it("F8-3: manual retry clears the storm banner through the shared guard reset", () => {
     renderPlayer();
 
     tripAdvanceGuard();
@@ -830,9 +751,11 @@ describe("PlayerBar manual transport actions reset the storm guard (Fix I parity
     expect(screen.getByText(en.player.advance_stopped)).toBeTruthy();
     expect(guardAllowsAutoAdvance(Date.now())).toBe(false);
 
-    act(() => {
-      fireEvent.keyDown(window, { key: "n" });
-    });
+    // The retry button is the manual transport entry point now that keyboard
+    // handling lives in the player command registry (its suite covers the
+    // keyboard-path guard reset).
+    const centerButton = screen.getByRole("button", { name: en.player.play });
+    fireEvent.click(centerButton);
 
     expect(screen.queryByText(en.player.advance_stopped)).toBeNull();
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
@@ -1738,33 +1661,7 @@ describe("PlayerBar TrackInfo folds fetched tags into the store (tags fix)", () 
   });
 });
 
-describe("PlayerBar queue toggle (nút List + Ctrl+Q)", () => {
-  it("Ctrl+Q gọi onToggleQueue (drawer do App quản lý, không còn render trong PlayerBar)", () => {
-    const onToggleQueue = vi.fn();
-    renderPlayer({ onToggleQueue });
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "q", ctrlKey: true });
-    });
-    expect(onToggleQueue).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "q", ctrlKey: true });
-    });
-    expect(onToggleQueue).toHaveBeenCalledTimes(2);
-  });
-
-  it("plain 'q' KHÔNG toggle queue", () => {
-    const onToggleQueue = vi.fn();
-    renderPlayer({ onToggleQueue });
-
-    act(() => {
-      fireEvent.keyDown(window, { key: "q" });
-    });
-
-    expect(onToggleQueue).not.toHaveBeenCalled();
-  });
-
+describe("PlayerBar queue toggle (nút List)", () => {
   it("nút List: aria-expanded theo prop isQueueOpen; click → onToggleQueue", () => {
     const onToggleQueue = vi.fn();
     const { rerender } = renderPlayer({ isQueueOpen: false, onToggleQueue });
@@ -1798,107 +1695,6 @@ describe("PlayerBar queue toggle (nút List + Ctrl+Q)", () => {
   });
 });
 
-describe("PlayerBar keyboard chord + repeat guards (P2-01-1, P2-01-2)", () => {
-  function renderWithSpies() {
-    const onNext = vi.fn();
-    const onPrev = vi.fn();
-    const onTogglePlay = vi.fn();
-    const onTogglePlayMode = vi.fn();
-    const onToggleQueue = vi.fn();
-    renderPlayer({
-      onNextTrack: onNext,
-      onPrevTrack: onPrev,
-      onTogglePlay,
-      onTogglePlayMode,
-      onToggleQueue,
-    });
-    return { onNext, onPrev, onTogglePlay, onTogglePlayMode, onToggleQueue };
-  }
-
-  function pressKey(key: string, init: KeyboardEventInit = {}) {
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key, ...init }));
-    });
-  }
-
-  const chordCases: Array<[string, KeyboardEventInit]> = [
-    ["n", { ctrlKey: true }],
-    ["n", { metaKey: true }],
-    ["n", { altKey: true }],
-    ["p", { ctrlKey: true }],
-    ["p", { metaKey: true }],
-    ["s", { ctrlKey: true }],
-    ["s", { metaKey: true }],
-    ["s", { altKey: true }],
-    [" ", { ctrlKey: true }],
-    [" ", { metaKey: true }],
-    [" ", { altKey: true }],
-  ];
-
-  it.each(chordCases)(
-    "ignores %s with a modifier chord %o (chord belongs to the app/webview)",
-    (key, init) => {
-      const spies = renderWithSpies();
-
-      pressKey(key, init);
-
-      expect(spies.onNext).not.toHaveBeenCalled();
-      expect(spies.onPrev).not.toHaveBeenCalled();
-      expect(spies.onTogglePlay).not.toHaveBeenCalled();
-      expect(spies.onTogglePlayMode).not.toHaveBeenCalled();
-      expect(spies.onToggleQueue).not.toHaveBeenCalled();
-    },
-  );
-
-  it("ignores Ctrl+S without stealing the native shortcut (no preventDefault)", () => {
-    renderWithSpies();
-    const event = new KeyboardEvent("keydown", {
-      key: "s",
-      ctrlKey: true,
-      cancelable: true,
-    });
-    const preventSpy = vi.spyOn(event, "preventDefault");
-
-    act(() => {
-      window.dispatchEvent(event);
-    });
-
-    expect(preventSpy).not.toHaveBeenCalled();
-  });
-
-  it("still toggles the queue on Ctrl+Q (chord guard sits AFTER the Ctrl+Q branch)", () => {
-    const { onToggleQueue } = renderWithSpies();
-
-    pressKey("q", { ctrlKey: true });
-
-    expect(onToggleQueue).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores a repeated Space keydown (e.repeat) — no play/pause spam", () => {
-    const { onTogglePlay } = renderWithSpies();
-
-    pressKey(" ", { repeat: true });
-
-    expect(onTogglePlay).not.toHaveBeenCalled();
-  });
-
-  it("ignores a repeated n keydown (e.repeat) — no skip spam", () => {
-    const { onNext } = renderWithSpies();
-
-    pressKey("n", { repeat: true });
-
-    expect(onNext).not.toHaveBeenCalled();
-  });
-
-  it("ignores a repeated Ctrl+Q keydown (repeat guard sits BEFORE the Ctrl+Q branch)", () => {
-    const { onToggleQueue } = renderWithSpies();
-
-    pressKey("q", { ctrlKey: true, repeat: true });
-
-    expect(onToggleQueue).not.toHaveBeenCalled();
-  });
-});
-
 describe("PlayerBar volume drag + mute (P2-01-3, P2-01-4)", () => {
   function volumeBar() {
     const bar = screen.getByTestId("volume-bar");
@@ -1919,19 +1715,13 @@ describe("PlayerBar volume drag + mute (P2-01-3, P2-01-4)", () => {
 
   it("BUG regression: dragging while muted unmutes the engine (toggleMute) and applies the volume", () => {
     renderPlayer();
-    fakeController.toggleMute.mockReturnValue(true);
-    act(() => {
-      fireEvent.keyDown(window, { key: "m" });
-    });
-    expect(fakeController.toggleMute).toHaveBeenCalledTimes(1);
-
     fakeController.isMuted.mockReturnValue(true);
     const bar = volumeBar();
     act(() => {
       fireEvent.pointerDown(bar, { clientX: 50, pointerId: 1 });
     });
 
-    expect(fakeController.toggleMute).toHaveBeenCalledTimes(2);
+    expect(fakeController.toggleMute).toHaveBeenCalledTimes(1);
     expect(fakeController.setVolume).toHaveBeenLastCalledWith(0.25);
   });
 

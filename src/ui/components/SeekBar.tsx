@@ -8,7 +8,6 @@ import { SeekRail } from "./SeekRail";
 import { clamp } from "./seekMath";
 import { useSeekDrag } from "./useSeekDrag";
 import { useSeekHover } from "./useSeekHover";
-import { useSeekKeyboard } from "./useSeekKeyboard";
 
 /** Half the seek thumb's width. The thumb is w-3 (12px) in SeekRail and is
  *  centered on its `left` position (-translate-x-1/2), so the whole thumb
@@ -25,10 +24,6 @@ export interface SeekBarProps {
    *  progress/durationchange subscriptions stay live while inactive so the
    *  buffer bar and duration pre-populate before the view opens. */
   active?: boolean;
-  /** Disable the global ArrowLeft/Right seek keys. The PlayerBar instance
-   *  keeps them (default true); the NowPlaying instance passes false so two
-   *  mounted SeekBars never double the seek step. */
-  keyboardSeek?: boolean;
   /** "top" pins the bar to the nearest positioned ancestor's top edge
    *  (PlayerBar root is `relative`) and hides both clocks — the hover
    *  tooltip is the timestamp read-out. Default keeps the in-flow layout
@@ -40,7 +35,6 @@ export function SeekBar({
   currentTrack,
   audio,
   active = true,
-  keyboardSeek = true,
   variant = "default",
 }: SeekBarProps) {
   // Refs for high-performance DOM updates (owned locally: seek drag / restore
@@ -297,12 +291,6 @@ export function SeekBar({
     isDraggingRef,
     duration,
     setFillWidth,
-  });
-  useSeekKeyboard({
-    audio,
-    bufferFillRef,
-    playheadRef,
-    enabled: keyboardSeek,
   });
 
   return (

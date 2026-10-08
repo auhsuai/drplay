@@ -5,7 +5,6 @@ import { AudioController } from "../../lib/AudioController";
 import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
 import { usePlayerStore } from "../../store/playerStore";
 import type { PlayerBarProps } from "./types";
-import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
 import { SeekBar } from "../components/SeekBar";
@@ -102,16 +101,10 @@ function PlayerBarImpl({
     });
   }, [setErrorInfo]);
 
-  // Handle Keyboard Shortcuts (transport keys; seek/volume keys live in
-  // SeekBar/VolumeSlider). Fix I: wrapped handlers so keyboard next/prev/play
-  // also reset the storm guard (they are manual user actions).
-  useKeyboardShortcuts({
-    onNextTrack: handleManualNext,
-    onPrevTrack: handleManualPrev,
-    onTogglePlay: handleManualTogglePlay,
-    onTogglePlayMode,
-    onToggleQueue,
-  });
+  // Keyboard transport shortcuts (n/p/s/Space, Ctrl+Q, seek/volume keys) moved
+  // to the single player command registry (src/player/usePlayerCommands,
+  // mounted once by App) — this component no longer registers any keydown
+  // listener.
 
   return (
     <div className="h-20 bg-white dark:bg-[#202124] grid grid-cols-[1fr_auto_1fr] items-center px-4 sm:px-6 shrink-0 z-10 transition-colors duration-300 relative border-t border-gray-200 dark:border-white/10">

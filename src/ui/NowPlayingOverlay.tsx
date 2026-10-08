@@ -1,5 +1,6 @@
 import { NowPlayingView } from "./NowPlaying/NowPlayingView";
 import type { PlayMode, Track } from "../types";
+import type { MenuSection } from "../player/menuModel";
 
 interface NowPlayingOverlayProps {
   isOpen: boolean;
@@ -16,6 +17,10 @@ interface NowPlayingOverlayProps {
   /** Player fullscreen — a refinement of this overlay, never a second surface. */
   isFullscreen?: boolean;
   onToggleFullscreen?: (() => void) | undefined;
+  /** Media Information dialog open — the native video host must hide then. */
+  isMediaInfoOpen: boolean;
+  /** Video playerbar buttons: open one native menu section (D3). */
+  onOpenPlayerMenu?: ((section: MenuSection) => void) | undefined;
 }
 
 export function NowPlayingOverlay({
@@ -32,6 +37,8 @@ export function NowPlayingOverlay({
   isShellLocked,
   isFullscreen = false,
   onToggleFullscreen,
+  isMediaInfoOpen,
+  onOpenPlayerMenu,
 }: NowPlayingOverlayProps) {
   return (
     <div
@@ -55,6 +62,8 @@ export function NowPlayingOverlay({
         isShellLocked={isShellLocked}
         isFullscreen={isFullscreen}
         onToggleFullscreen={onToggleFullscreen}
+        isMediaInfoOpen={isMediaInfoOpen}
+        onOpenPlayerMenu={onOpenPlayerMenu}
       />
     </div>
   );

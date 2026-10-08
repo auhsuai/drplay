@@ -150,6 +150,8 @@ export interface VideoHostVisibilityInput {
   hasError: boolean;
   /** mpv reported end-of-file for the current track. */
   hasEnded: boolean;
+  /** The Media Information dialog covers the video area (D2b). */
+  isMediaInfoOpen: boolean;
 }
 
 /**
@@ -165,6 +167,10 @@ export interface VideoHostVisibilityInput {
  * stay truthful), plus one more: after end-file there is no live frame, so
  * leaving the host up freezes the last frame on screen and it looks like it is
  * still playing while the queue advances underneath it.
+ *
+ * `isMediaInfoOpen` hides it for the same paint-order reason as `hasError`:
+ * the dialog is a React surface drawn over the video area, and native child
+ * content can never be covered by CSS.
  */
 export function shouldShowVideoHost(input: VideoHostVisibilityInput): boolean {
   return (
@@ -173,6 +179,7 @@ export function shouldShowVideoHost(input: VideoHostVisibilityInput): boolean {
     input.isOpen &&
     !input.isShellLocked &&
     !input.hasError &&
-    !input.hasEnded
+    !input.hasEnded &&
+    !input.isMediaInfoOpen
   );
 }

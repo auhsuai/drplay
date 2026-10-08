@@ -9,11 +9,13 @@ import { resetAdvanceGuard, retryCurrentTrack } from "../../utils/playerError";
 import { useNowPlayingMetadata } from "./hooks/useNowPlayingMetadata";
 import { NowPlayingControls } from "./components/NowPlayingControls";
 import { VideoSurface } from "./components/VideoSurface";
+import { VideoPlayerBar } from "./components/VideoPlayerBar";
 import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "../PlayerBar/VolumeSlider";
 import { ErrorToast } from "../PlayerBar/ErrorToast";
 import { classifyMediaKind, MEDIA_KIND_VIDEO } from "../../utils/mediaKind";
 import { shouldShowVideoHost } from "../../lib/videoHost";
+import type { MenuSection } from "../../player/menuModel";
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -41,6 +43,18 @@ interface NowPlayingViewProps {
    *  Spelled `| undefined` rather than `?:` so a caller that has no handler
    *  can pass `undefined` through under exactOptionalPropertyTypes. */
   onToggleFullscreen?: (() => void) | undefined;
+  /**
+   * The Media Information dialog is open (owned by App). It is a React surface
+   * drawn over the video area, so the native host must hide while it is up —
+   * CSS can never cover native child content.
+   */
+  isMediaInfoOpen: boolean;
+  /**
+   * Open one native menu section from the video playerbar's buttons (D3).
+   * Optional so the view still renders without a menu owner; the bar's menu
+   * buttons are a safe no-op then.
+   */
+  onOpenPlayerMenu?: ((section: MenuSection) => void) | undefined;
 }
 
 export const NowPlayingView = memo(function NowPlayingView({
@@ -57,6 +71,8 @@ export const NowPlayingView = memo(function NowPlayingView({
   isShellLocked,
   isFullscreen = false,
   onToggleFullscreen,
+  isMediaInfoOpen,
+  onOpenPlayerMenu,
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
 
@@ -115,6 +131,7 @@ export const NowPlayingView = memo(function NowPlayingView({
     isShellLocked,
     hasError: errorInfo !== null,
     hasEnded: isEnded,
+    isMediaInfoOpen,
   });
 
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
@@ -248,38 +265,64 @@ export const NowPlayingView = memo(function NowPlayingView({
         </div>
       )}
 
-      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
-        {/* Content group: centered vertically when room, scrolls when not.
-            In fullscreen the generous pt/pb padding is dropped so the video
-            actually gets the window's height instead of the space left over
-            between the margins. */}
-        <div
-          className={`w-full flex flex-col items-center ${
-            isFullscreen ? "h-full pt-14 pb-4" : "pt-24 md:pt-28 pb-24 md:pb-28"
-          }`}
-        >
-          {/* Player area. A VIDEO track gets the measured surface the native
-              video host is positioned over; an AUDIO track keeps the cover-art
-              square exactly as before. Either way this slot is the FIRST thing
-              in the centered content group and everything below it (info,
-              controls, seekbar) stays structurally outside the video rect —
-              that is what guarantees no React control ever overlaps the HWND. */}
+      {isVideoTrack ? (
+        /* D3 media-player layout (spec §15/§16/§34): the video fills the
+           flexible area and ONE horizontal bar with every control sits BELOW
+           it. The bar is a sibling AFTER the area in the same column, so the
+           native host rect never covers a control — same structural guarantee
+           as the old stacked layout. Audio keeps its layout untouched. */
+        <div className="relative z-10 flex flex-col h-full w-full pt-14 px-3 pb-2">
+          <div className="flex-1 min-h-0 w-full flex items-center justify-center">
+            <VideoSurface
+              fill
+              active={showVideoHost}
+              fullscreen={isFullscreen}
+              isPlaying={isPlaying}
+              isBuffering={isBuffering}
+              isDownloading={isDownloading}
+              hasError={errorInfo !== null}
+              isEnded={isEnded}
+            />
+          </div>
+          <VideoPlayerBar
+            currentTrack={currentTrack}
+            isPlaying={isPlaying}
+            isBuffering={isBuffering}
+            isDownloading={isDownloading}
+            hasError={errorInfo !== null}
+            onRetry={retryCurrentTrack}
+            playMode={playMode}
+            onTogglePlay={handleManualTogglePlay}
+            onNext={handleManualNext}
+            onPrev={handleManualPrev}
+            onTogglePlayMode={onTogglePlayMode}
+            audio={AudioController.getInstance()}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={onToggleFullscreen}
+            onOpenMenu={onOpenPlayerMenu}
+            active={isOpen}
+          />
+        </div>
+      ) : (
+        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
+          {/* Content group: centered vertically when room, scrolls when not. */}
           <div
-            className={`w-full flex items-center justify-center mt-4 md:mt-8 ${
-              isFullscreen ? "flex-1 min-h-0" : ""
+            className={`w-full flex flex-col items-center ${
+              isFullscreen
+                ? "h-full pt-14 pb-4"
+                : "pt-24 md:pt-28 pb-24 md:pb-28"
             }`}
           >
-            {isVideoTrack ? (
-              <VideoSurface
-                active={showVideoHost}
-                fullscreen={isFullscreen}
-                isPlaying={isPlaying}
-                isBuffering={isBuffering}
-                isDownloading={isDownloading}
-                hasError={errorInfo !== null}
-                isEnded={isEnded}
-              />
-            ) : (
+            {/* Player area. An AUDIO track keeps the cover-art square exactly as
+              before; video tracks are rendered by the D3 branch above. This
+              slot is the FIRST thing in the centered content group and
+              everything below it (info, controls, seekbar) stays structurally
+              outside any native rect. */}
+            <div
+              className={`w-full flex items-center justify-center mt-4 md:mt-8 ${
+                isFullscreen ? "flex-1 min-h-0" : ""
+              }`}
+            >
               <div
                 className={`w-[min(16rem,60vh)] md:w-[min(20rem,60vh)] lg:w-[min(480px,60vh)] xl:w-[min(560px,60vh)] max-w-full aspect-square h-auto max-h-[min(560px,60vh)] rounded-2xl shadow-[0_12px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_40px_rgba(0,0,0,0.4)] overflow-hidden transition-all duration-700 ${!coverUrl ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center relative" : "bg-gray-100 dark:bg-[#202124]"}`}
               >
@@ -302,46 +345,45 @@ export const NowPlayingView = memo(function NowPlayingView({
                   </>
                 )}
               </div>
-            )}
-          </div>
-
-          <div className="w-full max-w-4xl px-4 shrink-0 mt-6 md:mt-8 pb-8">
-            {/* Info */}
-            <div className="text-center mb-8">
-              <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-2 truncate tracking-tight">
-                {realTitle}
-              </h1>
-              <p className="text-base md:text-lg font-medium text-gray-500 dark:text-gray-400 truncate">
-                {realArtist || t("unknown_artist")}
-              </p>
             </div>
 
-            {/* PlayerBar Clone Controls */}
-            <div className="w-full flex flex-col items-center justify-center max-w-[800px] mx-auto">
-              <NowPlayingControls
-                isPlaying={isPlaying}
-                isBuffering={isBuffering}
-                isDownloading={isDownloading}
-                hasError={errorInfo !== null}
-                onRetry={retryCurrentTrack}
-                onTogglePlay={handleManualTogglePlay}
-                onNextTrack={handleManualNext}
-                onPrevTrack={handleManualPrev}
-                playMode={playMode}
-                onTogglePlayMode={onTogglePlayMode}
-              />
+            <div className="w-full max-w-4xl px-4 shrink-0 mt-6 md:mt-8 pb-8">
+              {/* Info */}
+              <div className="text-center mb-8">
+                <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-2 truncate tracking-tight">
+                  {realTitle}
+                </h1>
+                <p className="text-base md:text-lg font-medium text-gray-500 dark:text-gray-400 truncate">
+                  {realArtist || t("unknown_artist")}
+                </p>
+              </div>
 
-              {/* Shared seekbar: single source of truth with PlayerBar. The
-                  view never seeks with the global arrow keys (PlayerBar owns
-                  that) and gates the 4/s timeupdate subscription on isOpen. */}
-              <SeekBar
-                currentTrack={currentTrack}
-                audio={AudioController.getInstance()}
-                active={isOpen}
-                keyboardSeek={false}
-              />
+              {/* PlayerBar Clone Controls */}
+              <div className="w-full flex flex-col items-center justify-center max-w-[800px] mx-auto">
+                <NowPlayingControls
+                  isPlaying={isPlaying}
+                  isBuffering={isBuffering}
+                  isDownloading={isDownloading}
+                  hasError={errorInfo !== null}
+                  onRetry={retryCurrentTrack}
+                  onTogglePlay={handleManualTogglePlay}
+                  onNextTrack={handleManualNext}
+                  onPrevTrack={handleManualPrev}
+                  playMode={playMode}
+                  onTogglePlayMode={onTogglePlayMode}
+                />
 
-              {/* Volume (F3): the PlayerBar collapses to h-0 while this
+                {/* Shared seekbar: single source of truth with PlayerBar. Seek
+                  keys live in the single player command registry (App), which
+                  drives this instance's timeupdate subscription; the view
+                  gates its 4/s timeupdate subscription on isOpen. */}
+                <SeekBar
+                  currentTrack={currentTrack}
+                  audio={AudioController.getInstance()}
+                  active={isOpen}
+                />
+
+                {/* Volume (F3): the PlayerBar collapses to h-0 while this
                   overlay is open, so there was NO way to change volume during
                   full-screen playback (its buttons measured at y=1076 in a
                   1057px-tall viewport — off-screen). This is the SAME
@@ -349,16 +391,17 @@ export const NowPlayingView = memo(function NowPlayingView({
                   same engine facade, same drag/mute/key handling, and
                   `alwaysShowRail` because the PlayerBar hides its rail below
                   `xl`, a breakpoint a 1024x768 window never reaches. */}
-              <div className="flex justify-center mt-4">
-                <VolumeSlider
-                  audio={AudioController.getInstance()}
-                  alwaysShowRail
-                />
+                <div className="flex justify-center mt-4">
+                  <VolumeSlider
+                    audio={AudioController.getInstance()}
+                    alwaysShowRail
+                  />
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </main>
   );
 });

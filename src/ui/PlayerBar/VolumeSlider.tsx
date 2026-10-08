@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Volume, Volume1, Volume2, VolumeX } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
-
-const VOLUME_STEP = 0.1;
+import { onPlayerUi } from "../../player/playerUiBus";
 
 export interface VolumeSliderProps {
   audio: AudioController;
@@ -98,47 +97,18 @@ export function VolumeSlider({
     window.addEventListener("pointercancel", endSession);
   };
 
-  // ArrowUp/Down nudge the volume, m/M toggles mute. Owned here (not the
-  // global shortcuts hook) because they write this component's local state.
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const activeEl = document.activeElement as HTMLElement | null;
-      if (
-        activeEl?.tagName === "INPUT" ||
-        activeEl?.tagName === "TEXTAREA" ||
-        activeEl?.isContentEditable
-      )
-        return;
-
-      switch (e.key) {
-        case "ArrowUp":
-          e.preventDefault();
-          setVolume((prev) => {
-            const nv = Math.min(1, prev + VOLUME_STEP);
-            audio.setVolume(nv);
-            return nv;
-          });
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          setVolume((prev) => {
-            const nv = Math.max(0, prev - VOLUME_STEP);
-            audio.setVolume(nv);
-            return nv;
-          });
-          break;
-        case "m":
-        case "M":
-          e.preventDefault();
-          toggleMute();
-          break;
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [audio, toggleMute]);
+  // Keyboard volume/mute (Ctrl+ArrowUp/Down, m) live in the player command
+  // registry now; it announces volume changes on the player UI bus so this
+  // component's local icon/bar state stays in sync without an engine event.
+  useEffect(
+    () =>
+      onPlayerUi((event) => {
+        if (event.kind !== "volume-changed") return;
+        setVolume(event.volume);
+        setIsMuted(event.muted);
+      }),
+    [],
+  );
 
   const volumePercent = isMuted ? 0 : volume * 100;
   const VolumeIcon =

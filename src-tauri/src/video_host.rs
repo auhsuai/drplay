@@ -21,14 +21,15 @@
 
 use std::sync::Mutex;
 
-use tauri::Manager;
-use windows_sys::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::CreateSolidBrush;
+use tauri::{Emitter, Manager};
+use windows_sys::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, CreateSolidBrush};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, RegisterClassW, SetWindowPos,
-    ShowWindow, WNDCLASSW, GWL_STYLE, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SW_HIDE,
-    SW_SHOW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, RegisterClassW, SetLayeredWindowAttributes,
+    SetWindowPos, ShowWindow, WNDCLASSW, WNDPROC, GWL_STYLE, HWND_TOP, LWA_ALPHA, MA_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_RBUTTONUP, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 /// Label of the one Tauri window the host is parented to.
@@ -38,6 +39,28 @@ const MAIN_WINDOW_LABEL: &str = "main";
 /// and the class background are stated here instead of inherited from a class
 /// whose behavior we do not control.
 const HOST_CLASS_NAME: &str = "DrPlayVideoHost";
+
+/// Window class name of the invisible input overlay: a sibling of the host
+/// (same parent) that sits above it in z-order so mouse input over the video
+/// rect reaches the app — mpv's own child window inside the host would
+/// otherwise swallow it.
+const OVERLAY_CLASS_NAME: &str = "DrPlayVideoInputOverlay";
+
+/// The overlay is a plain child (no popup, never visible at birth).
+const OVERLAY_STYLE: u32 = WS_CHILD | WS_CLIPSIBLINGS;
+
+/// Layered (Windows 8+ allows the style on child windows) so alpha 0 makes
+/// the window invisible, and NOACTIVATE so a click cannot steal focus from
+/// the WebView. Deliberately WITHOUT WS_EX_TRANSPARENT: that bit is what
+/// would make the overlay click-through, i.e. useless.
+const OVERLAY_EX_STYLE: u32 = WS_EX_LAYERED | WS_EX_NOACTIVATE;
+
+/// Alpha 0 = fully transparent; hit-testing is unaffected by alpha.
+const OVERLAY_ALPHA: u8 = 0;
+
+/// Frontend event carrying a right-click on the video area; payload is
+/// `{ "x": i32, "y": i32 }` in PHYSICAL screen pixels.
+const CONTEXT_MENU_EVENT: &str = "video-context-menu";
 
 /// Win32 error `ERROR_CLASS_ALREADY_EXISTS` (1410, NOT 141 — measured: a wrong
 /// constant here turns the benign re-registration case into a hard failure).
@@ -56,13 +79,18 @@ const HOST_BACKGROUND_COLOR: COLORREF = 0x0000_0000;
 /// handle as an integer keeps this static `Sync` with no wrapper type.
 static HOST: Mutex<Option<usize>> = Mutex::new(None);
 
+/// The one live input overlay, stored exactly like `HOST` and for the same
+/// reason.
+static OVERLAY: Mutex<Option<usize>> = Mutex::new(None);
+
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested without a window)
 // ---------------------------------------------------------------------------
 
 /// NUL-terminated UTF-16 for the Win32 `*W` entry points. The terminator is
 /// what makes the pointer safe to hand to `RegisterClassW`/`CreateWindowExW`.
-fn wide(value: &str) -> Vec<u16> {
+/// Shared with `context_menu` (same `*W` contract).
+pub(crate) fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
@@ -105,10 +133,69 @@ unsafe extern "system" fn host_wnd_proc(hwnd: HWND, message: u32, wparam: WPARAM
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 
-/// Register the host window class once per process. Re-registration is treated
-/// as success (see `ERROR_CLASS_ALREADY_EXISTS`), so this is safe to call on
-/// every acquire without any "already done" bookkeeping.
-fn register_host_class() -> Result<HINSTANCE, String> {
+/// Only the right-button RELEASE opens the context menu — a release, not a
+/// press, so starting a drag on the video never pops the menu mid-gesture.
+fn is_context_menu_click(message: u32) -> bool {
+    message == WM_RBUTTONUP
+}
+
+/// Forward a right-click to the frontend. `lparam` carries CLIENT coordinates
+/// relative to the overlay; `ClientToScreen` converts them to the physical
+/// screen pixels the native menu command expects.
+fn emit_context_menu_event(hwnd: HWND, lparam: LPARAM) {
+    let Some(app) = crate::APP_HANDLE.get() else {
+        log::debug!("[video-overlay] right-click ignored: the app handle is not initialized");
+        return;
+    };
+    // GET_X_LPARAM/GET_Y_LPARAM: the signed low/high words of lparam.
+    let mut point = POINT {
+        x: (lparam as u32 & 0xFFFF) as u16 as i16 as i32,
+        y: ((lparam as u32 >> 16) & 0xFFFF) as u16 as i16 as i32,
+    };
+    // SAFETY: `hwnd` is the live overlay and `point` a live local POINT.
+    if unsafe { ClientToScreen(hwnd, &mut point) } == 0 {
+        // SAFETY: reading this thread's last-error value; no preconditions.
+        let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        log::warn!("[video-overlay] ClientToScreen failed (win32 error {error}); using client coordinates");
+    }
+    if let Err(emit_error) = app.emit(CONTEXT_MENU_EVENT, serde_json::json!({ "x": point.x, "y": point.y })) {
+        log::warn!("[video-overlay] cannot emit '{CONTEXT_MENU_EVENT}': {emit_error}");
+    }
+}
+
+/// Message pump of the input overlay: it exists so mouse input over the video
+/// rect reaches the app (mpv's own child window inside the host would swallow
+/// it). Anything it does not need goes to `DefWindowProcW`, like the host.
+///
+/// # Safety
+/// Contractually an `extern "system"` WndProc: Windows guarantees `hwnd`,
+/// `wparam` and `lparam` are passed through unchanged.
+unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match message {
+        // A click must not activate the overlay: the WebView keeps focus and
+        // its keyboard shortcuts keep working.
+        WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
+        // Fully transparent window: never paint a background.
+        WM_ERASEBKGND => 1,
+        _ if is_context_menu_click(message) => {
+            emit_context_menu_event(hwnd, lparam);
+            // Handled: NOT forwarded, so Windows does not synthesize a
+            // duplicate WM_CONTEXTMENU from it.
+            0
+        }
+        _ => {
+            // SAFETY: forwarding every other message to DefWindowProcW is the
+            // documented default handling, exactly as in host_wnd_proc.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
+    }
+}
+
+/// Register a window class once per process. Re-registration is treated as
+/// success (see `ERROR_CLASS_ALREADY_EXISTS`), so this is safe to call on
+/// every acquire without any "already done" bookkeeping. `background: None`
+/// asks for no class background brush (the overlay never paints).
+fn register_class(class_name: &str, wndproc: WNDPROC, background: Option<COLORREF>) -> Result<HINSTANCE, String> {
     // SAFETY: a NULL module name asks for this process's own image handle; the
     // only failure is a null return, which is checked below.
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
@@ -119,10 +206,10 @@ fn register_host_class() -> Result<HINSTANCE, String> {
             unsafe { windows_sys::Win32::Foundation::GetLastError() }
         ));
     }
-    let class = wide(HOST_CLASS_NAME);
+    let class = wide(class_name);
     let window_class = WNDCLASSW {
         style: 0,
-        lpfnWndProc: Some(host_wnd_proc),
+        lpfnWndProc: wndproc,
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: instance,
@@ -132,7 +219,10 @@ fn register_host_class() -> Result<HINSTANCE, String> {
         // stay alive for the life of the class, which it does (it is never
         // deleted) — leaking one process-lifetime GDI object is the documented
         // contract for a class background.
-        hbrBackground: unsafe { CreateSolidBrush(HOST_BACKGROUND_COLOR) },
+        hbrBackground: match background {
+            Some(color) => unsafe { CreateSolidBrush(color) },
+            None => std::ptr::null_mut(),
+        },
         lpszMenuName: std::ptr::null(),
         lpszClassName: class.as_ptr(),
     };
@@ -144,10 +234,20 @@ fn register_host_class() -> Result<HINSTANCE, String> {
         // SAFETY: reading this thread's last-error value; no preconditions.
         let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         if error != ERROR_CLASS_ALREADY_EXISTS {
-            return Err(format!("video host: RegisterClassW({HOST_CLASS_NAME}) failed (win32 error {error})"));
+            return Err(format!("video host: RegisterClassW({class_name}) failed (win32 error {error})"));
         }
     }
     Ok(instance)
+}
+
+/// The host class: black background (see `HOST_BACKGROUND_COLOR`).
+fn register_host_class() -> Result<HINSTANCE, String> {
+    register_class(HOST_CLASS_NAME, Some(host_wnd_proc), Some(HOST_BACKGROUND_COLOR))
+}
+
+/// The overlay class: never paints, so no background brush.
+fn register_overlay_class() -> Result<HINSTANCE, String> {
+    register_class(OVERLAY_CLASS_NAME, Some(overlay_wnd_proc), None)
 }
 
 /// Create the hidden child window under `parent`. Never creates a popup and
@@ -208,6 +308,88 @@ fn ensure(slot: &Mutex<Option<usize>>, parent: HWND) -> Result<usize, String> {
     Ok(hwnd)
 }
 
+/// Create the invisible overlay under `parent`. Window-sized 1x1 and hidden at
+/// birth like the host; `video_host_set_rect`/`video_host_set_visible` give it
+/// the host's rect and visibility.
+fn create_overlay(parent: HWND) -> Result<usize, String> {
+    let instance = register_overlay_class()?;
+    let class = wide(OVERLAY_CLASS_NAME);
+    // SAFETY: class/instance are valid for the duration of the call (Windows
+    // copies the class name), `parent` is a live top-level window owned by this
+    // process, and a null hmenu/lpparam is required for a child window.
+    let overlay = unsafe {
+        CreateWindowExW(
+            OVERLAY_EX_STYLE,
+            class.as_ptr(),
+            std::ptr::null(),
+            OVERLAY_STYLE,
+            0,
+            0,
+            1,
+            1,
+            parent,
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        )
+    };
+    if overlay.is_null() {
+        // SAFETY: reading this thread's last-error value; no preconditions.
+        let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        return Err(format!(
+            "video overlay: CreateWindowExW under parent {} failed (win32 error {error})",
+            parent as usize
+        ));
+    }
+    // SAFETY: `overlay` is the live window just created; alpha 0 + LWA_ALPHA
+    // keeps it invisible yet hit-testable (WS_EX_TRANSPARENT is NOT set).
+    if unsafe { SetLayeredWindowAttributes(overlay, 0, OVERLAY_ALPHA, LWA_ALPHA) } == 0 {
+        // SAFETY: reading this thread's last-error value; no preconditions.
+        let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        // Without the layered attribute the window would be a black rectangle
+        // over the video: destroy it and report; the caller continues without
+        // an overlay (video and host keep working).
+        // SAFETY: destroys the window just created on this thread.
+        unsafe { DestroyWindow(overlay) };
+        return Err(format!("video overlay: SetLayeredWindowAttributes failed (win32 error {error})"));
+    }
+    Ok(overlay as usize)
+}
+
+/// Idempotent overlay acquire; mirrors `ensure` for the host, and is likewise
+/// the exact function the unit test drives against a throwaway parent.
+fn ensure_overlay(slot: &Mutex<Option<usize>>, parent: HWND) -> Result<usize, String> {
+    let mut guard = slot
+        .lock()
+        .map_err(|_| "video overlay: overlay slot mutex poisoned".to_string())?;
+    if let Some(hwnd) = *guard {
+        return Ok(hwnd);
+    }
+    let hwnd = create_overlay(parent)?;
+    *guard = Some(hwnd);
+    Ok(hwnd)
+}
+
+/// The live overlay handle, if one was created. Read-only; all callers run on
+/// the main thread (sync commands / the WndProc itself).
+fn current_overlay() -> Option<usize> {
+    OVERLAY.lock().ok().and_then(|slot| *slot).filter(|hwnd| *hwnd != 0)
+}
+
+/// Whether the overlay is still missing (its creation is best-effort).
+fn overlay_missing() -> bool {
+    OVERLAY.lock().map(|slot| slot.is_none()).unwrap_or(false)
+}
+
+/// Create the overlay when it does not exist yet; a failure is logged and
+/// accepted on purpose: playback and the host keep working, only the native
+/// context menu is unavailable.
+fn ensure_overlay_best_effort(parent: HWND) {
+    if let Err(overlay_error) = ensure_overlay(&OVERLAY, parent) {
+        log::error!("[video-overlay] creation failed: {overlay_error}");
+    }
+}
+
 /// Move/resize the host inside the parent's client area and re-raise it, so a
 /// native child stays above the WebView2 child window no matter when it moves.
 fn set_rect_raw(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) -> bool {
@@ -240,9 +422,22 @@ fn set_visible_raw(hwnd: HWND, visible: bool) -> bool {
     own_visible(hwnd) == visible
 }
 
-/// Destroy the host. Safe when it was never created (nothing to do), which is
-/// the normal path for an audio-only session.
+/// Destroy the host and its overlay. Safe when neither was created (nothing
+/// to do), which is the normal path for an audio-only session.
 pub(crate) fn destroy() {
+    if let Some(overlay) = OVERLAY.lock().ok().and_then(|mut slot| slot.take()) {
+        // SAFETY: the handle came out of our own slot, so it is a window this
+        // process created on this thread. DestroyWindow fails (rather than
+        // trapping) if the handle is already invalid, which is why the result
+        // is only logged.
+        if unsafe { DestroyWindow(overlay as HWND) } == 0 {
+            // SAFETY: reading this thread's last-error value; no preconditions.
+            let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            log::warn!("[video-overlay] DestroyWindow({overlay}) failed (win32 error {error}); continuing");
+        } else {
+            log::info!("[video-overlay] destroyed overlay {overlay}");
+        }
+    }
     let Some(hwnd) = HOST.lock().ok().and_then(|mut slot| slot.take()) else {
         return;
     };
@@ -261,31 +456,48 @@ pub(crate) fn destroy() {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
+/// Resolve the main window's raw handle. Tauri returns
+/// `windows::Win32::Foundation::HWND` (the `windows` crate's newtype) while
+/// this module speaks `windows-sys`; both wrap the same `*mut c_void`, so the
+/// newtype is unwrapped here at the single boundary.
+fn main_window_hwnd(app: &tauri::AppHandle) -> Result<HWND, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| format!("window '{MAIN_WINDOW_LABEL}' not found"))?;
+    window
+        .hwnd()
+        .map(|hwnd| hwnd.0)
+        .map_err(|hwnd_error| format!("cannot resolve the main window HWND: {hwnd_error}"))
+}
+
 /// Create the child host if needed and return its HWND as an i64, or 0 on
 /// failure. A second call returns the SAME handle: exactly one host per app
-/// session, so mpv's render target never moves under a running video.
+/// session, so mpv's render target never moves under a running video. The
+/// overlay is created alongside (best-effort: a failure only costs the native
+/// context menu).
 #[tauri::command]
 pub fn video_host_acquire(app: tauri::AppHandle) -> i64 {
     if let Some(existing) = current_hwnd() {
+        // The host is a one-time creation, but the overlay is best-effort:
+        // retry it here so a transient creation failure can heal.
+        if overlay_missing() {
+            match main_window_hwnd(&app) {
+                Ok(parent) => ensure_overlay_best_effort(parent),
+                Err(window_error) => log::debug!("[video-overlay] retry skipped: {window_error}"),
+            }
+        }
         return existing;
     }
-    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
-        log::error!("[video-host] cannot acquire: window '{MAIN_WINDOW_LABEL}' not found");
-        return 0;
-    };
-    // The repo's existing native-window path (src/media_controls.rs::init).
-    // Tauri returns `windows::Win32::Foundation::HWND` (the `windows` crate's
-    // newtype) while this module speaks `windows-sys`; both wrap the same
-    // `*mut c_void`, so unwrap it here at the single boundary.
-    let parent = match window.hwnd() {
-        Ok(hwnd) => hwnd.0,
-        Err(hwnd_error) => {
-            log::error!("[video-host] cannot acquire: cannot resolve the main window HWND: {hwnd_error}");
+    let parent = match main_window_hwnd(&app) {
+        Ok(parent) => parent,
+        Err(window_error) => {
+            log::error!("[video-host] cannot acquire: {window_error}");
             return 0;
         }
     };
     match ensure(&HOST, parent) {
         Ok(hwnd) => {
+            ensure_overlay_best_effort(parent);
             log::info!("[video-host] acquired host {hwnd} under main window {}", parent as usize);
             hwnd as i64
         }
@@ -298,7 +510,9 @@ pub fn video_host_acquire(app: tauri::AppHandle) -> i64 {
 
 /// Position the host inside the parent window's CLIENT area, in PHYSICAL pixels,
 /// as reported by the frontend (`getBoundingClientRect`). Re-raises the host so
-/// it keeps painting above the WebView2 child window.
+/// it keeps painting above the WebView2 child window, and mirrors the rect on
+/// the overlay (raised after the host, so it stays above mpv's child window
+/// too).
 #[tauri::command]
 pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
     let Some(hwnd) = current_hwnd() else {
@@ -314,30 +528,55 @@ pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
         log::warn!("[video-host] SetWindowPos({hwnd}, {x}, {y}, {width}, {height}) failed (win32 error {error})");
         return;
     }
+    if let Some(overlay) = current_overlay() {
+        if !set_rect_raw(overlay as HWND, x, y, width, height) {
+            // SAFETY: reading this thread's last-error value; no preconditions.
+            let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            log::warn!("[video-overlay] SetWindowPos({overlay}, {x}, {y}, {width}, {height}) failed (win32 error {error})");
+        }
+    }
     log::info!("[video-host] rect {x},{y} {width}x{height}");
 }
 
-/// Show or hide the host. Idempotent both ways.
+/// Show or hide the host and its overlay together. Idempotent both ways.
 #[tauri::command]
 pub fn video_host_set_visible(visible: bool) {
     let Some(hwnd) = current_hwnd() else {
         log::debug!("[video-host] set_visible({visible}) ignored: no host acquired");
         return;
     };
+    let overlay = current_overlay();
     if visible {
         // A hidden child loses its place in the parent's z-order, and the
-        // WebView2 child would paint over it again, so re-raise on show.
+        // WebView2 child would paint over it again, so re-raise on show. The
+        // overlay is raised AFTER the host, so it ends up above it.
         // SAFETY: `hwnd` is live and owned by this process.
         if unsafe { SetWindowPos(hwnd as HWND, HWND_TOP, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE) } == 0 {
             // SAFETY: reading this thread's last-error value; no preconditions.
             let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
             log::warn!("[video-host] re-raise of {hwnd} failed (win32 error {error})");
         }
+        if let Some(overlay) = overlay {
+            // SAFETY: `overlay` is live and owned by this process.
+            if unsafe { SetWindowPos(overlay as HWND, HWND_TOP, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE) } == 0
+            {
+                // SAFETY: reading this thread's last-error value; no preconditions.
+                let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+                log::warn!("[video-overlay] re-raise of {overlay} failed (win32 error {error})");
+            }
+        }
     }
     if !set_visible_raw(hwnd as HWND, visible) {
         // SAFETY: reading this thread's last-error value; no preconditions.
         let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         log::warn!("[video-host] ShowWindow({hwnd}, visible={visible}) failed (win32 error {error})");
+    }
+    if let Some(overlay) = overlay {
+        if !set_visible_raw(overlay as HWND, visible) {
+            // SAFETY: reading this thread's last-error value; no preconditions.
+            let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            log::warn!("[video-overlay] ShowWindow({overlay}, visible={visible}) failed (win32 error {error})");
+        }
     }
 }
 
@@ -350,7 +589,8 @@ mod tests {
     use super::*;
     use windows_sys::Win32::Foundation::BOOL;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, GetClassNameW, GetParent, WS_POPUP,
+        EnumChildWindows, GetClassNameW, GetParent, WM_LBUTTONDOWN, WM_MOUSEMOVE, WS_EX_TRANSPARENT,
+        WS_POPUP,
     };
 
     #[test]
@@ -476,6 +716,37 @@ mod tests {
         unsafe { DestroyWindow(hwnd) };
         // SAFETY: destroying the throwaway parent.
         unsafe { DestroyWindow(parent) };
+    }
+
+    /// The overlay must be an invisible hit-test catcher. Asserted on the
+    /// constants because a REAL layered child window cannot be created in the
+    /// manifest-less test harness: Windows rejects WS_EX_LAYERED on child
+    /// windows unless the process manifest declares Windows 8+ support
+    /// (measured: CreateWindowExW fails with win32 error 6, and adding
+    /// `supportedOS` to a scratch manifest makes the same call succeed).
+    /// The app's manifest is tauri-build's default, so this is also a runtime
+    /// prerequisite tracked outside this slice — see the report.
+    #[test]
+    fn overlay_style_constants_describe_a_layered_noactivate_child() {
+        assert_eq!(OVERLAY_STYLE & WS_CHILD, WS_CHILD, "the overlay must carry WS_CHILD");
+        assert_eq!(OVERLAY_STYLE & WS_POPUP, 0, "the overlay must never be a popup");
+        assert_eq!(OVERLAY_STYLE & WS_VISIBLE, 0, "the overlay must start hidden");
+        assert_eq!(OVERLAY_EX_STYLE & WS_EX_LAYERED, WS_EX_LAYERED, "transparency needs WS_EX_LAYERED");
+        assert_eq!(OVERLAY_EX_STYLE & WS_EX_NOACTIVATE, WS_EX_NOACTIVATE, "clicks must not steal focus");
+        assert_eq!(
+            OVERLAY_EX_STYLE & WS_EX_TRANSPARENT,
+            0,
+            "WS_EX_TRANSPARENT would make the overlay click-through"
+        );
+    }
+
+    /// Only the right-button release is the context-menu click; every other
+    /// mouse message must stay with `DefWindowProcW`.
+    #[test]
+    fn only_a_right_button_release_opens_the_context_menu() {
+        assert!(is_context_menu_click(WM_RBUTTONUP));
+        assert!(!is_context_menu_click(WM_LBUTTONDOWN));
+        assert!(!is_context_menu_click(WM_MOUSEMOVE));
     }
 
     /// Hiding is idempotent and showing really shows — the two halves of the

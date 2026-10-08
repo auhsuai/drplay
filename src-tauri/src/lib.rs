@@ -16,6 +16,8 @@ mod mpv;
 mod media_controls;
 #[cfg(windows)]
 mod video_host;
+#[cfg(windows)]
+mod context_menu;
 mod stream_proxy;
 
 use auth::{login_google_native, refresh_google_token};
@@ -26,6 +28,8 @@ use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 #[cfg(windows)]
 use video_host::{video_host_acquire, video_host_set_rect, video_host_set_visible};
+#[cfg(windows)]
+use context_menu::show_context_menu;
 
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
@@ -257,6 +261,7 @@ pub fn run() {
             #[cfg(windows)] video_host_acquire,
             #[cfg(windows)] video_host_set_rect,
             #[cfg(windows)] video_host_set_visible,
+            #[cfg(windows)] show_context_menu,
         ])
         .build(tauri::generate_context!());
 
