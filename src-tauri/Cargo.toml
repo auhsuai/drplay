@@ -85,7 +85,11 @@ windows = { version = "0.61", features = ["Foundation", "Media", "Win32_Foundati
 # are ALSO reached today through window-vibrancy (a tauri dependency), so
 # listing them here changes nothing in the resolved graph — it just makes our
 # own use of them independent of someone else's feature selection.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp"] }
+# Win32_UI_Input_KeyboardAndMouse is for SetFocus, which hands keyboard focus to
+# the WebView2 child when the player surface opens (the video never takes focus:
+# its WndProc answers WM_MOUSEACTIVATE with MA_NOACTIVATE). Same crate, same
+# version — a feature flag, not a new graph node.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp"] }
 
 uuid = { version = "1.8.0", features = ["v4"] }
 moka = { git = "https://github.com/moka-rs/moka", branch = "main", features = ["future"] }
