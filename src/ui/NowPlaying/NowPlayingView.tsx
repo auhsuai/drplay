@@ -200,6 +200,13 @@ export const NowPlayingView = memo(function NowPlayingView({
   // same affordance and is not asked for, so the toggle stays hidden there.
   const showFullscreenToggle = isVideoTrack && onToggleFullscreen !== undefined;
 
+  // The back button lives in the column's top padding band. Video fullscreen
+  // removes that padding so the surface can actually grow, which leaves the
+  // button stranded over the picture — so it goes. AUDIO keeps it: its
+  // fullscreen layout still reserves the band (see the `h-full pt-14 pb-4`
+  // content group below). The EXIT toggle is a separate button and stays.
+  const showBackButton = !isVideoTrack || !isFullscreen;
+
   return (
     <main
       className="h-full overflow-hidden flex flex-col relative transition-all duration-1000 ease-in-out"
@@ -229,15 +236,17 @@ export const NowPlayingView = memo(function NowPlayingView({
       <ErrorToast errorInfo={errorInfo} inline />
 
       {/* Back Button */}
-      <div className="absolute top-6 left-6 z-50">
-        <button
-          onClick={onBack}
-          aria-label={t("common.close")}
-          className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
-        >
-          <ChevronDown className="w-6 h-6" />
-        </button>
-      </div>
+      {showBackButton && (
+        <div className="absolute top-6 left-6 z-50">
+          <button
+            onClick={onBack}
+            aria-label={t("common.close")}
+            className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
+          >
+            <ChevronDown className="w-6 h-6" />
+          </button>
+        </div>
+      )}
 
       {/* Fullscreen toggle (video only). Mirrors the back button's placement,
           styling and icon weight, so the exit affordance reads as part of the
@@ -270,8 +279,20 @@ export const NowPlayingView = memo(function NowPlayingView({
            flexible area and ONE horizontal bar with every control sits BELOW
            it. The bar is a sibling AFTER the area in the same column, so the
            native host rect never covers a control — same structural guarantee
-           as the old stacked layout. Audio keeps its layout untouched. */
-        <div className="relative z-10 flex flex-col h-full w-full pt-14 px-3 pb-2">
+           as the old stacked layout. Audio keeps its layout untouched.
+
+           F3: fullscreen drops the column padding (`p-0`). With `pt-14 px-3
+           pb-2` in BOTH states the measured box was byte-identical on toggle
+           and the button was a visual no-op; the padding band is exactly what
+           made the windowed surface smaller, so fullscreen spends it on the
+           picture. Nothing else changes — the area is still `flex-1 min-h-0`,
+           the bar still follows it, so the ResizeObserver in VideoSurface sees
+           a genuinely larger box and re-sends the rect. */
+        <div
+          className={`relative z-10 flex flex-col h-full w-full ${
+            isFullscreen ? "p-0" : "pt-14 px-3 pb-2"
+          }`}
+        >
           <div className="flex-1 min-h-0 w-full flex items-center justify-center">
             <VideoSurface
               fill

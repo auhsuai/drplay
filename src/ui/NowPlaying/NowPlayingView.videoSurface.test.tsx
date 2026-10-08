@@ -710,3 +710,148 @@ describe("video mode uses the horizontal media-player layout (D3)", () => {
     expect(container.querySelector("h1")).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// F3: fullscreen must actually CHANGE the surface. Measured live: toggling
+// fullscreen flipped `isFullscreen` but the measured rect stayed byte-identical
+// (x:12 y:56 w:1000 h:639) because BOTH states shared one fixed class on the
+// video column — `pt-14 px-3 pb-2` — and the bar eats the remaining height. The
+// toggle was therefore a visual no-op. Fullscreen now drops that padding, and
+// the back button (which lived in the top padding band) goes with it; the exit
+// toggle stays reachable.
+// ---------------------------------------------------------------------------
+describe("F3: fullscreen really enlarges the video surface", () => {
+  /** The video column wrapper: surface -> flex area -> column. */
+  function videoColumn(container: HTMLElement): HTMLElement {
+    const area = container.querySelector<HTMLElement>(
+      "[data-testid='video-surface']",
+    )?.parentElement;
+    const column = area?.parentElement;
+    if (!column) throw new Error("video column not rendered");
+    return column;
+  }
+
+  function backButton(container: HTMLElement): Element | null {
+    return container.querySelector('button[aria-label="common.close"]');
+  }
+
+  /** Outermost wrapper under <main> for the AUDIO branch, reached from the
+   *  cover-art icon so the assertion does not depend on class strings. */
+  function audioColumn(container: HTMLElement): HTMLElement {
+    let el = container.querySelector(".lucide-music");
+    while (el && el.parentElement?.tagName !== "MAIN") el = el.parentElement;
+    if (!el) throw new Error("audio column not rendered");
+    return el as HTMLElement;
+  }
+
+  it("windowed: the video column keeps its padding and the back button is there", () => {
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+
+    expect(videoColumn(container).className).toContain("pt-14");
+    expect(videoColumn(container).className).toContain("px-3");
+    expect(backButton(container)).not.toBeNull();
+  });
+
+  it("fullscreen: the padding is gone (so the rect grows) and the back button with it", () => {
+    const props = baseProps();
+    const { container, rerender } = render(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+    const before = videoColumn(container).className;
+
+    rerender(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+    const after = videoColumn(container).className;
+
+    expect(after).not.toBe(before);
+    expect(after).toContain("p-0");
+    expect(after).not.toContain("pt-14");
+    expect(after).not.toContain("px-3");
+    // The back button sat in the top padding band; fullscreen has no band left.
+    expect(backButton(container)).toBeNull();
+    // …but you can still LEAVE fullscreen.
+    expect(
+      container.querySelector("[data-testid='fullscreen-toggle']"),
+    ).not.toBeNull();
+  });
+
+  it("the measured surface survives the toggle — the rect synchroniser keeps its box", () => {
+    const props = baseProps();
+    const { container, rerender } = render(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+    expect(
+      container.querySelectorAll("[data-testid='video-surface']"),
+    ).toHaveLength(1);
+
+    rerender(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+    expect(
+      container.querySelectorAll("[data-testid='video-surface']"),
+    ).toHaveLength(1);
+
+    rerender(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+    expect(
+      container.querySelectorAll("[data-testid='video-surface']"),
+    ).toHaveLength(1);
+  });
+
+  it("AUDIO fullscreen is untouched — the padding change is video-only", () => {
+    const props = baseProps();
+    const { container, rerender } = render(
+      <NowPlayingView {...props} currentTrack={AUDIO} />,
+    );
+    const before = audioColumn(container).className;
+
+    rerender(
+      <NowPlayingView
+        {...props}
+        currentTrack={AUDIO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+
+    // The audio wrapper is byte-identical before and after fullscreen: the new
+    // `p-0` video column must not leak into the audio branch.
+    expect(audioColumn(container).className).toBe(before);
+    expect(before).toContain("p-6");
+    expect(before).not.toContain("p-0");
+    expect(container.querySelector("[data-testid='video-surface']")).toBeNull();
+    // Audio keeps its back button: its fullscreen layout still reserves the
+    // top band for it.
+    expect(backButton(container)).not.toBeNull();
+  });
+});

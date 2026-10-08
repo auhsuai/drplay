@@ -191,8 +191,33 @@ export function VideoSurface({
     const track = (): void => {
       rafId = null;
       sendRect();
-      if (performance.now() >= deadline) return;
+      if (performance.now() >= deadline) {
+        rafId = window.requestAnimationFrame(settle);
+        return;
+      }
       rafId = window.requestAnimationFrame(track);
+    };
+    // The frame AFTER the loop stopped. Stopping the loop is NOT the same as
+    // having SENT the settled rect: the last in-loop frame can read a
+    // mid-transition position (an end event cancels the remaining motion, so
+    // the box only reaches its resting place on the frames that follow), and
+    // the slide changed position without changing size — no ResizeObserver, no
+    // resize, no DPI change — so no other trigger would ever correct it. The
+    // host would stay parked at the intermediate rect, off-screen, until
+    // something unrelated moved the box again (observed live: ~970px below the
+    // surface after a fullscreen toggle). Reading one frame later guarantees
+    // the browser has applied the final transform first.
+    //
+    // Exactly one such frame, never a poll: only `track`'s cap branch and the
+    // end-event handler arm it, at most one frame is in flight, and it
+    // re-enters the loop only when a new transition extended the deadline in
+    // the meantime.
+    const settle = (): void => {
+      rafId = null;
+      sendRect();
+      if (performance.now() < deadline) {
+        rafId = window.requestAnimationFrame(track);
+      }
     };
     // Tailwind v4 emits `translate-y-*` as the CSS `translate` property (not
     // `transform`), so the event that matters here is propertyName
@@ -210,8 +235,13 @@ export function VideoSurface({
     };
     const onTransitionEnd = (e: TransitionEvent): void => {
       if (!isMovement(e)) return;
-      // Read the settled position on the next frame, then stop.
+      // Read the settled position on the next frame, then stop. The loop may
+      // already have spent its cap, leaving NO frame in flight: setting the
+      // deadline alone would arm nothing and the settled rect would never be
+      // sent, so the settle read is armed here too (it is a no-op frame when a
+      // frame is already pending — that one covers it).
       deadline = performance.now();
+      if (rafId === null) rafId = window.requestAnimationFrame(settle);
     };
     window.addEventListener("transitionrun", onTransitionRun);
     window.addEventListener("transitionstart", onTransitionRun);

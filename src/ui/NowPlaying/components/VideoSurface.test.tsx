@@ -273,6 +273,9 @@ describe("VideoSurface rect sync (CSS px -> physical px)", () => {
     act(() => {
       window.dispatchEvent(transitionEvent("transitionend", "translate"));
     });
+    // One frame ends the loop; the next is the settle read (deduped here: the
+    // box has not moved since the last in-loop read).
+    await flushFrame();
     await flushFrame();
     const settled = rectCalls().length;
 
@@ -307,7 +310,172 @@ describe("VideoSurface rect sync (CSS px -> physical px)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The settled rect (F1 regression). The tracker that follows a `translate`
+// transition stops as soon as `transitionend`/`transitioncancel` arrives OR the
+// cap is spent — and stopping it used to mean the LAST rect it read was an
+// intermediate one. Because the overlay slide moves the box without resizing
+// it (no ResizeObserver, no window resize, no DPI change), nothing else ever
+// corrects the host: it stayed parked at the mid-slide position, ~970px off the
+// surface, while the UI kept rendering normally (observed live on fullscreen).
+// Stopping must therefore also MEASURE once more, on the frame after.
+// ---------------------------------------------------------------------------
+describe("VideoSurface transition tracker: the settled rect always wins", () => {
+  /** Mirrors `TRANSITION_TRACK_CAP_MS` in VideoSurface.tsx — bump together. */
+  const TRACK_CAP_MS = 1400;
+
+  /** Mid-slide box: 250px BELOW its resting place, size unchanged. */
+  const MID_SLIDE = { left: 100, top: 500, width: 800, height: 450 };
+  /** Resting box (the mount rect): 100,250 @dpr 1.5 -> 150,375 1200x675. */
+  const SETTLED = { left: 100, top: 250, width: 800, height: 450 };
+  const SETTLED_PHYSICAL = { x: 150, y: 375, w: 1200, h: 675 };
+  const MID_SLIDE_PHYSICAL = { x: 150, y: 750, w: 1200, h: 675 };
+
+  // The tracker's budget is wall-clock, so the cap is spent with a controlled
+  // clock instead of a real 1.4s wait per test. Restored by the outer
+  // afterEach's restoreAllMocks.
+  let clock = 0;
+  beforeEach(() => {
+    clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+  });
+
+  function fire(type: string): void {
+    act(() => {
+      window.dispatchEvent(transitionEvent(type, "translate"));
+    });
+  }
+
+  function lastRect(): Record<string, unknown> | undefined {
+    const calls = rectCalls();
+    return calls[calls.length - 1];
+  }
+
+  // T1 — the live bug, reproduced deterministically: the tracker runs out of
+  // budget while the slide is still going and the end event never arrives, so
+  // the box settles with no frame in flight to notice it.
+  it("T1: cap expires mid-slide and no transitionend arrives — the SETTLED rect is still sent", async () => {
+    render(<VideoSurface active />);
+    expect(rectCalls()).toEqual([SETTLED_PHYSICAL]);
+
+    fire("transitionrun");
+    cssRect = MID_SLIDE;
+    await flushFrame();
+    expect(rectCalls()).toHaveLength(2);
+    expect(lastRect()).toEqual(MID_SLIDE_PHYSICAL);
+
+    // The budget runs out mid-slide: the next frame is the last in-loop read,
+    // and it can only see the intermediate position.
+    clock = TRACK_CAP_MS + 1;
+    await flushFrame();
+    expect(lastRect()).toEqual(MID_SLIDE_PHYSICAL);
+
+    // The overlay lands, then the frame after the loop stops reads again.
+    cssRect = SETTLED;
+    await flushFrame();
+
+    expect(lastRect()).toEqual(SETTLED_PHYSICAL);
+  });
+
+  // T2 — same failure through the other stop path: the end event arrives with
+  // NO frame in flight (the loop already spent its cap), so setting the deadline
+  // alone arms nothing.
+  it("T2: transitionend with no frame in flight still sends the settled rect", async () => {
+    render(<VideoSurface active />);
+    fire("transitionrun");
+    cssRect = MID_SLIDE;
+    clock = TRACK_CAP_MS + 1;
+    await flushFrame();
+    await flushFrame();
+    expect(rectCalls()).toHaveLength(2);
+    expect(lastRect()).toEqual(MID_SLIDE_PHYSICAL);
+
+    cssRect = SETTLED;
+    fire("transitionend");
+    await flushFrame();
+
+    expect(lastRect()).toEqual(SETTLED_PHYSICAL);
+  });
+
+  // T3 — the extra measure is free: an unmoved box must not cost an IPC.
+  it("T3: an unchanged settled rect sends NOTHING extra (dedupe holds)", async () => {
+    render(<VideoSurface active />);
+    fire("transitionrun");
+    cssRect = MID_SLIDE;
+    await flushFrame();
+    expect(rectCalls()).toHaveLength(2);
+
+    clock = TRACK_CAP_MS + 1;
+    await flushFrame();
+    await flushFrame();
+    expect(rectCalls()).toHaveLength(2);
+
+    fire("transitionend");
+    await flushFrame();
+
+    expect(rectCalls()).toHaveLength(2);
+  });
+
+  // T4 — the extra measure is a single frame, never a poll: once the settle
+  // read has run, no frame is in flight, so neither elapsed time nor movement
+  // can produce traffic on its own.
+  it("T4: bounded — after the settle read no frame is in flight, ever", async () => {
+    render(<VideoSurface active />);
+    fire("transitionrun");
+    cssRect = MID_SLIDE;
+    clock = TRACK_CAP_MS + 1;
+    await flushFrame();
+    await flushFrame();
+    const settled = rectCalls().length;
+    expect(settled).toBe(2);
+
+    // Elapsed time and a moved box, with no trigger and no transition running.
+    clock = TRACK_CAP_MS * 10;
+    cssRect = { left: 100, top: 700, width: 800, height: 450 };
+    for (let frame = 0; frame < 20; frame += 1) {
+      await flushFrame();
+    }
+
+    expect(rectCalls()).toHaveLength(settled);
+  });
+
+  // T5 — the settle read goes through the SAME sendRect, so the old guarantees
+  // (collapsed rect dropped, a later real rect still sent) survive it.
+  it("T5: the settle read drops a collapsed rect and still recovers on a real one", async () => {
+    render(<VideoSurface active />);
+    fire("transitionrun");
+    cssRect = MID_SLIDE;
+    clock = TRACK_CAP_MS + 1;
+    await flushFrame();
+    await flushFrame();
+    expect(rectCalls()).toHaveLength(2);
+
+    // Window minimized mid-slide: a zero-size box is not a window.
+    cssRect = { left: 0, top: 0, width: 0, height: 0 };
+    fire("transitionend");
+    await flushFrame();
+    expect(rectCalls()).toHaveLength(2);
+
+    // Restored: the ordinary trigger still sends.
+    cssRect = SETTLED;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    await flushFrame();
+    expect(lastRect()).toEqual(SETTLED_PHYSICAL);
+  });
+});
+
 describe("VideoSurface visibility", () => {
+  it("unmount hides the native host exactly once (an audio track swaps the surface out)", () => {
+    const { unmount } = render(<VideoSurface active />);
+    expect(visibleCalls()).toEqual([true]);
+
+    unmount();
+
+    expect(visibleCalls()).toEqual([true, false]);
+  });
+
   it("active -> host shown; inactive -> host hidden", () => {
     const { rerender } = render(<VideoSurface active />);
     expect(visibleCalls()).toEqual([true]);
