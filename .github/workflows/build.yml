@@ -38,6 +38,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Fetch WebView2 fixed runtime
+        run: node scripts/fetch-webview2-runtime.mjs
+
       - name: Build Tauri app
         run: npm run tauri build -- --bundles msi
         env:

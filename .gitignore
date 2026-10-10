@@ -88,3 +88,6 @@ skeleton_refactor_ui.md
 
 # mpv sidecar binary (downloaded via scripts/fetch-mpv.mjs)
 src-tauri/bin/
+
+# WebView2 fixed-version runtime (downloaded via scripts/fetch-webview2-runtime.mjs)
+src-tauri/Microsoft.WebView2.FixedVersionRuntime.*/
