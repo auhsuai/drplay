@@ -319,7 +319,19 @@ export class MpvAudioController {
       this.interpolator.reset();
       // playbackFailure dedupes (F8-6): if the command-rejection catch
       // surfaced this same crash already, this call is the no-op duplicate.
-      this.playbackFailure("mpv-engine-closed", cause);
+      // Why `engine_closed`, not `network_interrupted`: the pipe EOF says
+      // nothing about the network — mpv can die on a wedged chain, an OOM or
+      // a sidecar crash mid-download. Labelling it a network loss told the
+      // user to check their connection for a failure that has none. Only the
+      // end-file classification path (classifyEndFileError) speaks about the
+      // network, so `engine_closed` is the honest code here. Recovery is
+      // untouched: the same resets + the next playTrack respawn apply.
+      this.playbackFailure(
+        "mpv-engine-closed",
+        cause,
+        undefined,
+        "engine_closed",
+      );
     },
     onMalformed: (detail) => {
       this.logWarn(detail);
@@ -695,10 +707,17 @@ export class MpvAudioController {
     });
   }
 
+  /**
+   * @param code the surfaced error code. Defaults to `network_interrupted`
+   *   because every transport-ish caller (end-file network classification,
+   *   command rejection, stall/deadline exhaustion) IS a network failure; the
+   *   engine-death path passes `engine_closed` explicitly (see onEngineClosed).
+   */
   private playbackFailure(
     where: string,
     e: unknown,
     trackIdOverride?: string,
+    code: string = "network_interrupted",
   ): void {
     // Why (F8-6): one failure surface per attempt — a crash mid-loadfile
     // fires both onEngineClosed and the command-rejection catch, and only
@@ -719,7 +738,7 @@ export class MpvAudioController {
       "error",
       {
         message: "Không phát được bài hát này, hãy thử lại.",
-        code: "network_interrupted",
+        code,
       },
       trackIdOverride,
     );

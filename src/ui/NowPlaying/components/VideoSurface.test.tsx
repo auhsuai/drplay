@@ -678,8 +678,9 @@ describe("VideoSurface fill mode (media-player layout)", () => {
     expect(cls).not.toContain("aspect-video");
     expect(cls).not.toContain("w-[min(16rem,60vh)]");
     expect(cls).not.toContain("xl:w-[min(560px,60vh)]");
-    // The design language the surface always had is untouched.
-    expect(cls).toContain("rounded-xl");
+    // Square corners in fill mode: windowed and fullscreen alike.
+    expect(cls).toContain("rounded-none");
+    expect(cls).not.toContain("rounded-xl");
     expect(cls).toContain("overflow-hidden");
   });
 
@@ -700,5 +701,191 @@ describe("VideoSurface fill mode (media-player layout)", () => {
     expect(cls).toContain("aspect-video");
     expect(cls).toContain("xl:w-[min(560px,60vh)]");
     expect(cls).toContain("rounded-2xl");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S4 (libmpv composition plumbing): while the native host is visible the
+// webview page must be transparent over the video rect, because the DComp
+// video visual composites BELOW the webview (VIDEO-RENDER-ARCHITECTURE-ADR).
+// VideoSurface owns that switch: it toggles the root marker class the global
+// CSS keys on (html/body/app-root/overlay drop their paint), and publishes the
+// host rect as CSS-px custom properties (relative to <main>, the coordinate
+// box the player background layer clips its hole in).
+// ---------------------------------------------------------------------------
+describe("S4 host transparency plumbing", () => {
+  const HOST_CLASS = "drplay-host-visible";
+  const MAIN_ORIGIN = { left: 50, top: 100, width: 1000, height: 700 };
+
+  /** Different origin for <main> so the relative hole is not trivially 0. */
+  function stubRectsWithMainOrigin(): void {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        return (this.tagName === "MAIN"
+          ? MAIN_ORIGIN
+          : cssRect) as unknown as DOMRect;
+      },
+    );
+  }
+
+  function holeStyle(): CSSStyleDeclaration {
+    return document.documentElement.style;
+  }
+
+  it("active toggles the root marker class; inactive removes it", () => {
+    const { rerender } = render(<VideoSurface active />);
+    expect(document.documentElement.classList.contains(HOST_CLASS)).toBe(true);
+
+    rerender(<VideoSurface active={false} />);
+    expect(document.documentElement.classList.contains(HOST_CLASS)).toBe(false);
+
+    rerender(<VideoSurface active />);
+    expect(document.documentElement.classList.contains(HOST_CLASS)).toBe(true);
+  });
+
+  it("unmount removes the marker class (an audio track swaps the surface out)", () => {
+    const { unmount } = render(<VideoSurface active />);
+    expect(document.documentElement.classList.contains(HOST_CLASS)).toBe(true);
+
+    unmount();
+
+    expect(document.documentElement.classList.contains(HOST_CLASS)).toBe(false);
+  });
+
+  it("publishes the hole rect as CSS px relative to <main>", () => {
+    stubRectsWithMainOrigin();
+    render(
+      <main>
+        <VideoSurface active />
+      </main>,
+    );
+
+    // cssRect 100,250 800x450 (CSS px) - main origin 50,100:
+    expect(holeStyle().getPropertyValue("--drplay-hole-l")).toBe("50px");
+    expect(holeStyle().getPropertyValue("--drplay-hole-t")).toBe("150px");
+    expect(holeStyle().getPropertyValue("--drplay-hole-r")).toBe("850px");
+    expect(holeStyle().getPropertyValue("--drplay-hole-b")).toBe("600px");
+  });
+
+  it("a moved box re-publishes the hole on the next frame read", async () => {
+    stubRectsWithMainOrigin();
+    render(
+      <main>
+        <VideoSurface active />
+      </main>,
+    );
+
+    cssRect = { left: 200, top: 300, width: 640, height: 360 };
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    await flushFrame();
+
+    expect(holeStyle().getPropertyValue("--drplay-hole-l")).toBe("150px");
+    expect(holeStyle().getPropertyValue("--drplay-hole-t")).toBe("200px");
+    expect(holeStyle().getPropertyValue("--drplay-hole-r")).toBe("790px");
+    expect(holeStyle().getPropertyValue("--drplay-hole-b")).toBe("560px");
+  });
+
+  it("keeps the placeholder gradient only while the host is hidden", () => {
+    const { container, rerender } = render(<VideoSurface active={false} />);
+    const box = (): HTMLElement | null =>
+      container.querySelector<HTMLElement>("[data-testid='video-surface']");
+
+    expect(box()?.className).toContain("bg-gradient-to-br");
+
+    rerender(<VideoSurface active />);
+    // While the host is up the box must not paint: the DComp visual shows
+    // through its pixels.
+    expect(box()?.className).not.toContain("bg-gradient-to-br");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Visual polish. Two things the surface has to get right around the host:
+//
+//  * NO FRAME YET => the box over the video rect is solid opaque black. The DComp
+//    visual composites BELOW the webview, so painting there is legal and is the
+//    only thing that can hide the transparent page behind an empty video rect.
+//  * the per-frame rect tracker follows the overlay's slide ONLY while the host
+//    is visible. While it is hidden nothing is presented, so a per-frame
+//    measure (two forced layout reads + an IPC) is pure waste — and it is
+//    exactly the work the collapse transition would otherwise pay for.
+// ---------------------------------------------------------------------------
+describe("VideoSurface black backdrop and transition gating", () => {
+  function box(container: HTMLElement): HTMLElement {
+    const el = container.querySelector<HTMLElement>(
+      "[data-testid='video-surface']",
+    );
+    if (!el) throw new Error("surface not rendered");
+    return el;
+  }
+
+  it("host visible + no frame => solid black; first frame => the box paints nothing", () => {
+    const { container, rerender } = render(
+      <VideoSurface active hasFirstFrame={false} />,
+    );
+    expect(box(container).className).toContain("bg-black");
+
+    rerender(<VideoSurface active hasFirstFrame />);
+    expect(box(container).className).not.toContain("bg-black");
+    expect(box(container).className).not.toContain("bg-gradient-to-br");
+  });
+
+  it("a hidden host keeps the placeholder gradient even without a frame", () => {
+    const { container } = render(
+      <VideoSurface active={false} hasFirstFrame={false} />,
+    );
+    expect(box(container).className).toContain("bg-gradient-to-br");
+    expect(box(container).className).not.toContain("bg-black");
+  });
+
+  it("the slide tracker does NO per-frame work while the host is hidden", async () => {
+    render(<VideoSurface active={false} />);
+    const afterMount = rectCalls().length;
+
+    act(() => {
+      window.dispatchEvent(transitionEvent("transitionrun", "translate"));
+    });
+    cssRect = { left: 100, top: 700, width: 800, height: 450 };
+    await flushFrame();
+    await flushFrame();
+
+    expect(rectCalls()).toHaveLength(afterMount);
+  });
+
+  it("re-activating the host sends the current rect once (it may have moved while hidden)", () => {
+    const { rerender } = render(<VideoSurface active={false} />);
+    const afterMount = rectCalls().length;
+    cssRect = { left: 100, top: 700, width: 800, height: 450 };
+
+    rerender(<VideoSurface active />);
+
+    expect(rectCalls()).toHaveLength(afterMount + 1);
+    expect(rectCalls()[rectCalls().length - 1]).toEqual({
+      x: 150,
+      y: 1050,
+      w: 1200,
+      h: 675,
+    });
+  });
+
+  it("the tracker still follows the slide while the host IS visible (correctness kept)", async () => {
+    render(<VideoSurface active />);
+    expect(rectCalls()).toHaveLength(1);
+
+    act(() => {
+      window.dispatchEvent(transitionEvent("transitionrun", "translate"));
+    });
+    cssRect = { left: 100, top: 350, width: 800, height: 450 };
+    await flushFrame();
+
+    const calls = rectCalls();
+    expect(calls[calls.length - 1]).toEqual({
+      x: 150,
+      y: 525,
+      w: 1200,
+      h: 675,
+    });
   });
 });

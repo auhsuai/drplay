@@ -199,7 +199,60 @@ describe("usePlayerCommands", () => {
     expect(ctx.togglePlay).toHaveBeenCalledTimes(1);
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
   });
+});
 
+// ---------------------------------------------------------------------------
+// Slice 1 (C): a shortcut must run EXACTLY ONCE and additionally notify
+// activity so the fullscreen chrome reveals. The notification rides on the
+// shared `runPlayerCommand` entry point (which the keyboard path, the bar
+// buttons and the menu all go through) — never a second keydown listener.
+// ---------------------------------------------------------------------------
+describe("player activity notification (fullscreen chrome reveal)", () => {
+  it("a keyboard command runs once and notifies activity once", () => {
+    const ctx = makeCtx({ onActivity: vi.fn() });
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    pressKey(" ");
+
+    expect(ctx.togglePlay).toHaveBeenCalledTimes(1);
+    expect(ctx.onActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("a button/menu caller notifies activity through the same entry point", () => {
+    const ctx = makeCtx({ onActivity: vi.fn() });
+
+    runPlayerCommand("PLAYER_PLAY_PAUSE", ctx);
+
+    expect(ctx.togglePlay).toHaveBeenCalledTimes(1);
+    expect(ctx.onActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("a key with no command does not notify", () => {
+    const ctx = makeCtx({ onActivity: vi.fn() });
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    pressKey("9");
+
+    expect(ctx.onActivity).not.toHaveBeenCalled();
+    expect(ctx.togglePlay).not.toHaveBeenCalled();
+  });
+
+  it("a context without the notifier still runs the command", () => {
+    const ctx = makeCtx();
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    expect(() => pressKey(" ")).not.toThrow();
+    expect(ctx.togglePlay).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("storm banner guard", () => {
   it("a manual command clears the storm banner through the shared guard reset (F8-3 parity)", () => {
     const ctx = makeCtx();
     usePlayerStore.setState({

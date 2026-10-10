@@ -14,6 +14,48 @@ import {
  *  longer than this even if its end event is lost. */
 const TRANSITION_TRACK_CAP_MS = 1400;
 
+/** S4 (libmpv composition plumbing): marker class toggled on <html> exactly
+ *  while the native host is visible. The DComp video visual composites BELOW
+ *  the webview (VIDEO-RENDER-ARCHITECTURE-ADR), so every full-viewport layer
+ *  the page paints above it (html/body, app root, Now Playing overlay) must
+ *  drop its background then — the App.css rules key on this class. This
+ *  component is the only toggler because it owns host visibility. */
+const HOST_VISIBLE_ROOT_CLASS = "drplay-host-visible";
+
+/** S4: custom properties carrying the host rect (CSS px, relative to <main>)
+ *  that the player background layer clips its transparent hole with. Left
+ *  unset they resolve to the layer's 0/0 corner => zero-size hole => opaque,
+ *  which is the safe placeholder state before the first measurement. */
+const HOLE_VARS = [
+  "--drplay-hole-l",
+  "--drplay-hole-t",
+  "--drplay-hole-r",
+  "--drplay-hole-b",
+] as const;
+
+/** S4: publish the host rect for the background layer's clip hole. The
+ *  consumer is an absolutely-positioned child of <main>, so the coordinates
+ *  are made relative to that box — the overlay slide translates the whole
+ *  subtree, and a viewport-relative rect would drift by the slide offset
+ *  while a main-relative one stays exact. */
+function publishHoleRect(box: HTMLElement, rect: DOMRect): void {
+  const main = box.closest("main");
+  if (!main) return;
+  const origin = main.getBoundingClientRect();
+  const left = Math.max(0, rect.left - origin.left);
+  const top = Math.max(0, rect.top - origin.top);
+  const style = document.documentElement.style;
+  style.setProperty(HOLE_VARS[0], `${String(left)}px`);
+  style.setProperty(HOLE_VARS[1], `${String(top)}px`);
+  style.setProperty(HOLE_VARS[2], `${String(left + rect.width)}px`);
+  style.setProperty(HOLE_VARS[3], `${String(top + rect.height)}px`);
+}
+
+function clearHoleRect(): void {
+  const style = document.documentElement.style;
+  for (const name of HOLE_VARS) style.removeProperty(name);
+}
+
 interface VideoSurfaceProps {
   /**
    * Whether the native host should be SHOWN over this box. The surface itself
@@ -32,8 +74,8 @@ interface VideoSurfaceProps {
    * Fill the parent's box instead of the fixed 16:9 ladder (D3 media-player
    * layout): the Now Playing video mode owns a flexible area and puts its bar
    * outside it, so the surface takes exactly that area — no `aspect-video`
-   * (spec §16), and `fullscreen` only changes the corner rounding then.
-   * Default `false` keeps every existing class for other callers.
+   * (spec §16), with square corners (rounded-none) in windowed and fullscreen
+   * alike. Default `false` keeps every existing class for other callers.
    */
   fill?: boolean;
   /** Playback is running (paused is NOT loading — see the spinner condition). */
@@ -46,6 +88,14 @@ interface VideoSurfaceProps {
   hasError?: boolean;
   /** mpv reported end-of-file for this track. */
   isEnded?: boolean;
+  /**
+   * The render thread has presented at least one frame of THIS media load
+   * (`useVideoFirstFrame`). Until then the box paints solid opaque black over
+   * the video rect: the DComp visual composites BELOW the webview, so painting
+   * there is legal, and it is the only thing that can keep the (deliberately
+   * transparent) page behind an empty video rect from showing through.
+   */
+  hasFirstFrame?: boolean;
 }
 
 /**
@@ -74,6 +124,7 @@ export function VideoSurface({
   isDownloading = false,
   hasError = false,
   isEnded = false,
+  hasFirstFrame = false,
 }: VideoSurfaceProps) {
   const { t } = useTranslation();
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -88,10 +139,11 @@ export function VideoSurface({
     frameRef.current = null;
     const box = boxRef.current;
     if (!box) return;
-    const rect = toPhysicalRect(
-      box.getBoundingClientRect(),
-      window.devicePixelRatio,
-    );
+    const domRect = box.getBoundingClientRect();
+    // S4: the CSS hole follows every measured position, even one the physical
+    // dedupe below would drop (e.g. a sub-pixel move).
+    publishHoleRect(box, domRect);
+    const rect = toPhysicalRect(domRect, window.devicePixelRatio);
     // A collapsed rect (minimized window, pre-layout read) is not a window:
     // skip it rather than asking Rust to clamp a zero size.
     if (rect === null) return;
@@ -110,6 +162,17 @@ export function VideoSurface({
   // hide/show flicker and no re-acquire.
   useEffect(() => {
     setVideoHostVisible(active);
+  }, [active]);
+
+  // S4: mirror `active` onto <html> for the global transparency rules
+  // (App.css). Same single owner as the visibility call above, so the class
+  // can never disagree with what Rust has been told.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle(HOST_VISIBLE_ROOT_CLASS, active);
+    return () => {
+      root.classList.remove(HOST_VISIBLE_ROOT_CLASS);
+    };
   }, [active]);
 
   // Unmount is its OWN transition, not a change of `active`: switching to an
@@ -173,19 +236,28 @@ export function VideoSurface({
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
       }
+      // S4: no consumer survives this component, so the published hole would
+      // only be stale state for a later mount.
+      clearHoleRect();
     };
   }, [scheduleRect, sendRect]);
 
   // Transform-based movement — the Now Playing overlay slides with
-  // `translate-y` over 500ms — changes the box's POSITION without changing its
-  // size, so none of the triggers above fire: ResizeObserver reports layout
-  // size (not transforms), no `resize`, no DPR change. Without this the host
-  // would keep the rect from before the slide until some unrelated event.
-  // Transition events bubble to window, so one listener catches the overlay's
-  // transform; a bounded rAF loop re-reads the box every frame while it moves,
-  // and transitionend/cancel (or the cap) stops it. Bounded so a missed end
-  // event can never leak a permanent animation loop.
+  // `translate-y` — changes the box's POSITION without changing its size, so
+  // none of the triggers above fire: ResizeObserver reports layout size (not
+  // transforms), no `resize`, no DPR change. Without this the host would keep
+  // the rect from before the slide until some unrelated event.
+  //
+  // GATED ON `active`: while the host is hidden nothing is presented, the CSS
+  // hole is not cut, and every frame of a collapse transition would cost two
+  // forced layout reads, four root custom-property writes and an IPC for a
+  // rect nobody consumes. Re-arming on `active` sends the current rect once on
+  // the way back in, which covers a box that moved while hidden (and is a
+  // no-op when it did not, because of the dedupe above).
   useEffect(() => {
+    if (!active) return;
+    sendRect();
+
     let rafId: number | null = null;
     let deadline = 0;
     const track = (): void => {
@@ -257,7 +329,7 @@ export function VideoSurface({
         rafId = null;
       }
     };
-  }, [sendRect]);
+  }, [active, sendRect]);
 
   // The gradient + spinner is what the user sees between "video track
   // selected" and mpv's first present, and it sits behind the HWND the moment
@@ -272,11 +344,11 @@ export function VideoSurface({
     !hasError && !isEnded && (isDownloading || (isBuffering && isPlaying));
 
   // Fill mode (D3): the parent already owns the space, so the box follows it
-  // (`w-full h-full`) and only the rounding distinguishes windowed (rounded-xl)
-  // from fullscreen (edge-to-edge). Default mode keeps the cover-art ladder
-  // verbatim, with `aspect-video` instead of `aspect-square`.
+  // (`w-full h-full`) with square corners (rounded-none) — windowed and
+  // fullscreen alike. Default mode keeps the cover-art ladder verbatim, with
+  // `aspect-video` instead of `aspect-square`.
   const sizeClasses = fill
-    ? `w-full h-full ${fullscreen ? "rounded-none" : "rounded-xl"}`
+    ? "w-full h-full rounded-none"
     : `${
         fullscreen
           ? "w-full max-w-full max-h-full"
@@ -287,10 +359,27 @@ export function VideoSurface({
     // Measuring box. The rect synchroniser above is size-agnostic, so it
     // re-sends the new rect on the same rAF-coalesced path as any other
     // resize — fill mode only changes the class box.
+    //
+    // S4 + visual polish, three states and no in-between:
+    //  * host hidden          -> the old placeholder gradient (unchanged).
+    //  * host visible, NO
+    //    frame yet           -> solid opaque black. The DComp visual composites
+    //                             BELOW the webview, so this paint is legal and
+    //                             it is what hides the transparent page (and any
+    //                             stale frame of the previous item) behind an
+    //                             empty video rect.
+    //  * host visible, frame
+    //    presented           -> paint NOTHING; the DComp visual shows through.
     <div
       ref={boxRef}
       data-testid="video-surface"
-      className={`${sizeClasses} overflow-hidden transition-all duration-700 bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10 flex items-center justify-center`}
+      className={`${sizeClasses} overflow-hidden transition-all duration-700 ${
+        !active
+          ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10"
+          : hasFirstFrame
+            ? ""
+            : "bg-black"
+      } flex items-center justify-center`}
     >
       {isLoading && (
         <>

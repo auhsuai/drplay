@@ -12,6 +12,10 @@ mod token_store;
 mod seed;
 #[cfg(windows)]
 mod mpv;
+// In-process libmpv engine (S1 migration slice): selected at runtime by
+// DRPLAY_PLAYER_ENGINE=libmpv through the mpv_* dispatcher.
+#[cfg(windows)]
+mod player;
 #[cfg(windows)]
 mod media_controls;
 #[cfg(windows)]
@@ -27,7 +31,7 @@ use mpv::{mpv_command, mpv_get_property, mpv_kill_sync_best_effort, mpv_shutdown
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
 #[cfg(windows)]
-use video_host::{video_host_acquire, video_host_set_rect, video_host_set_visible};
+use video_host::{video_host_acquire, video_host_first_frame_presented, video_host_set_rect, video_host_set_visible};
 #[cfg(windows)]
 use context_menu::show_context_menu;
 
@@ -186,6 +190,32 @@ pub fn run() {
                 .level(log_level_from_env())
                 .build(),
         )
+        // MIGRATION-ONLY (S4 composition proof): remove in S7.
+        // With DRPLAY_COMPOSITION_PROOF=1, inject the red proof overlay into
+        // the main webview once its page finishes loading. Why the page-load
+        // hook and not setup() eval: at setup time the webview has not
+        // navigated yet, so eval would run in the pre-navigation document and
+        // be wiped by the app page load; the builder hook fires with
+        // PageLoadEvent::Finished for config-created windows too (tauri
+        // 2.11.3 manager/webview.rs page-load path), which is deterministic.
+        // No-op when the variable is unset.
+        .on_page_load(|webview, payload| {
+            if webview.label() != "main" {
+                return;
+            }
+            if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                return;
+            }
+            let proof_enabled =
+                matches!(std::env::var("DRPLAY_COMPOSITION_PROOF").as_deref(), Ok("1"));
+            if !proof_enabled {
+                return;
+            }
+            let proof = r#"document.body.insertAdjacentHTML('beforeend','<div id="drplay-composition-proof" style="position:fixed;left:calc(50% - 160px);top:32%;width:320px;height:120px;background:rgba(220,30,30,0.85);color:#fff;font:600 16px sans-serif;display:flex;align-items:center;justify-content:center;z-index:999999;border-radius:8px">REACT OVER VIDEO (z=999999)</div>')"#;
+            if let Err(error) = webview.eval(proof) {
+                log::warn!("[drplay] composition proof overlay eval failed: {error}");
+            }
+        })
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
 
@@ -261,6 +291,7 @@ pub fn run() {
             #[cfg(windows)] video_host_acquire,
             #[cfg(windows)] video_host_set_rect,
             #[cfg(windows)] video_host_set_visible,
+            #[cfg(windows)] video_host_first_frame_presented,
             #[cfg(windows)] show_context_menu,
         ])
         .build(tauri::generate_context!());
@@ -282,6 +313,10 @@ pub fn run() {
                 // this handler entirely are still covered by KILL_ON_JOB_CLOSE.
                 #[cfg(windows)]
                 mpv_kill_sync_best_effort(app_handle);
+                // In-process engine counterpart: ordered destroy (event thread
+                // join + mpv_destroy). No-op when no engine was spawned.
+                #[cfg(windows)]
+                player::teardown_for_exit();
                 // The video host is OUR child window, not mpv's, so nothing
                 // else reclaims it: destroying it here is what keeps a
                 // painting surface from outliving the app. A no-op when no host

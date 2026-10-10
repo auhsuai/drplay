@@ -142,6 +142,7 @@
   "player": {
     "no_track": "No track playing",
     "network_interrupted": "Network connection lost. Retrying...",
+    "engine_closed": "The player stopped unexpectedly. Retrying...",
     "format_error": "Audio format not supported. Skipping to next track.",
     "stream_unplayable": "This track can't be streamed (moov at file end). Press play again to try.",
     "advance_stopped": "Drive is overloaded or locked — auto-playback paused. Try again in a few minutes.",
@@ -245,7 +246,8 @@
       "repeat": "Repeat",
       "repeat_off": "Off",
       "repeat_track": "Repeat Track",
-      "repeat_queue": "Repeat Queue"
+      "repeat_queue": "Repeat Queue",
+      "video_menu": "Video options"
     },
     "media_info": {
       "title": "Media Information",

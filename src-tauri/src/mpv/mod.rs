@@ -24,13 +24,19 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
-use handle::{mpv_state, running_ipc_from_state, MpvHandle};
+use handle::{mpv_state, running_ipc_from_state, take_labelled, MpvHandle};
 pub(crate) use handle::mpv_kill_sync_best_effort;
-use ipc::{EventSink, IpcMessage, MpvIpc};
+// Wire types shared with the in-process libmpv engine dispatcher
+// (src/player): both engines must emit the same message shapes through the
+// same sink type — single source of truth for the frozen contract.
+pub(crate) use ipc::{EventSink, IpcMessage};
+use ipc::MpvIpc;
 
 /// Properties observed right after spawn as `(observe id, mpv property name)`.
 /// The ids are stable handles chosen by us; the names map 1:1 to mpv properties.
-const OBSERVED_PROPERTIES: &[(u64, &str)] = &[
+/// Shared with the libmpv engine (src/player/engine.rs), which observes the
+/// same set so both engines emit identical property-change events.
+pub(crate) const OBSERVED_PROPERTIES: &[(u64, &str)] = &[
     (1, "time-pos"),
     (2, "duration"),
     (3, "pause"),
@@ -48,7 +54,9 @@ fn app_handle() -> Result<&'static tauri::AppHandle, String> {
 }
 
 /// Map IPC messages to the frontend event names fixed by the contract.
-fn event_sink(app: tauri::AppHandle) -> EventSink {
+/// Shared with the libmpv engine dispatcher (src/player): one mapper keeps
+/// both engines byte-identical on the wire.
+pub(crate) fn event_sink(app: tauri::AppHandle) -> EventSink {
     use tauri::Emitter;
     Arc::new(move |message: IpcMessage, epoch: u64, conn: u64| match message {
         IpcMessage::PropertyChange { name, data } => {
@@ -77,20 +85,31 @@ fn event_sink(app: tauri::AppHandle) -> EventSink {
 /// by — including the no-op path, which answers with the running handle's id.
 #[tauri::command]
 pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
+    // Engine selection is a runtime switch (S1 migration): libmpv mode routes
+    // to the in-process engine, anything else keeps the legacy sidecar.
+    if crate::player::is_libmpv_mode() {
+        return crate::player::spawn(&app).await;
+    }
     let state = mpv_state(&app);
     let mut slot = state.lock().await;
 
     if let Some(handle) = slot.as_mut() {
+        let pid = handle.child.id().unwrap_or_default();
         match handle.child.try_wait() {
             // Still alive → already spawned, nothing to do.
             Ok(None) => return Ok(handle.spawn_reply()),
-            Ok(Some(status)) => log::warn!("[mpv] previous sidecar exited ({status}); respawning"),
+            // Log the observed death where it is observed (pid + status), not
+            // only "previous sidecar exited" — the pid is what ties the death
+            // to the job that pinned it.
+            Ok(Some(status)) => log::info!("[mpv] sidecar exited (pid {pid}, {status}); respawning"),
             Err(poll_error) => {
                 log::warn!("[mpv] failed to poll previous sidecar: {poll_error}; respawning")
             }
         }
-        slot.take();
     }
+    // Release the previous handle, if any: dropping it closes its job, and that
+    // close IS the kill, so it is labelled with the path that closed it.
+    drop(take_labelled(&mut slot, "mpv_spawn_respawn"));
 
     let pipe_name = process::new_pipe_name();
     // Sidecar log (F2, 2026-09-17 freeze report): with stdout/stderr null a
@@ -106,7 +125,7 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
     }
     let spawned = process::spawn_mpv(&pipe_name, mpv_log.as_deref())?;
     let mut child = spawned.child;
-    let job = spawned.job;
+    let mut job = spawned.job;
     let client = match process::connect_pipe(&pipe_name).await {
         Ok(client) => client,
         Err(connect_error) => {
@@ -119,6 +138,8 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
             if let Err(kill_error) = child.start_kill() {
                 log::error!("[mpv] failed to kill sidecar after pipe connect failure: {kill_error}");
             }
+            // `job` drops on the way out and closes the (still-killed) job.
+            job.mark_teardown("mpv_spawn_pipe_connect_failed");
             return Err(match &early_exit {
                 Some(status) => format!("{connect_error} (mpv exited early: {status})"),
                 None => connect_error,
@@ -138,6 +159,7 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
         {
             // A fresh pipe failing immediately means mpv died at startup.
             let _ = child.start_kill();
+            job.mark_teardown("mpv_spawn_observe_failed");
             return Err(format!("mpv spawn failed while observing {property}: {observe_error}"));
         }
     }
@@ -157,6 +179,9 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
 /// by the time this resolves.
 #[tauri::command]
 pub async fn mpv_command(cmd: Vec<String>) -> Result<Value, String> {
+    if crate::player::is_libmpv_mode() {
+        return crate::player::command(cmd).await;
+    }
     let args: Vec<Value> = cmd.into_iter().map(Value::String).collect();
     let ipc = running_ipc().await?;
     let data = ipc.send_command(args).await?;
@@ -166,6 +191,9 @@ pub async fn mpv_command(cmd: Vec<String>) -> Result<Value, String> {
 /// Read one mpv property, e.g. `time-pos`. Returns the property value.
 #[tauri::command]
 pub async fn mpv_get_property(prop: String) -> Result<Value, String> {
+    if crate::player::is_libmpv_mode() {
+        return crate::player::get_property(prop).await;
+    }
     let ipc = running_ipc().await?;
     ipc.send_command(vec![json!("get_property"), json!(prop)]).await
 }
@@ -173,10 +201,13 @@ pub async fn mpv_get_property(prop: String) -> Result<Value, String> {
 /// Stop the sidecar. Safe to call when nothing is running.
 #[tauri::command]
 pub async fn mpv_shutdown() -> Result<(), String> {
+    if crate::player::is_libmpv_mode() {
+        return crate::player::shutdown().await;
+    }
     let app = app_handle()?;
     let state = mpv_state(app);
     let mut slot = state.lock().await;
-    let Some(mut handle) = slot.take() else {
+    let Some(mut handle) = take_labelled(&mut slot, "mpv_shutdown") else {
         return Ok(());
     };
     // The pipe close that follows is commanded, not an engine failure: tell

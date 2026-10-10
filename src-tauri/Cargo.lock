@@ -1401,6 +1401,7 @@ dependencies = [
  "hyper-util",
  "image",
  "keyring",
+ "libloading 0.8.9",
  "lofty",
  "log",
  "moka",

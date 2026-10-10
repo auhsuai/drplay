@@ -115,8 +115,9 @@ pub(crate) fn wide(value: &str) -> Vec<u16> {
 /// window's client area (React's `getBoundingClientRect`, unscaled by us).
 /// Clamp to what `SetWindowPos` can express (`i32`) and keep the size
 /// non-negative: a negative width is not a meaningful window, and a minimized
-/// window legitimately reports a zero-sized rect.
-fn clamp_rect(x: i64, y: i64, w: i64, h: i64) -> (i32, i32, i32, i32) {
+/// window legitimately reports a zero-sized rect. Also reused by the libmpv
+/// surface path (player/mod.rs), where the same contract holds.
+pub(crate) fn clamp_rect(x: i64, y: i64, w: i64, h: i64) -> (i32, i32, i32, i32) {
     let fit = |value: i64| value.clamp(0, i32::MAX as i64) as i32;
     (fit(x), fit(y), fit(w), fit(h))
 }
@@ -686,8 +687,10 @@ pub(crate) fn destroy() {
 /// Resolve the main window's raw handle. Tauri returns
 /// `windows::Win32::Foundation::HWND` (the `windows` crate's newtype) while
 /// this module speaks `windows-sys`; both wrap the same `*mut c_void`, so the
-/// newtype is unwrapped here at the single boundary.
-fn main_window_hwnd(app: &tauri::AppHandle) -> Result<HWND, String> {
+/// newtype is unwrapped here at the single boundary. Shared with the in-process
+/// engine dispatcher (player/mod.rs), which needs the same handle for the S3
+/// DirectComposition target.
+pub(crate) fn main_window_hwnd(app: &tauri::AppHandle) -> Result<HWND, String> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| format!("window '{MAIN_WINDOW_LABEL}' not found"))?;
@@ -706,6 +709,15 @@ fn main_window_hwnd(app: &tauri::AppHandle) -> Result<HWND, String> {
 /// not created yet. A failure costs only the context menu.
 #[tauri::command]
 pub fn video_host_acquire(app: tauri::AppHandle) -> i64 {
+    if crate::player::is_libmpv_mode() {
+        // S3: libmpv mode owns the video surface through DirectComposition on
+        // the main window; no native host window may ever be created or shown.
+        // The DComp target is created with the engine (render thread owns it),
+        // so acquire validates the main window and answers the established
+        // non-zero "surface available" handle; idempotent, never creates a
+        // window.
+        return crate::player::video_surface_acquire(&app);
+    }
     let parent = match main_window_hwnd(&app) {
         Ok(parent) => Some(parent),
         Err(window_error) => {
@@ -749,6 +761,12 @@ pub fn video_host_acquire(app: tauri::AppHandle) -> i64 {
 /// it keeps painting above the WebView2 child window.
 #[tauri::command]
 pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
+    if crate::player::is_libmpv_mode() {
+        // S3: forward to the DirectComposition visual rect (physical px,
+        // client area). Clamping happens inside the player path.
+        crate::player::video_surface_set_rect(x, y, w, h);
+        return;
+    }
     let Some(hwnd) = current_hwnd() else {
         // Not an error: an audio-only session never acquires a host, and this
         // command can be called before the first video is loaded.
@@ -773,6 +791,12 @@ pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
 /// on the WebView.
 #[tauri::command]
 pub fn video_host_set_visible(app: tauri::AppHandle, visible: bool) {
+    if crate::player::is_libmpv_mode() {
+        // S3: forward to the DirectComposition visual (SetContent surface/null
+        // on the render thread). Nothing is created or shown natively here.
+        crate::player::video_surface_set_visible(visible);
+        return;
+    }
     let Some(hwnd) = current_hwnd() else {
         log::debug!("[video-host] set_visible({visible}) ignored: no host acquired");
         return;
@@ -820,6 +844,24 @@ pub fn video_host_set_visible(app: tauri::AppHandle, visible: bool) {
         Ok(parent) => focus_webview(parent),
         Err(window_error) => log::debug!("[video-input] focus skipped: {window_error}"),
     }
+}
+
+/// Read-only pull complement to the one-shot `video-first-frame` event: has the
+/// render thread already handed a frame of the CURRENT media load to the
+/// composition surface? The event has no replay (player/render/mod.rs), so a
+/// frontend that missed it — page reload while the engine kept playing, a
+/// listener re-registration racing a warm-engine first present — can ask this
+/// instead and recover. The push event stays the fast path.
+///
+/// The legacy engine has no such signal (no composition surface), so the
+/// answer there is always false — exactly today's behavior, where the legacy
+/// engine never emits the event either.
+#[tauri::command]
+pub fn video_host_first_frame_presented() -> bool {
+    if crate::player::is_libmpv_mode() {
+        return crate::player::video_surface_first_frame_presented();
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------

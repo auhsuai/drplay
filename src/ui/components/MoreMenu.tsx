@@ -30,6 +30,10 @@ import {
   getContextMenuStyle,
   shouldOpenUpwards,
 } from "./MoreMenu/menuPositioning";
+import {
+  focusMenuItemAt as focusItemAt,
+  getEnabledMenuItems as getEnabledItems,
+} from "./MoreMenu/menuFocus";
 import { EVENT_LOCATE_FILE } from "./MoreMenu/constants";
 import type { MoreMenuVariant } from "./MoreMenu/constants";
 
@@ -177,31 +181,16 @@ export function MoreMenu({
   // containment in ImageCropperModal) instead of threading a prop through
   // every item caller. Only role="menuitem" entries participate, so the
   // playlists search input keeps its own arrow-key behavior.
-  const getEnabledMenuItems = useCallback((): HTMLElement[] => {
-    const root = dropdownRef.current;
-    if (!root) return [];
-    return Array.from(
-      root.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-    ).filter((item) => item.getAttribute("aria-disabled") !== "true");
-  }, []);
+  // Roving focus is shared with the video menu (menuFocus.ts) so both menus
+  // navigate identically — including checkable rows (menuitemcheckbox), which
+  // the previous menuitem-only selector would have skipped.
+  const getEnabledMenuItems = useCallback(
+    (): HTMLElement[] => getEnabledItems(dropdownRef.current),
+    [],
+  );
 
   const focusMenuItemAt = useCallback((index: number): void => {
-    const root = dropdownRef.current;
-    if (!root) return;
-    const items = Array.from(
-      root.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-    );
-    const enabled = items.filter(
-      (item) => item.getAttribute("aria-disabled") !== "true",
-    );
-    if (enabled.length === 0) return;
-    const target = enabled[(index + enabled.length) % enabled.length];
-    // Keep exactly one tabIndex=0 in the menu: aria-disabled entries are
-    // pulled out of the roving set even though they keep their DOM position.
-    items.forEach((item) => {
-      item.tabIndex = item === target ? 0 : -1;
-    });
-    target?.focus();
+    focusItemAt(dropdownRef.current, index);
   }, []);
 
   // APG: focus moves to the first item whenever the menu opens — trigger
@@ -405,9 +394,7 @@ export function MoreMenu({
                   // trigger focus per P2-08-3).
                   setShowPlaylistsSubmenu(false);
                   dropdownRef.current
-                    ?.querySelector<HTMLElement>(
-                      '[role="menuitem"][aria-haspopup="menu"]',
-                    )
+                    ?.querySelector<HTMLElement>('[aria-haspopup="menu"]')
                     ?.focus();
                   return;
                 }

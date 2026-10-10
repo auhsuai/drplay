@@ -38,6 +38,72 @@ body {
   --player-bg-fade: rgba(18, 18, 18, 0.85);
 }
 
+/* S4 (libmpv composition plumbing): while the native video host is visible the
+   page must be transparent over the video rect, because the DComp video
+   visual composites BELOW the webview (VIDEO-RENDER-ARCHITECTURE-ADR). The
+   .drplay-host-visible class is toggled on <html> by VideoSurface — the
+   single owner of host visibility — exactly while the host is shown. These
+   full-viewport layers drop their paint then: the page canvas, the app root
+   and the Now Playing overlay (marked .drplay-host-clear). Everything they
+   would show in the rect comes from the DComp visual instead; outside the
+   rect the player background layer (NowPlayingView, itself clipped with an
+   evenodd hole) repaints the identical background, so the visible result is
+   unchanged. Unlayered on purpose so it wins over Tailwind's @layer
+   utilities, same trick as :is(.dark body) above. */
+html.drplay-host-visible,
+html.drplay-host-visible body,
+html.drplay-host-visible .drplay-host-clear {
+  background-color: transparent;
+}
+
+/* S4b (video-invisible-in-the-real-app fix): the rule above only reaches html,
+   body and the two containers that opted in with .drplay-host-clear. The APP
+   SHELL sits BELOW the Now Playing overlay in paint order, so every full-bleed
+   layer it owns painted straight through the overlay's transparent background
+   and out of the background layer's clip hole — the observed symptom was the
+   tab root's own #0A0A0A (HomeTab.tsx <main>) instead of the video, with no
+   error anywhere. A marker class cannot fix this after the fact: the offenders
+   are plain <main>/<div> roots in tab components, so they would each need
+   tagging. `#content-area` (tabs, MainContent, LikedSongs, QueuePanel) and the
+   sidebar `aside` are the only two structural roots of that subtree, so
+   neutralizing their paint clears every layer above them in one rule.
+   Provably no visual change: the Now Playing overlay is a SIBLING of AppShell,
+   never a descendant (so this cannot touch the overlay's own background
+   layer), and while the marker class is set the overlay is open and its
+   player-bg layer already repaints the identical background over the whole
+   viewport except the hole — so the shell was already invisible outside the
+   rect. The PlayerBar wrapper is not a hole candidate: AppShell collapses it to
+   h-0/overflow-hidden while Now Playing is open. background-image is cleared
+   too because the same full-bleed layers set gradients through `background`
+   (SettingsTab, LikedSongs), which background-color alone leaves painted.
+
+   S4c (shell-ghosts-over-the-video fix): the background reset alone is NOT
+   enough, and the remaining leaks are unpaintable by any background rule.
+   HomeTab cards carry their color as an INLINE `style="background: <palette>"`
+   (inline styles beat every stylesheet rule, so `background-color: transparent`
+   can never touch them), and text/icons are foreground paint that no
+   background reset removes. Both still drew over the DComp video inside the
+   clip hole — the observed symptom was the Home tab ghosting over the moving
+   picture. While the marker class is set the overlay covers the window, so the
+   shell contributes nothing visible and the whole subtree must stop painting:
+   `visibility: hidden` kills every leak (inline styles included) in one
+   inherited declaration. The `transition-property` reset makes the flip
+   instant on the way in — most shell nodes animate with `transition: all`
+   (274 measured live), and a `visibility` change under a running transition
+   stays VISIBLE until the transition ends (~300ms of ghost after play).
+   Going the other way nothing to correct: on class removal the after-change
+   state is this element's own transition list, and hidden->visible resolves
+   visible from the first frame on. */
+html.drplay-host-visible aside,
+html.drplay-host-visible aside *,
+html.drplay-host-visible #content-area,
+html.drplay-host-visible #content-area * {
+  background-color: transparent;
+  background-image: none;
+  visibility: hidden;
+  transition-property: none;
+}
+
 /* Hide focus outline on Tab/mouse — keep focus position and keyboard navigation intact */
 :focus,
 :focus-visible {

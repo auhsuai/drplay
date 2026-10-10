@@ -1,4 +1,4 @@
-import { FileWarning, WifiOff } from "lucide-react";
+import { FileWarning, TriangleAlert, WifiOff } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { PlayerErrorInfo } from "../../store/playerStore";
@@ -21,7 +21,15 @@ function ErrorIcon({
   type: string;
   className?: string;
 }) {
-  const Icon = type === "format_error" ? FileWarning : WifiOff;
+  // Why: the engine reported the player/engine dying (engine_closed), not a
+  // network loss — WifiOff would contradict the copy the same way the old
+  // mislabelled code did.
+  const Icon =
+    type === "format_error"
+      ? FileWarning
+      : type === "engine_closed"
+        ? TriangleAlert
+        : WifiOff;
   return <Icon className={`${className} text-brand-text`} />;
 }
 
@@ -36,11 +44,13 @@ export function ErrorToast({ errorInfo, inline = false }: ErrorToastProps) {
   const errorText =
     errorInfo.code === "network_interrupted"
       ? t("player.network_interrupted")
-      : errorInfo.code === "format_error"
-        ? t("player.format_error")
-        : errorInfo.code === "advance_stopped"
-          ? t("player.advance_stopped")
-          : errorInfo.message;
+      : errorInfo.code === "engine_closed"
+        ? t("player.engine_closed")
+        : errorInfo.code === "format_error"
+          ? t("player.format_error")
+          : errorInfo.code === "advance_stopped"
+            ? t("player.advance_stopped")
+            : errorInfo.message;
 
   const toast = (
     <div className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 select-none">

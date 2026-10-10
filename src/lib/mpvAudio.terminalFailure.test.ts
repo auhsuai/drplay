@@ -206,8 +206,12 @@ describe("MpvAudioController — terminal failure semantics (F8-5/F8-6)", () => 
     rejectLoad(new Error("mpv is not running (call mpv_spawn first)"));
     await play;
 
+    // F8-6 is the point of this test: ipc-closed and the loadfile rejection are
+    // ONE failure surface. ipc-closed lands first, so engine_closed is the
+    // surfaced code (an engine death, not a network loss); the rejection that
+    // follows stays suppressed.
     expect(errors).toHaveLength(1);
-    expect(errors[0]?.code).toBe("network_interrupted");
+    expect(errors[0]?.code).toBe("engine_closed");
   });
 
   it("(F8-6) the command rejection lands first: the later engine-closed event is suppressed, retry still reloads", async () => {

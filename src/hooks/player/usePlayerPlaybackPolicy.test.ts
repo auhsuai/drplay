@@ -70,6 +70,10 @@ const NETWORK_ERROR = {
   message: "Mạng không ổn định, đang thử lại...",
   code: "network_interrupted",
 };
+const ENGINE_CLOSED_ERROR = {
+  message: "Trình phát đã dừng đột ngột, đang thử lại...",
+  code: "engine_closed",
+};
 
 beforeEach(() => {
   fakeController.on.mockClear();
@@ -181,6 +185,30 @@ describe("usePlayerPlaybackPolicy engine-fact projection (R3.2)", () => {
     });
 
     expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("engine_closed (mpv engine died) → isPlaying=false, same terminal projection", () => {
+    // The code rename must not change what the UI does: an engine death is a
+    // terminal playback failure just like a transport one, so the transport
+    // must stop instead of showing "playing" over a dead engine.
+    renderPolicy();
+
+    act(() => {
+      fakeController._emit("error", { ...ENGINE_CLOSED_ERROR, ...CURRENT });
+    });
+
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  it("engine_closed is NOT treated as format_error: no broken mark, no storm count", () => {
+    renderPolicy();
+
+    act(() => {
+      fakeController._emit("error", { ...ENGINE_CLOSED_ERROR, ...CURRENT });
+    });
+
+    expect(usePlayerStore.getState().brokenTrackIds).not.toContain("track-1");
+    expect(usePlayerStore.getState().errorInfo?.code).toBe("engine_closed");
   });
 
   it("format_error error does NOT flip isPlaying — the ended/advance policy owns that state (repeat-one parity)", () => {

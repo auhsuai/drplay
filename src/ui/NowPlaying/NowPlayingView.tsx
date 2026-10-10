@@ -1,6 +1,8 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import type { PlayMode, Track } from "../../types";
-import { Music, ChevronDown, Maximize, Minimize } from "lucide-react";
+import { ChevronDown, Music } from "lucide-react";
+import { memo, useCallback, useEffect, useState } from "react";
+
 import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
 import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
@@ -15,7 +17,25 @@ import { VolumeSlider } from "../PlayerBar/VolumeSlider";
 import { ErrorToast } from "../PlayerBar/ErrorToast";
 import { classifyMediaKind, MEDIA_KIND_VIDEO } from "../../utils/mediaKind";
 import { shouldShowVideoHost } from "../../lib/videoHost";
+import { useVideoFirstFrame } from "../../player/useVideoFirstFrame";
 import type { MenuSection } from "../../player/menuModel";
+import type { VideoMenuAnchor } from "../../player/useVideoMenu";
+
+/**
+ * S4: clips the player background layer to everything EXCEPT the native host
+ * rect. The rect arrives as CSS custom properties published by VideoSurface
+ * (CSS px, relative to <main>); while unset they resolve to a 0-size hole at
+ * the corner — no hole — which keeps the layer fully opaque until the first
+ * measurement. `evenodd` turns the inner rectangle into a hole; the syntax is
+ * Baseline CSS (MDN: available across browsers since January 2020) and
+ * WebView2 is Chromium.
+ */
+const HOST_HOLE_CLIP_PATH =
+  "polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, " +
+  "var(--drplay-hole-l, 0px) var(--drplay-hole-t, 0px), " +
+  "var(--drplay-hole-r, 0px) var(--drplay-hole-t, 0px), " +
+  "var(--drplay-hole-r, 0px) var(--drplay-hole-b, 0px), " +
+  "var(--drplay-hole-l, 0px) var(--drplay-hole-b, 0px))";
 
 interface NowPlayingViewProps {
   currentTrack: Track | null;
@@ -44,17 +64,33 @@ interface NowPlayingViewProps {
    *  can pass `undefined` through under exactOptionalPropertyTypes. */
   onToggleFullscreen?: (() => void) | undefined;
   /**
-   * The Media Information dialog is open (owned by App). It is a React surface
-   * drawn over the video area, so the native host must hide while it is up —
-   * CSS can never cover native child content.
-   */
-  isMediaInfoOpen: boolean;
-  /**
-   * Open one native menu section from the video playerbar's buttons (D3).
+   * Open the DrPlay video menu (Slice 2) for `section`. The bar's More button
+   * passes the measured trigger anchor; the video area's right-click passes a
+   * pointer anchor through `onOpenVideoMenuAt`. Both reach the SAME renderer
+   * and the SAME menuModel tree — the anchor is the only difference.
    * Optional so the view still renders without a menu owner; the bar's menu
-   * buttons are a safe no-op then.
+   * button is a safe no-op then.
    */
-  onOpenPlayerMenu?: ((section: MenuSection) => void) | undefined;
+  onOpenPlayerMenu?:
+    ((section: MenuSection, anchor: VideoMenuAnchor) => void) | undefined;
+  /**
+   * Right-click on the video area opens the same menu at the pointer. Optional
+   * (the audio surface has no menu at all).
+   */
+  onOpenVideoMenuAt?: ((x: number, y: number) => void) | undefined;
+  /**
+   * Should the floating fullscreen bar be painted? Owned by
+   * useFullscreenChrome in App and threaded down unchanged; omitted (or false)
+   * outside fullscreen has no effect on the windowed layout, which is a plain
+   * in-flow row that is always visible.
+   */
+  chromeVisible?: boolean | undefined;
+  /**
+   * Player activity inside the video area (Slice 1/C): pointer movement or a
+   * click. Optional so the view renders without the chrome owner (the bar
+   * simply never auto-hides then).
+   */
+  onRevealChrome?: (() => void) | undefined;
 }
 
 export const NowPlayingView = memo(function NowPlayingView({
@@ -71,8 +107,10 @@ export const NowPlayingView = memo(function NowPlayingView({
   isShellLocked,
   isFullscreen = false,
   onToggleFullscreen,
-  isMediaInfoOpen,
   onOpenPlayerMenu,
+  onOpenVideoMenuAt,
+  chromeVisible = true,
+  onRevealChrome,
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
 
@@ -131,8 +169,15 @@ export const NowPlayingView = memo(function NowPlayingView({
     isShellLocked,
     hasError: errorInfo !== null,
     hasEnded: isEnded,
-    isMediaInfoOpen,
   });
+
+  // Has the render thread presented a frame of THIS media item yet? Host
+  // visibility cannot answer that — it flips when a track is SELECTED, which is
+  // long before mpv has anything to show — and until a frame exists the video
+  // rect must stay opaque, because the whole page is deliberately transparent
+  // while the host is visible (App.css `html.drplay-host-visible`).
+  const hasVideoFrame = useVideoFirstFrame(currentTrackId ?? null);
+  const videoReady = showVideoHost && hasVideoFrame;
 
   const { coverUrl, setCoverUrl, realTitle, realArtist, bgColor, bgPalette } =
     useNowPlayingMetadata(currentTrack, token);
@@ -177,7 +222,10 @@ export const NowPlayingView = memo(function NowPlayingView({
 
   if (!currentTrack) {
     return (
-      <main className="flex-1 bg-gray-100 dark:bg-[#121212] overflow-hidden flex flex-col items-center justify-center transition-colors duration-300 relative">
+      // No media at all is still "no usable frame", so this surface is solid
+      // opaque black: an empty player must not let anything show through the
+      // composition transparency.
+      <main className="flex-1 bg-black overflow-hidden flex flex-col items-center justify-center relative">
         <button
           onClick={onBack}
           aria-label={t("common.close")}
@@ -198,22 +246,23 @@ export const NowPlayingView = memo(function NowPlayingView({
   // Fullscreen is offered for the VIDEO surface only: it exists to give the
   // video the window's space. Enlarging the audio cover-art square is not the
   // same affordance and is not asked for, so the toggle stays hidden there.
-  const showFullscreenToggle = isVideoTrack && onToggleFullscreen !== undefined;
+  // The header copy of that toggle is gone (user decision): the floating bar
+  // carries its own, and `f` / Escape exist.
 
-  // The back button lives in the column's top padding band. Video fullscreen
-  // removes that padding so the surface can actually grow, which leaves the
-  // button stranded over the picture — so it goes. AUDIO keeps it: its
-  // fullscreen layout still reserves the band (see the `h-full pt-14 pb-4`
-  // content group below). The EXIT toggle is a separate button and stays.
-  const showBackButton = !isVideoTrack || !isFullscreen;
+  // The header chevron survives AUDIO only. The video surface has no header
+  // chrome at all — the bar's controls plus Escape / `f` are the way out, and
+  // that is asserted by tests, not by a comment.
+  const showBackButton = !isVideoTrack;
 
-  return (
-    <main
-      className="h-full overflow-hidden flex flex-col relative transition-all duration-1000 ease-in-out"
-      style={
-        bgPalette.length === 4
-          ? {
-              background: `
+  // S4: the player background. VIDEO mode moves it off <main> onto the
+  // dedicated layer below, which clips the native host rect out while the
+  // host is visible — the DComp video visual composites BELOW the webview
+  // (VIDEO-RENDER-ARCHITECTURE-ADR), so nothing in the page may paint over
+  // that rect. AUDIO mode keeps the paint inline on <main> exactly as before.
+  const playerBackgroundStyle: CSSProperties =
+    bgPalette.length === 4
+      ? {
+          background: `
           linear-gradient(to bottom, transparent 65%, var(--player-bg-fade) 100%),
           radial-gradient(circle at 0% 0%, ${bgPalette[0] ?? ""} 0%, transparent 75%),
           radial-gradient(circle at 100% 0%, ${bgPalette[1] ?? ""} 0%, transparent 75%),
@@ -221,21 +270,43 @@ export const NowPlayingView = memo(function NowPlayingView({
           radial-gradient(circle at 100% 100%, ${bgPalette[3] ?? ""} 0%, transparent 75%),
           var(--player-bg-solid)
         `,
-            }
-          : {
-              background: bgColor
-                ? `linear-gradient(to bottom, ${bgColor} 0%, var(--player-bg-solid) 100%)`
-                : "var(--player-bg-solid)",
-            }
-      }
+        }
+      : {
+          background: bgColor
+            ? `linear-gradient(to bottom, ${bgColor} 0%, var(--player-bg-solid) 100%)`
+            : "var(--player-bg-solid)",
+        };
+
+  return (
+    <main
+      className="h-full overflow-hidden flex flex-col relative transition-all duration-1000 ease-in-out"
+      style={isVideoTrack ? undefined : playerBackgroundStyle}
     >
+      {/* S4: video-mode background layer — same paint the audio branch keeps
+          on <main>; while the host is visible it punches the host rect hole
+          (evenodd polygon) with the CSS variables VideoSurface publishes.
+          z-0 keeps it behind the z-10 video column and the z-50 controls. */}
+      {isVideoTrack && (
+        <div
+          aria-hidden="true"
+          data-testid="drplay-player-bg"
+          className="absolute inset-0 z-0 pointer-events-none"
+          style={
+            videoReady
+              ? { ...playerBackgroundStyle, clipPath: HOST_HOLE_CLIP_PATH }
+              : playerBackgroundStyle
+          }
+        />
+      )}
+
       {/* Error surface (P2-12-6): the PlayerBar toast is portaled into
           #content-area at z-50, i.e. BEHIND this z-[9999] overlay — the
           full-screen view renders the same banner inline so the error state
           stays visible (and the center button below becomes the retry). */}
       <ErrorToast errorInfo={errorInfo} inline />
 
-      {/* Back Button */}
+      {/* Back Button — AUDIO only (see `showBackButton`). The video surface
+          has no header chrome. */}
       {showBackButton && (
         <div className="absolute top-6 left-6 z-50">
           <button
@@ -248,32 +319,6 @@ export const NowPlayingView = memo(function NowPlayingView({
         </div>
       )}
 
-      {/* Fullscreen toggle (video only). Mirrors the back button's placement,
-          styling and icon weight, so the exit affordance reads as part of the
-          same surface rather than new chrome. It sits ABOVE the video rect in
-          the content flow, so it never overlaps the native host (which cannot
-          be covered by CSS). */}
-      {showFullscreenToggle && (
-        <div className="absolute top-6 right-6 z-50">
-          <button
-            data-testid="fullscreen-toggle"
-            onClick={onToggleFullscreen}
-            aria-label={
-              isFullscreen
-                ? t("player.exit_fullscreen")
-                : t("player.fullscreen")
-            }
-            className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
-          >
-            {isFullscreen ? (
-              <Minimize className="w-6 h-6" />
-            ) : (
-              <Maximize className="w-6 h-6" />
-            )}
-          </button>
-        </div>
-      )}
-
       {isVideoTrack ? (
         /* D3 media-player layout (spec §15/§16/§34): the video fills the
            flexible area and ONE horizontal bar with every control sits BELOW
@@ -281,22 +326,43 @@ export const NowPlayingView = memo(function NowPlayingView({
            native host rect never covers a control — same structural guarantee
            as the old stacked layout. Audio keeps its layout untouched.
 
-           F3: fullscreen drops the column padding (`p-0`). With `pt-14 px-3
-           pb-2` in BOTH states the measured box was byte-identical on toggle
-           and the button was a visual no-op; the padding band is exactly what
-           made the windowed surface smaller, so fullscreen spends it on the
-           picture. Nothing else changes — the area is still `flex-1 min-h-0`,
-           the bar still follows it, so the ResizeObserver in VideoSurface sees
-           a genuinely larger box and re-sends the rect. */
+           The column carries NO padding in either mode: the old `pt-14 px-3
+           pb-2` band only reserved space for the removed video header, so both
+           windowed and fullscreen give the whole content area to the video
+           viewport and align the bar with the player bounds. mpv letterboxes
+           the picture itself, so the aspect ratio is never stretched. */
         <div
-          className={`relative z-10 flex flex-col h-full w-full ${
-            isFullscreen ? "p-0" : "pt-14 px-3 pb-2"
-          }`}
+          className="relative z-10 flex flex-col h-full w-full"
+          // Activity seam (Slice 1/C): pointer movement or a click anywhere in
+          // the player area reveals the fullscreen chrome. The listener lives
+          // in useFullscreenChrome and is attached ONLY while fullscreen; this
+          // is just the React-side forwarding. It is on the COLUMN (not on the
+          // bar) so movement over the picture counts, and so the bar keeps
+          // itself visible while the pointer is on it.
+          onPointerMove={onRevealChrome}
+          onPointerDown={onRevealChrome}
         >
-          <div className="flex-1 min-h-0 w-full flex items-center justify-center">
+          {/* Right-click (Slice 2): React owns pointer input over the video
+              rect now — the legacy HWND host that used to emit
+              `video-context-menu` does not exist under the in-process libmpv
+              renderer, so the native popup was dead code. preventDefault is
+              required even though useAppGlobalEvents blocks the document-wide
+              browser menu: this handler must own the anchor AND stop a native
+              menu from being requested at all. It is on the VIDEO AREA only,
+              so the bar and the audio layout are untouched. */}
+          <div
+            data-testid="video-area"
+            className="flex-1 min-h-0 w-full flex items-center justify-center"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onOpenVideoMenuAt?.(e.clientX, e.clientY);
+            }}
+          >
             <VideoSurface
               fill
               active={showVideoHost}
+              hasFirstFrame={hasVideoFrame}
               fullscreen={isFullscreen}
               isPlaying={isPlaying}
               isBuffering={isBuffering}
@@ -322,6 +388,7 @@ export const NowPlayingView = memo(function NowPlayingView({
             onToggleFullscreen={onToggleFullscreen}
             onOpenMenu={onOpenPlayerMenu}
             active={isOpen}
+            chromeVisible={chromeVisible}
           />
         </div>
       ) : (

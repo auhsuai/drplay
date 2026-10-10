@@ -36,6 +36,21 @@ pub(super) fn mpv_state(app: &tauri::AppHandle) -> SharedMpv {
     app.state::<SharedMpv>().inner().clone()
 }
 
+/// Lock-scope core of every teardown path: take the sidecar handle out of the
+/// slot and name the path that is about to close its kill-on-close job. Shared
+/// by `mpv_spawn` (reaping a dead predecessor) and `mpv_shutdown`, split out of
+/// them for the same reason as `running_ipc_from_state` — so the
+/// close-attribution contract is testable without a Tauri app handle.
+pub(super) fn take_labelled(
+    slot: &mut Option<MpvHandle>,
+    reason: &'static str,
+) -> Option<MpvHandle> {
+    slot.take().map(|mut handle| {
+        handle.job.mark_teardown(reason);
+        handle
+    })
+}
+
 /// Best-effort synchronous kill for process-exit paths (`RunEvent::Exit`,
 /// tray Quit) that cannot `.await` the async `mpv_shutdown`. Non-blocking by
 /// design: `try_lock` never waits (a contended lock means the async owner is
@@ -48,12 +63,24 @@ pub(crate) fn mpv_kill_sync_best_effort(app: &tauri::AppHandle) {
         return;
     };
     if let Some(handle) = slot.as_mut() {
-        // Already exited (or unpollable): nothing to kill; the slot keeps the
-        // reaped handle until process teardown, when the closed job finishes
-        // any remainder via KILL_ON_JOB_CLOSE.
-        if let Ok(None) = handle.child.try_wait() {
-            if let Err(kill_error) = handle.child.start_kill() {
-                log::warn!("[mpv] sync exit kill failed: {kill_error}");
+        let pid = handle.child.id().unwrap_or_default();
+        // Observe the exit HERE, not only in `mpv_spawn`: a sidecar that was
+        // already gone by the time the app exits is exactly the case worth
+        // logging, and `mpv_spawn` only reports it when someone re-spawns.
+        match handle.child.try_wait() {
+            // Alive: signal termination. The slot keeps the reaped handle until
+            // process teardown, when the closed job finishes any remainder via
+            // KILL_ON_JOB_CLOSE.
+            Ok(None) => {
+                if let Err(kill_error) = handle.child.start_kill() {
+                    log::warn!("[mpv] sync exit kill failed: {kill_error}");
+                }
+            }
+            Ok(Some(status)) => {
+                log::info!("[mpv] sidecar exited (pid {pid}, {status}) before the app-exit kill");
+            }
+            Err(poll_error) => {
+                log::warn!("[mpv] failed to poll the sidecar during the app-exit kill: {poll_error}");
             }
         }
     }

@@ -139,3 +139,100 @@ async fn running_ipc_rejects_when_no_sidecar_is_spawned() {
     assert!(error.contains("mpv is not running"), "got: {error}");
     assert!(state.try_lock().is_ok(), "the rejection path must not keep the lock");
 }
+
+// --- kill-on-close job lifecycle (Phase 9 TASK B) ---------------------------
+
+/// JOB-003: the commanded-shutdown path must close the job AND say so. This
+/// drives `take_labelled` — the exact teardown code `mpv_shutdown` calls — so
+/// a close in the app log can be attributed to a path instead of appearing
+/// anonymous.
+#[tokio::test]
+async fn a_commanded_shutdown_closes_the_job_with_its_reason() {
+    let pipe_name = format!(r"\\.\pipe\drplay-mpv-job-shutdown-{}", std::process::id());
+    let (handle, _server) = test_handle(&pipe_name).await;
+    let job_id = handle.job.id;
+    let state: SharedMpv = Arc::new(Mutex::new(Some(handle)));
+
+    // Exactly `mpv_shutdown`'s lock scope.
+    let mut slot = state.lock().await;
+    let Some(handle) = take_labelled(&mut slot, "mpv_shutdown") else {
+        panic!("the slot must hold the sidecar handle");
+    };
+    handle.ipc.mark_shutdown_requested();
+    drop(handle); // the last reference — closing the job is the kill
+    drop(slot);
+
+    assert_eq!(
+        job::recorded_close(job_id),
+        Some("mpv_shutdown"),
+        "the job close must be recorded against the shutdown path"
+    );
+}
+
+/// JOB-004: an engine that dies on its own must never look like a commanded
+/// shutdown. Two independent pieces of evidence must agree: the connection
+/// stays un-commanded (so the pipe close is still reported as a failure), and
+/// the job close carries the reaping path's reason — never `mpv_shutdown`.
+#[tokio::test]
+async fn an_unexpected_child_death_is_not_recorded_as_a_commanded_shutdown() {
+    let pipe_name = format!(r"\\.\pipe\drplay-mpv-job-unexpected-{}", std::process::id());
+    let (mut handle, _server) = test_handle(&pipe_name).await;
+    let job_id = handle.job.id;
+    // The engine dies without anyone commanding a shutdown — the shape of the
+    // Phase 8 failure (exit 0xFFFFFFFF, pipe EOF, `mpv_shutdown` never called).
+    handle
+        .child
+        .start_kill()
+        .expect("the unexpected-death simulation must signal the child");
+    let state: SharedMpv = Arc::new(Mutex::new(Some(handle)));
+
+    let mut slot = state.lock().await;
+    assert!(
+        !slot.as_ref().expect("the slot must hold the handle").ipc.shutdown_was_requested(),
+        "nobody commanded this shutdown, so the flag must stay false"
+    );
+    drop(take_labelled(&mut slot, "mpv_spawn_respawn"));
+    drop(slot);
+
+    assert_eq!(
+        job::recorded_close(job_id),
+        Some("mpv_spawn_respawn"),
+        "an unexpected death must be attributed to the reaping path, not to a shutdown"
+    );
+}
+
+/// JOB-006: closing the job kills mpv, so a normal load/command round-trip must
+/// leave the job open. If a round-trip ever dropped the last reference the
+/// engine would die mid-playback — the failure this instrumentation exists to
+/// investigate. Asserts both that the handle is still owned and that the job
+/// has no close record.
+#[tokio::test]
+async fn the_job_stays_open_across_a_command_round_trip() {
+    let pipe_name = format!(r"\\.\pipe\drplay-mpv-job-alive-{}", std::process::id());
+    let (handle, server) = test_handle(&pipe_name).await;
+    let job_id = handle.job.id;
+    let state: SharedMpv = Arc::new(Mutex::new(Some(handle)));
+
+    let ipc = running_ipc_from_state(&state).await.expect("a running sidecar must resolve");
+    let (frame_seen_tx, frame_seen_rx) = tokio::sync::oneshot::channel();
+    let (reply_go_tx, reply_go_rx) = tokio::sync::oneshot::channel();
+    let responder = tokio::spawn(answer_one_command(server, frame_seen_tx, reply_go_rx));
+
+    let command =
+        tokio::spawn(async move { ipc.send_command(vec![json!("get_property"), json!("pause")]).await });
+    frame_seen_rx.await.expect("the command must reach the peer");
+    reply_go_tx.send(()).expect("the responder must accept the go signal");
+    let data = command.await.expect("the command task must not panic").expect("the round trip must succeed");
+    assert_eq!(data, json!(7));
+    responder.await.expect("the responder must finish");
+
+    assert!(
+        state.lock().await.is_some(),
+        "the sidecar handle must still be owned after the round trip"
+    );
+    assert_eq!(
+        job::recorded_close(job_id),
+        None,
+        "the kill-on-close job must still be open — closing it would kill mpv mid-playback"
+    );
+}

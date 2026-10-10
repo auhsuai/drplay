@@ -31,11 +31,14 @@ import { useDriveStore } from "./store/driveStore";
 import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
 import { usePlayerCommands } from "./player/usePlayerCommands";
+import { useFullscreenChrome } from "./player/useFullscreenChrome";
 import {
-  openVideoMenuSection,
-  useVideoContextMenu,
-} from "./player/useVideoContextMenu";
-import type { MenuSection } from "./player/menuModel";
+  applyWindowFullscreen,
+  syncWindowFullscreenState,
+} from "./player/windowFullscreen";
+import { useVideoContextMenu } from "./player/useVideoContextMenu";
+import { useVideoMenu } from "./player/useVideoMenu";
+import { VideoMenu } from "./ui/components/MoreMenu/VideoMenu";
 import { onPlayerUi } from "./player/playerUiBus";
 import type { PlayerCommandContext } from "./player/commands";
 import { MediaInfoDialog } from "./ui/NowPlaying/components/MediaInfoDialog";
@@ -185,6 +188,14 @@ function App() {
   // surface: it is owned here so the Escape handler can peel exactly one
   // layer (fullscreen -> overlay -> nothing), and it never reaches Rust or
   // mpv — the native host stays inside the app window either way.
+  // Player fullscreen (TASK 1). A REFINEMENT of the overlay, not a second
+  // surface: it is owned here so the Escape handler can peel exactly one
+  // layer (fullscreen -> overlay -> nothing), and it never reaches Rust or
+  // mpv — the native host stays inside the app window either way.
+  //
+  // Slice 1: this flag now also drives the REAL window fullscreen
+  // (applyWindowFullscreen below), so "fullscreen" means the OS window is
+  // fullscreen, not just a bigger video area in the same window.
   const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
@@ -283,6 +294,59 @@ function App() {
   const stableHandleToggleQueue = useCallback(() => {
     setIsQueueOpen((prev) => !prev);
   }, []);
+
+  // Slice 1 (B/C): the ONE owner of the fullscreen player-bar visibility
+  // policy (one state, one 3000ms timer). It lives here because App owns both
+  // `isPlayerFullscreen` and the player command context, so the keyboard path,
+  // the bar buttons and the pointer path all feed the same instance — no
+  // second timer or state anywhere else.
+  const { chromeVisible, revealChrome, setMenuOpen } = useFullscreenChrome({
+    isFullscreen: isPlayerFullscreen,
+  });
+
+  // The Media Information dialog suspends the fullscreen auto-hide through the
+  // SAME seam as the video menu: open = reveal + suspend, close = FRESH 3000 ms
+  // countdown. It is derived from the one dialog open-state, so there is no
+  // second timer, no second owner, and no playback/fullscreen state touched.
+  useEffect(() => {
+    setMenuOpen(isMediaInfoOpen);
+  }, [isMediaInfoOpen, setMenuOpen]);
+
+  // Real (OS) fullscreen, React -> window. Skipped on the very first commit so
+  // a launch into a normal window does not fire a pointless IPC, and skipped
+  // whenever the value is unchanged. Engine/playback are untouched: this only
+  // asks the window manager to change decoration.
+  const lastAppliedFullscreenRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (lastAppliedFullscreenRef.current === isPlayerFullscreen) return;
+    lastAppliedFullscreenRef.current = isPlayerFullscreen;
+    void applyWindowFullscreen(isPlayerFullscreen);
+  }, [isPlayerFullscreen]);
+
+  // Real fullscreen, window -> React. The user can leave fullscreen without
+  // React (Esc, F11, the OS window chrome, the taskbar), and Tauri v2 exposes
+  // no fullscreen-changed event, so the state is re-read from the window on
+  // the events a real transition produces. The disposer ends every listener,
+  // and the flag change re-runs the React -> window effect above only when the
+  // value actually differs (the ref guard), so this can never ping-pong.
+  useEffect(() => {
+    let disposed = false;
+    let dispose: (() => void) | null = null;
+    void syncWindowFullscreenState((fullscreen) => {
+      if (disposed) return;
+      setIsPlayerFullscreen((prev) =>
+        prev === fullscreen ? prev : fullscreen,
+      );
+    }).then((d) => {
+      if (disposed) d();
+      else dispose = d;
+    });
+    return () => {
+      disposed = true;
+      dispose?.();
+      dispose = null;
+    };
+  }, []);
   const stableHandleCloseQueue = useCallback(() => {
     setIsQueueOpen(false);
   }, []);
@@ -311,37 +375,44 @@ function App() {
     previous: stableHandlePrevTrack,
     togglePlayMode: stableHandleTogglePlayMode,
     setPlayMode: handleSetPlayMode,
+    // Slice 1 (C): one activity seam for every surface. runPlayerCommand
+    // notifies it once per executed command, so a shortcut still fires exactly
+    // once and only reveals as a side effect — no second keydown listener and
+    // no redefined shortcut.
+    onActivity: revealChrome,
   };
   usePlayerCommands(playerCommandContext);
 
-  // Right-click on the native video host (event from video_host.rs) opens the
-  // native context menu. Only active while a VIDEO track is loaded — the host
-  // (and thus the event) only exists in that state anyway.
+  // Right-click on the LEGACY HWND video host (event from video_host.rs) still
+  // opens the native context menu. Under the in-process libmpv renderer that
+  // host is never created (video_host_acquire short-circuits), so the event
+  // cannot fire there — this is the legacy path, kept untouched. The current
+  // renderer's right-click is the React handler in NowPlayingView.
   const isVideoActive =
     currentTrack !== null &&
     classifyMediaKind(currentTrack.originalName ?? currentTrack.title) ===
       MEDIA_KIND_VIDEO;
   useVideoContextMenu({ ctx: playerCommandContext, isVideoActive });
 
-  // D3: the video playerbar's Audio/Subtitle/More buttons open the same native
-  // menu sections as the right-click submenus. Stable identity through a
-  // ref-delegate (the same F1 pattern the transport wrappers use) so the
-  // memoized NowPlayingView is not invalidated on every App render; the ref
-  // always holds the freshest command context + fullscreen state.
-  const openVideoPlayerMenuRef =
-    useRef<(section: MenuSection) => void>(undefined);
-  const stableOpenVideoPlayerMenu = useCallback((section: MenuSection) => {
-    openVideoPlayerMenuRef.current?.(section);
-  }, []);
-  useEffect(() => {
-    openVideoPlayerMenuRef.current = (section: MenuSection) => {
-      void openVideoMenuSection(
-        section,
-        playerCommandContext,
-        isPlayerFullscreen,
-      );
-    };
+  // Slice 2: the DrPlay video menu. ONE hook owns BOTH entry points (the bar's
+  // More button and right-click on the video area), so the entries, the icons,
+  // the submenus and the dispatch path cannot drift between them. Its open
+  // state drives the chrome suspension that Slice 1 wired to the native-menu
+  // promise: `setMenuOpen` reveals + suspends on open and restarts a FRESH
+  // 3000ms countdown on close. Both callbacks below are stable, so the
+  // memoized NowPlayingView is not invalidated on every App render.
+  const videoMenu = useVideoMenu({
+    ctx: playerCommandContext,
+    isFullscreen: isPlayerFullscreen,
+    onMenuOpenChange: setMenuOpen,
   });
+  const { open: openVideoMenu } = videoMenu;
+  const stableOpenVideoMenuAtPoint = useCallback(
+    (x: number, y: number) => {
+      openVideoMenu("full", { kind: "point", x, y });
+    },
+    [openVideoMenu],
+  );
 
   // Player-ui bus: commands that need a React effect instead of an mpv call.
   // Subscribed once (App is the only owner of the dialog/toast surfaces).
@@ -415,7 +486,9 @@ function App() {
   );
 
   return (
-    <div className="relative flex flex-col h-screen overflow-hidden bg-white dark:bg-[#121212] transition-colors duration-300">
+    // drplay-host-clear (S4): while the video host is visible this root's
+    // background must not paint over the host rect — App.css drops it then.
+    <div className="drplay-host-clear relative flex flex-col h-screen overflow-hidden bg-white dark:bg-[#121212] transition-colors duration-300">
       {/* Login Overlay */}
       <LoginGate
         isLoggedIn={isLoggedIn}
@@ -542,14 +615,33 @@ function App() {
         )}
         isFullscreen={isPlayerFullscreen}
         onToggleFullscreen={stableHandleToggleFullscreen}
-        isMediaInfoOpen={isMediaInfoOpen}
-        onOpenPlayerMenu={stableOpenVideoPlayerMenu}
+        onOpenPlayerMenu={videoMenu.open}
+        onOpenVideoMenuAt={stableOpenVideoMenuAtPoint}
+        chromeVisible={chromeVisible}
+        onRevealChrome={revealChrome}
       />
 
-      {/* Media Information dialog (D2b). Rendered above the z-[9999] overlay;
-          while open, NowPlayingView hides the native video host so the dialog
-          is not painted over by it. Keyed by open-state so every open starts
-          from a fresh (loading) component — no stale-data frame. */}
+      {/* Slice 2: the one video menu, portaled to <body> like every DrPlay
+          menu. Rendered here (App owns the state) but positioned against the
+          anchor the caller measured, so it is the SAME component whether the
+          bar button or a right-click opened it. */}
+      <VideoMenu
+        isOpen={videoMenu.isOpen}
+        entries={videoMenu.entries}
+        anchorPoint={videoMenu.anchorPoint}
+        buttonRect={videoMenu.buttonRect}
+        trigger={videoMenu.trigger}
+        onSelect={videoMenu.select}
+        onClose={videoMenu.close}
+      />
+
+      {/* Media Information dialog (D2b). It is a React overlay painted ABOVE
+          the still-rendering video — the DComp video composites BELOW the
+          webview, so the host no longer hides for it. The dialog's translucent
+          backdrop dims the video. Its open-state also suspends the floating
+          bar's auto-hide through the menu seam (effect above). Keyed by
+          open-state so every open starts from a fresh (loading) component — no
+          stale-data frame. */}
       <MediaInfoDialog
         key={isMediaInfoOpen ? "media-info-open" : "media-info-closed"}
         open={isMediaInfoOpen}

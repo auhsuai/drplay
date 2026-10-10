@@ -57,6 +57,7 @@ vi.mock("lucide-react", () => {
   const icons = [
     "CloudOff",
     "FileWarning",
+    "TriangleAlert",
     "WifiOff",
     "Play",
     "Pause",
@@ -600,6 +601,24 @@ describe("PlayerBar error surface shared with the full-screen view (P2-12-6)", (
     });
 
     expect(screen.getByText(en.player.format_error)).toBeTruthy();
+  });
+
+  it("engine_closed renders its OWN translated copy, not the network one", () => {
+    // Guards the code -> translation mapping in ErrorToast: without a branch
+    // for engine_closed it would silently fall back to the raw Vietnamese
+    // engine message instead of the localized player copy.
+    renderPlayer();
+    expect(screen.queryByText(en.player.engine_closed)).toBeNull();
+
+    act(() => {
+      usePlayerStore.getState().setErrorInfo({
+        code: "engine_closed",
+        message: "Không phát được bài hát này, hãy thử lại.",
+      });
+    });
+
+    expect(screen.getByText(en.player.engine_closed)).toBeTruthy();
+    expect(screen.queryByText(en.player.network_interrupted)).toBeNull();
   });
 });
 

@@ -16,6 +16,7 @@ export const VIDEO_HOST_COMMANDS = {
   acquire: "video_host_acquire",
   setRect: "video_host_set_rect",
   setVisible: "video_host_set_visible",
+  firstFramePresented: "video_host_first_frame_presented",
 } as const;
 
 const LOGGER_SOURCE = "videoHost";
@@ -98,6 +99,30 @@ export function setVideoHostVisible(visible: boolean): void {
 }
 
 /**
+ * Pull complement to the one-shot `video-first-frame` event: has the render
+ * thread already handed a frame of the CURRENT media load to the composition
+ * surface? The event has no replay, so a listener that (re)registered after
+ * the emit — page reload while the engine kept playing, a warm-engine media
+ * switch — asks this instead and recovers the signal.
+ *
+ * Resolves false on any failure (legacy engine, no engine, IPC error): "no
+ * frame yet" is the safe answer, and the push event remains the fast path.
+ */
+export function firstFramePresented(): Promise<boolean> {
+  return invoke<boolean>(VIDEO_HOST_COMMANDS.firstFramePresented).catch(
+    (e: unknown) => {
+      void captureError({
+        level: "warn",
+        source: LOGGER_SOURCE,
+        message: `first-frame-pull-failed: ${e instanceof Error ? e.message : String(e)}`,
+        kind: "video-host-first-frame-pull-failed",
+      });
+      return false;
+    },
+  );
+}
+
+/**
  * CSS px (from getBoundingClientRect, viewport-relative) -> physical px
  * (relative to the window's client area).
  *
@@ -150,8 +175,6 @@ export interface VideoHostVisibilityInput {
   hasError: boolean;
   /** mpv reported end-of-file for the current track. */
   hasEnded: boolean;
-  /** The Media Information dialog covers the video area (D2b). */
-  isMediaInfoOpen: boolean;
 }
 
 /**
@@ -168,9 +191,11 @@ export interface VideoHostVisibilityInput {
  * leaving the host up freezes the last frame on screen and it looks like it is
  * still playing while the queue advances underneath it.
  *
- * `isMediaInfoOpen` hides it for the same paint-order reason as `hasError`:
- * the dialog is a React surface drawn over the video area, and native child
- * content can never be covered by CSS.
+ * The Media Information dialog is deliberately NOT a term. It is a React
+ * overlay (fixed inset-0, z-[10000]) and the DComp video composites BELOW the
+ * webview, so the dialog simply draws on top of a still-rendering video. The
+ * old hide-during-dialog term belonged to the native-child era (CSS could not
+ * cover a native child HWND) and was removed with it.
  */
 export function shouldShowVideoHost(input: VideoHostVisibilityInput): boolean {
   return (
@@ -179,7 +204,6 @@ export function shouldShowVideoHost(input: VideoHostVisibilityInput): boolean {
     input.isOpen &&
     !input.isShellLocked &&
     !input.hasError &&
-    !input.hasEnded &&
-    !input.isMediaInfoOpen
+    !input.hasEnded
   );
 }

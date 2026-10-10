@@ -10,6 +10,24 @@ import { NowPlayingView } from "./NowPlayingView";
 
 const tauriMocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
+
+const eventMocks = vi.hoisted(() => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+  handlers: [] as Array<() => void>,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, handler: () => void) => {
+    if (name === "video-first-frame") eventMocks.handlers.push(handler);
+    return eventMocks.listen();
+  },
+}));
+async function firstFrame(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    for (const handler of eventMocks.handlers) handler();
+  });
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -95,7 +113,6 @@ function baseProps() {
     isOpen: true,
     token: "tok",
     isShellLocked: false,
-    isMediaInfoOpen: false,
   };
 }
 
@@ -112,6 +129,7 @@ function visibleCalls(): boolean[] {
 beforeEach(() => {
   tauriMocks.invoke.mockReset();
   tauriMocks.invoke.mockResolvedValue(undefined);
+  eventMocks.handlers.length = 0;
   storeState.errorInfo = null;
   storeState.currentTrack = null;
 });
@@ -176,8 +194,7 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     if (!box) throw new Error("video surface not rendered");
     return box;
   }
-
-  it("a VIDEO track offers the fullscreen toggle; an AUDIO track does NOT", () => {
+  it("a VIDEO track offers the fullscreen toggle only from the bar, never the header; an AUDIO track has none", () => {
     const video = render(
       <NowPlayingView
         {...baseProps()}
@@ -185,8 +202,14 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
         onToggleFullscreen={vi.fn()}
       />,
     );
+    // The header toggle is gone (user decision); the bar keeps its own.
     expect(
       video.container.querySelector("[data-testid='fullscreen-toggle']"),
+    ).toBeNull();
+    expect(
+      video.container.querySelector(
+        "[data-testid='video-player-bar'] button[aria-label='player.fullscreen']",
+      ),
     ).not.toBeNull();
     video.unmount();
 
@@ -208,6 +231,7 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     const { container } = render(
       <NowPlayingView {...baseProps()} onToggleFullscreen={vi.fn()} />,
     );
+
     expect(
       container.querySelector("[data-testid='fullscreen-toggle']"),
     ).toBeNull();
@@ -224,11 +248,12 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     );
 
     const before = surfaceBox(container).className;
-    // D3 media-player layout: the video fills its flow area in BOTH states —
-    // only the rounding changes when going edge-to-edge.
+    // D3 media-player layout: the video fills its flow area in BOTH states,
+    // square-cornered in windowed and fullscreen alike.
     expect(before).toContain("w-full");
     expect(before).toContain("h-full");
-    expect(before).toContain("rounded-xl");
+    expect(before).toContain("rounded-none");
+    expect(before).not.toContain("rounded-xl");
     expect(before).not.toContain("aspect-video");
     expect(
       container.querySelector("[data-testid='video-player-bar']"),
@@ -247,7 +272,9 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     // DrPlay's own chrome is still there — fullscreen does not hide it.
     expect(container.querySelector("button.bg-brand-primary")).not.toBeNull();
     expect(
-      container.querySelector("[data-testid='fullscreen-toggle']"),
+      container.querySelector(
+        "[data-testid='video-player-bar'] button[aria-label='player.exit_fullscreen']",
+      ),
     ).not.toBeNull();
     expect(
       container.querySelector("[data-testid='video-player-bar']"),
@@ -258,9 +285,21 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
     ).toHaveLength(1);
   });
 
-  it("the toggle is reachable in fullscreen to leave again (back-button styling)", () => {
+  it("fullscreen is reachable from the FLOATING BAR only (the header toggle is gone)", () => {
     const props = baseProps();
-    const { container } = render(
+    const { container, rerender } = render(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+    // The header control the user asked to remove is gone, in both states…
+    expect(
+      container.querySelector("[data-testid='fullscreen-toggle']"),
+    ).toBeNull();
+
+    rerender(
       <NowPlayingView
         {...props}
         currentTrack={VIDEO}
@@ -268,18 +307,21 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
         onToggleFullscreen={vi.fn()}
       />,
     );
-    const toggle = container.querySelector<HTMLButtonElement>(
-      "[data-testid='fullscreen-toggle']",
+    expect(
+      container.querySelector("[data-testid='fullscreen-toggle']"),
+    ).toBeNull();
+
+    // …and the bar still carries it, so fullscreen stays escapable.
+    const bar = container.querySelector<HTMLElement>(
+      "[data-testid='video-player-bar']",
     );
-    if (!toggle) throw new Error("fullscreen toggle not rendered");
-    // Same affordance language as the back button it mirrors.
-    expect(toggle.className).toContain("text-gray-500");
-    expect(toggle.className).toContain("hover:text-gray-900");
-    expect(toggle.className).toContain("dark:hover:text-white");
-    expect(toggle.className).toContain("active:scale-95");
+    if (!bar) throw new Error("video player bar not rendered");
+    expect(
+      bar.querySelector('button[aria-label="player.exit_fullscreen"]'),
+    ).not.toBeNull();
   });
 
-  it("clicking the toggle asks the owner to toggle (App owns the state)", () => {
+  it("the bar's fullscreen control still asks the owner to toggle (App owns the state)", () => {
     const onToggleFullscreen = vi.fn();
     const { container } = render(
       <NowPlayingView
@@ -289,9 +331,9 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
       />,
     );
     const toggle = container.querySelector<HTMLButtonElement>(
-      "[data-testid='fullscreen-toggle']",
+      "[data-testid='video-player-bar'] button[aria-label='player.fullscreen']",
     );
-    if (!toggle) throw new Error("fullscreen toggle not rendered");
+    if (!toggle) throw new Error("bar fullscreen button not rendered");
 
     fireEvent.click(toggle);
 
@@ -343,8 +385,8 @@ describe("fullscreen: a refinement of the Now Playing overlay", () => {
       />,
     );
 
-    expect(surfaceBox(container).className).toContain("rounded-xl");
-    expect(surfaceBox(container).className).not.toContain("rounded-none");
+    expect(surfaceBox(container).className).toContain("rounded-none");
+    expect(surfaceBox(container).className).not.toContain("rounded-xl");
     expect(surfaceBox(container).className).not.toContain("aspect-video");
     expect(visibleCalls()).toEqual([true]);
   });
@@ -447,16 +489,18 @@ describe("host visibility matrix", () => {
     expect(visibleCalls()).toEqual([true]);
   });
 
-  it("opening the media info dialog hides the host, closing it brings the video back", () => {
-    const { rerender } = render(
-      <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
-    );
-    rerender(
-      <NowPlayingView {...baseProps()} currentTrack={VIDEO} isMediaInfoOpen />,
-    );
-    rerender(<NowPlayingView {...baseProps()} currentTrack={VIDEO} />);
+  // UPDATED CONTRACT (D2b): this test used to assert [true, false, true] — the
+  // old behaviour hid the host while the Media Information dialog was open
+  // (native-child era: CSS could not cover a native child). Under the current
+  // architecture the dialog is a React overlay above the video and the DComp
+  // video composites below the webview, so the host must KEEP rendering for
+  // the whole dialog lifetime. The `isMediaInfoOpen` prop no longer exists on
+  // the view, so the assertion becomes: a healthy video stays shown, and
+  // nothing about the dialog can churn it.
+  it("media info dialog no longer hides the host: the video stays visible", () => {
+    render(<NowPlayingView {...baseProps()} currentTrack={VIDEO} />);
 
-    expect(visibleCalls()).toEqual([true, false, true]);
+    expect(visibleCalls()).toEqual([true]);
   });
 });
 
@@ -698,6 +742,151 @@ describe("video mode uses the horizontal media-player layout (D3)", () => {
     ).not.toBeNull();
   });
 
+  // Slice 1 (B): the bar floats over the video in fullscreen, so the video
+  // area keeps the FULL height in both chrome states — the surface's measured
+  // box is byte-identical whether the bar is painted or hidden, which is what
+  // keeps the native host rect from churn-ing on every reveal.
+  it("fullscreen: the bar is out of flow so the video area keeps the full height", () => {
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+
+    const bar = container.querySelector<HTMLElement>(
+      "[data-testid='video-player-bar']",
+    );
+    if (!bar) throw new Error("video player bar not rendered");
+    expect(bar.className).toContain("absolute");
+
+    // The area is the ONLY in-flow sibling of the bar now: nothing below the
+    // video is reserved, so it stretches over the whole column.
+    const area = surface(container).parentElement;
+    if (!area) throw new Error("video area not found");
+    expect(area.className).toContain("flex-1");
+    expect(area.className).toContain("min-h-0");
+    expect(area.nextElementSibling).toBe(bar);
+  });
+
+  it("fullscreen: hiding the chrome does not change the video area at all", () => {
+    const props = baseProps();
+    const { container, rerender } = render(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+
+    const areaBefore = surface(container).parentElement?.className ?? "";
+    rerender(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+        chromeVisible={false}
+      />,
+    );
+    const areaHidden = surface(container).parentElement?.className ?? "";
+
+    expect(areaHidden).toBe(areaBefore);
+  });
+
+  it("windowed mode still shows the bar (chrome visibility never hides it outside fullscreen)", () => {
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        onToggleFullscreen={vi.fn()}
+        chromeVisible={false}
+      />,
+    );
+
+    const bar = container.querySelector<HTMLElement>(
+      "[data-testid='video-player-bar']",
+    );
+    if (!bar) throw new Error("video player bar not rendered");
+    expect(bar.className).not.toContain("pointer-events-none");
+    expect(bar.className).not.toContain("absolute");
+  });
+
+  it("pointer movement on the video area asks the owner to reveal the chrome", () => {
+    const onRevealChrome = vi.fn();
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+        onRevealChrome={onRevealChrome}
+      />,
+    );
+
+    fireEvent.pointerMove(surface(container));
+
+    expect(onRevealChrome).toHaveBeenCalled();
+  });
+
+  it("opening the More menu routes to the owner with the section AND the trigger anchor", () => {
+    // Menu open/close is owned in App (it holds the React menu state and the
+    // chrome suspension), so the bar only has to route the request. What must
+    // hold here: the request still reaches the owner with the right section,
+    // now carrying the measured trigger anchor (Slice 2), and no
+    // fullscreen-only listener is introduced by the bar itself.
+    // Old assertion: `expect(onOpenPlayerMenu).toHaveBeenCalledWith("full")`
+    // — superseded because the anchor is now part of the call.
+    const onOpenPlayerMenu = vi.fn();
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO}
+        isFullscreen
+        onToggleFullscreen={vi.fn()}
+        onOpenPlayerMenu={onOpenPlayerMenu}
+      />,
+    );
+
+    const more = container.querySelector<HTMLButtonElement>(
+      "[data-testid='video-player-bar'] button[aria-label='player.more']",
+    );
+    if (!more) throw new Error("More button not rendered");
+    fireEvent.click(more);
+
+    expect(onOpenPlayerMenu).toHaveBeenCalledWith("full", {
+      kind: "button",
+      rect: expect.anything() as DOMRect,
+      trigger: more,
+    });
+  });
+
+  it("paused playback does not pin the fullscreen chrome visible", () => {
+    const props = baseProps();
+    const { container } = render(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        isFullscreen
+        isPlaying={false}
+        onToggleFullscreen={vi.fn()}
+        chromeVisible={false}
+      />,
+    );
+
+    // Nothing in the bar may reintroduce visibility because playback is paused:
+    // the hidden state is the CSS mechanism alone.
+    const bar = container.querySelector<HTMLElement>(
+      "[data-testid='video-player-bar']",
+    );
+    if (!bar) throw new Error("video player bar not rendered");
+    expect(bar.className).toContain("opacity-0");
+    expect(bar.className).toContain("pointer-events-none");
+  });
+
   it("AUDIO mode never renders the video bar — the old stacked layout is intact", () => {
     const { container } = render(
       <NowPlayingView {...baseProps()} currentTrack={AUDIO} />,
@@ -712,13 +901,13 @@ describe("video mode uses the horizontal media-player layout (D3)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// F3: fullscreen must actually CHANGE the surface. Measured live: toggling
-// fullscreen flipped `isFullscreen` but the measured rect stayed byte-identical
-// (x:12 y:56 w:1000 h:639) because BOTH states shared one fixed class on the
-// video column — `pt-14 px-3 pb-2` — and the bar eats the remaining height. The
-// toggle was therefore a visual no-op. Fullscreen now drops that padding, and
-// the back button (which lived in the top padding band) goes with it; the exit
-// toggle stays reachable.
+// F3: the video column must give the picture the whole content area. Measured
+// live: toggling fullscreen flipped `isFullscreen` but the measured rect stayed
+// byte-identical (x:12 y:56 w:1000 h:639) because BOTH states shared one fixed
+// class on the video column — `pt-14 px-3 pb-2` — and the bar eats the
+// remaining height. That band only reserved space for the removed video header,
+// so it is gone in BOTH states; the back button (which lived in it) goes with
+// it, and the exit toggle stays reachable.
 // ---------------------------------------------------------------------------
 describe("F3: fullscreen really enlarges the video surface", () => {
   /** The video column wrapper: surface -> flex area -> column. */
@@ -744,7 +933,7 @@ describe("F3: fullscreen really enlarges the video surface", () => {
     return el as HTMLElement;
   }
 
-  it("windowed: the video column keeps its padding and the back button is there", () => {
+  it("windowed: the video column reserves no header band and the header chevron is gone", () => {
     const { container } = render(
       <NowPlayingView
         {...baseProps()}
@@ -753,12 +942,15 @@ describe("F3: fullscreen really enlarges the video surface", () => {
       />,
     );
 
-    expect(videoColumn(container).className).toContain("pt-14");
-    expect(videoColumn(container).className).toContain("px-3");
-    expect(backButton(container)).not.toBeNull();
+    // The reserved header band (`pt-14 px-3 pb-2`) is gone: the video viewport
+    // fills the whole content area in windowed mode too.
+    expect(videoColumn(container).className).not.toContain("pt-14");
+    expect(videoColumn(container).className).not.toContain("px-3");
+    expect(videoColumn(container).className).not.toContain("pb-2");
+    expect(backButton(container)).toBeNull();
   });
 
-  it("fullscreen: the padding is gone (so the rect grows) and the back button with it", () => {
+  it("fullscreen: the header band stays gone and the header chevron with it", () => {
     const props = baseProps();
     const { container, rerender } = render(
       <NowPlayingView
@@ -779,15 +971,21 @@ describe("F3: fullscreen really enlarges the video surface", () => {
     );
     const after = videoColumn(container).className;
 
-    expect(after).not.toBe(before);
-    expect(after).toContain("p-0");
+    // No reserved header band in EITHER mode, so the picture gets the whole
+    // content area in both; the surface stays the column's `flex-1 min-h-0`
+    // child.
     expect(after).not.toContain("pt-14");
     expect(after).not.toContain("px-3");
-    // The back button sat in the top padding band; fullscreen has no band left.
+    expect(after).not.toContain("pb-2");
+    expect(before).not.toContain("pt-14");
+    expect(before).not.toContain("px-3");
+    expect(before).not.toContain("pb-2");
     expect(backButton(container)).toBeNull();
-    // …but you can still LEAVE fullscreen.
+    // …but you can still LEAVE fullscreen, from the floating bar.
     expect(
-      container.querySelector("[data-testid='fullscreen-toggle']"),
+      container.querySelector(
+        "[data-testid='video-player-bar'] button[aria-label='player.exit_fullscreen']",
+      ),
     ).not.toBeNull();
   });
 
@@ -844,8 +1042,8 @@ describe("F3: fullscreen really enlarges the video surface", () => {
       />,
     );
 
-    // The audio wrapper is byte-identical before and after fullscreen: the new
-    // `p-0` video column must not leak into the audio branch.
+    // The audio wrapper is byte-identical before and after fullscreen: the
+    // video column's geometry change must not leak into the audio branch.
     expect(audioColumn(container).className).toBe(before);
     expect(before).toContain("p-6");
     expect(before).not.toContain("p-0");
@@ -853,5 +1051,125 @@ describe("F3: fullscreen really enlarges the video surface", () => {
     // Audio keeps its back button: its fullscreen layout still reserves the
     // top band for it.
     expect(backButton(container)).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S4 (libmpv composition plumbing): the page background must not paint over
+// the video rect while the native host is visible, or the DComp visual (which
+// composites BELOW the webview) could never show. The background moves off
+// <main> onto a dedicated layer that clips the host rect out (evenodd hole)
+// and only WHILE the host is shown — host-hidden states keep the exact old
+// placeholder look, and audio mode is untouched.
+// ---------------------------------------------------------------------------
+describe("S4: host transparency — the player background clips the video rect", () => {
+  function bgLayer(container: HTMLElement): HTMLElement | null {
+    return container.querySelector<HTMLElement>(
+      "[data-testid='drplay-player-bg']",
+    );
+  }
+
+  it("video track: the background lives on the layer, not inline on <main>", () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
+    );
+
+    const layer = bgLayer(container);
+    expect(layer).not.toBeNull();
+    expect(layer?.style.background).toContain("var(--player-bg-solid)");
+    const main = container.querySelector<HTMLElement>("main");
+    expect(main?.getAttribute("style") ?? "").not.toContain("background");
+  });
+
+  it("no frame yet: the layer does NOT punch the hole; the first frame opens it", async () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
+    );
+
+    // Host is already shown, but nothing has been presented: punching the hole
+    // here is what let the (transparent) shell show through the empty rect.
+    expect(bgLayer(container)?.style.clipPath ?? "").toBe("");
+
+    await firstFrame();
+
+    const clip = bgLayer(container)?.style.clipPath ?? "";
+    expect(clip).toContain("polygon(evenodd");
+    // Unset variables must resolve to a zero-size hole (no transparency).
+    expect(clip).toContain("var(--drplay-hole-l, 0px)");
+    expect(clip).toContain("var(--drplay-hole-b, 0px)");
+  });
+
+  it("host hidden (shell locked): no hole — the layer paints the full background", () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} isShellLocked />,
+    );
+
+    expect(bgLayer(container)).not.toBeNull();
+    expect(bgLayer(container)?.style.clipPath ?? "").toBe("");
+  });
+
+  it("audio track: no layer, and the inline background stays on <main>", () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={AUDIO} />,
+    );
+
+    expect(bgLayer(container)).toBeNull();
+    const main = container.querySelector<HTMLElement>("main");
+    expect(main?.style.background).toContain("var(--player-bg-solid)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S4d: the invariant the App.css shell rule leans on.
+//
+// `html.drplay-host-visible aside, #content-area, #content-area *` set
+// `background-color: transparent` (S4b), so the ONLY thing that makes the
+// webview alpha=0 inside the video rect — which is what lets the DComp visual
+// show through at all — is that the marker class is on. It is safe to drop the
+// shell's paint ONLY while the overlay's own background layer repaints the
+// identical background over the whole viewport, and that layer lives INSIDE the
+// overlay (NowPlayingView), which is translated off-screen when closed. So the
+// class must follow `isOpen` exactly: on while open (shell transparent => video
+// visible), off while closed (shell keeps its own background). Any drift either
+// way is a full-window hole, so it is asserted here rather than trusted.
+// ---------------------------------------------------------------------------
+describe("S4d: the host marker class follows the overlay", () => {
+  function marked(): boolean {
+    return document.documentElement.classList.contains("drplay-host-visible");
+  }
+
+  it("is OFF for a VIDEO track while the overlay is CLOSED", () => {
+    render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} isOpen={false} />,
+    );
+
+    expect(marked()).toBe(false);
+    expect(visibleCalls()).toEqual([false]);
+  });
+
+  it("follows isOpen: off -> on -> off", () => {
+    const props = baseProps();
+    const { rerender } = render(
+      <NowPlayingView {...props} currentTrack={VIDEO} isOpen={false} />,
+    );
+    expect(marked()).toBe(false);
+
+    rerender(<NowPlayingView {...props} currentTrack={VIDEO} isOpen />);
+    expect(marked()).toBe(true);
+
+    rerender(<NowPlayingView {...props} currentTrack={VIDEO} isOpen={false} />);
+    expect(marked()).toBe(false);
+    expect(visibleCalls()).toEqual([false, true, false]);
+  });
+
+  it("is OFF after unmount (an audio track swaps the surface out mid-playback)", () => {
+    const { unmount } = render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
+    );
+    expect(marked()).toBe(true);
+
+    unmount();
+
+    expect(marked()).toBe(false);
   });
 });

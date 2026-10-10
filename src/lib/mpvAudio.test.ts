@@ -681,16 +681,38 @@ describe("MpvAudioController — end-file error kind + engine closed (R02-1/R02-
     expect(emitted("ended")).toEqual([{ trackId: "B", attempt: 2 }]);
   });
 
-  it("ipc-closed: network_interrupted, engine reset, no ended, listeners detached", () => {
+  it("ipc-closed: engine_closed (NOT network_interrupted), engine reset, no ended, listeners detached", () => {
     fireMpvEvent("ipc-closed", "eof");
 
+    // An engine death says nothing about the network — labelling it
+    // network_interrupted told the user to check a connection that is fine.
     expect(emitted("error")).toEqual([
-      expect.objectContaining({ code: "network_interrupted" }),
+      expect.objectContaining({ code: "engine_closed" }),
     ]);
     expect(emitted("ended")).toEqual([]);
 
     fireProperty("time-pos", 5);
     expect(emitted("timeupdate")).toEqual([]);
+  });
+
+  it("engine death and a real transport failure stay distinct codes in one session", async () => {
+    // Direction 1: engine/process death -> engine_closed.
+    fireMpvEvent("ipc-closed", "eof");
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "engine_closed" }),
+    ]);
+
+    // Respawn (playTrack resets the per-attempt failure surface), then a
+    // GENUINE network failure -> network_interrupted must survive the rename.
+    await ctrl.playTrack(trackB);
+    fireProxyError("B", 503);
+    fireMpvEvent("end-file", "error", "loading failed");
+
+    expect(emitted("error")).toEqual([
+      expect.objectContaining({ code: "engine_closed" }),
+      expect.objectContaining({ code: "network_interrupted" }),
+    ]);
+    expect(emitted("ended")).toEqual([]);
   });
 
   it("ipc-closed: retry via playTrack respawns mpv and reloads the track", async () => {

@@ -43,6 +43,11 @@ export function runPlayerCommand(
   id: PlayerCommandId,
   ctx: PlayerCommandContext,
 ): void {
+  // Activity FIRST, and exactly once, before the command runs: this is the one
+  // seam every surface (keyboard, bar button, context menu) goes through, so
+  // the fullscreen chrome reveals without a second listener and without the
+  // command itself ever being delayed, swallowed or duplicated.
+  ctx.onActivity?.();
   const command = commandById(id);
   void (async () => {
     try {

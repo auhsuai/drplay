@@ -67,13 +67,23 @@ bytes = "1.6.0"
 # tauri::webview::PlatformWebview, whose fields are private). Versions match
 # the ones already in Cargo.lock via tauri/wry — no new crate graph nodes.
 [target.'cfg(windows)'.dependencies]
+# Runtime loader for the in-process libmpv engine (src/player/ffi.rs). 0.8.9
+# is already pinned in Cargo.lock (tauri's dependency graph), so this adds no
+# new crate node.
+libloading = "0.8"
 webview2-com = "0.38.2"
 windows-core = "0.61.2"
 # App-owned Windows SMTC session (src/media_controls.rs): track metadata,
 # transport buttons and the flyout timeline. The version matches the one
 # tauri 2.11 already pulls (Cargo.lock), so the extra features add no new
-# crate graph node.
-windows = { version = "0.61", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT"] }
+# crate graph node. S3 composition bridge (src/player/render/{composition,interop}.rs):
+# Direct3D11/DirectComposition/Dxgi(+Common) for the DComp video visual,
+# Win32_System_Com for CoInitializeEx on the render thread, Win32_UI_HiDpi for
+# GetDpiForWindow (physical->DIP conversion). Direct3D is required because the
+# generated `D3D11CreateDevice` binding is gated on it, and Dxgi_Common
+# because `CreateSurface`/`CreateTexture2D`/`D3D11_TEXTURE2D_DESC` are.
+# Features only — the crate version and the graph are unchanged.
+windows = { version = "0.61", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Com", "Win32_UI_HiDpi"] }
 # Orphan guarantee for the mpv sidecar: Windows Job Object with
 # KILL_ON_JOB_CLOSE (see src/mpv/job.rs). Pinned to 0.59 to reuse the
 # version already in Cargo.lock (no new graph nodes). Win32_UI_WindowsAndMessaging

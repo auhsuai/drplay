@@ -90,7 +90,6 @@ describe("shouldShowVideoHost — the whole visibility rule", () => {
     isShellLocked: false,
     hasError: false,
     hasEnded: false,
-    isMediaInfoOpen: false,
   };
 
   const cases: Array<[string, Partial<typeof shown>, boolean]> = [
@@ -109,11 +108,6 @@ describe("shouldShowVideoHost — the whole visibility rule", () => {
       { hasEnded: true },
       false,
     ],
-    [
-      "media info dialog open -> hidden (the dialog must cover the video area)",
-      { isMediaInfoOpen: true },
-      false,
-    ],
     ["audio + open -> hidden", { isVideo: false, hasError: false }, false],
     [
       "audio while shell locked -> hidden",
@@ -128,6 +122,16 @@ describe("shouldShowVideoHost — the whole visibility rule", () => {
 
   it("video -> video (nothing else changed) stays shown: no hide/show churn", () => {
     expect(shouldShowVideoHost(shown)).toBe(shouldShowVideoHost({ ...shown }));
+  });
+
+  // D2b contract change: the Media Information dialog is a React overlay ABOVE
+  // the video area (z-[10000]) and the DComp video composites BELOW the
+  // webview, so the host now KEEPS rendering while it is open. The old
+  // `!input.isMediaInfoOpen` term (native-child era: CSS could not cover a
+  // native child) is removed from `VideoHostVisibilityInput` entirely — there
+  // is no dialog term left to hide the video, and this pins that.
+  it("stays shown for a healthy video: no media-info term exists to hide it", () => {
+    expect(shouldShowVideoHost(shown)).toBe(true);
   });
 
   // Fullscreen is a REFINEMENT of the overlay, not a second surface: it never

@@ -199,6 +199,18 @@ impl MpvIpc {
         self.core.shutdown_requested.store(true, Ordering::Relaxed);
     }
 
+    /// Counterpart of `mark_shutdown_requested`: true only when THIS connection
+    /// was deliberately shut down. An engine that died on its own must leave
+    /// this false, which is what keeps its pipe close reported as a failure
+    /// instead of being swallowed as a commanded shutdown. Tests only: in
+    /// production the reader loop's two distinct log lines are the observation
+    /// point (`ipc.rs`: "pipe closed after a requested shutdown" vs "pipe
+    /// closed by mpv").
+    #[cfg(test)]
+    pub(crate) fn shutdown_was_requested(&self) -> bool {
+        self.core.shutdown_was_requested()
+    }
+
     /// Load epoch of the latest dispatched `loadfile` reply (0 before the
     /// first load). `mpv_command` includes it in its reply so the frontend
     /// can tag engine events.

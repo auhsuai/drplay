@@ -100,7 +100,11 @@ export function usePlayerPlaybackPolicy({
       // format_error deliberately does NOT stop playback state: the engine's
       // `ended` follows and the advance/repeat-one/storm policy below owns
       // what happens next.
-      if (err.code === "network_interrupted") {
+      // Why engine_closed is listed too: an engine death still means playback
+      // stopped. This subscription matches the code string exactly, so the
+      // engine_closed rename (an honest label for the same terminal fact)
+      // must not silently leave the transport playing after mpv is gone.
+      if (err.code === "network_interrupted" || err.code === "engine_closed") {
         commitIsPlaying("engine", false);
       }
     });

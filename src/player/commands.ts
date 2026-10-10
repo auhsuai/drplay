@@ -108,6 +108,15 @@ export interface PlayerCommandContext {
   previous: () => void;
   togglePlayMode: () => void;
   setPlayMode: (mode: PlayMode) => void;
+  /**
+   * Player activity just happened (Slice 1/C). Optional so every other caller
+   * (tests, the menu, a surface without a fullscreen bar) keeps working
+   * unchanged. It is NOT a shortcut and NOT a second keyboard handler: it is
+   * notified from the single `runPlayerCommand` entry point, so it fires
+   * exactly once per executed command regardless of which surface triggered
+   * it, and it can never swallow or duplicate the command.
+   */
+  onActivity?: (() => void) | undefined;
 }
 
 export interface PlayerCommand {

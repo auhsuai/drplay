@@ -6,7 +6,12 @@ interface UseMoreMenuEventsParams {
   isMenuOpen: boolean | undefined;
   setIsOpen: (open: boolean) => void;
   onClose?: (() => void) | undefined;
-  menuRef: RefObject<HTMLDivElement | null>;
+  /**
+   * The trigger wrapper. Typed as HTMLElement because the video menu's menuRef
+   * is the trigger BUTTON it measured (the click-outside exclusion must cover
+   * it), while MoreMenu passes its own wrapper div.
+   */
+  menuRef: RefObject<HTMLElement | null>;
   dropdownRef: RefObject<HTMLDivElement | null>;
   setShowPlaylistsSubmenu: (value: boolean) => void;
   // False for the anchor/context-menu paths (SongCard right-click): a mouse
