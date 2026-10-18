@@ -32,7 +32,7 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "dexie": "^4.4.4",
     "dexie-react-hooks": "^4.4.0",
     "i18next": "^26.3.6",

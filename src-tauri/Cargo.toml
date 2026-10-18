@@ -71,8 +71,17 @@ bytes = "1.6.0"
 # is already pinned in Cargo.lock (tauri's dependency graph), so this adds no
 # new crate node.
 libloading = "0.8"
-webview2-com = "0.38.2"
-windows-core = "0.61.2"
+# 0.39 (not 0.38) because webview2-com-sys bundles the STATICALLY LINKED
+# WebView2Loader, and 0.38.x ships 1.0.3650.58 — too old to talk to the
+# 155.0.4283.62 runtime. 0.39.1 ships 1.0.3800.47, the newest the crate has
+# ever published. windows-core moves to 0.62 with it: `Interface::cast` in
+# src/memory.rs is called on an ICoreWebView2 from THIS crate, and the trait
+# only applies within one windows-core major. `windows` below moves to 0.62 for
+# the same reason: `WebviewWindow::hwnd()` hands back tauri's windows-core
+# HWND, and tauri 2.12 is on 0.62, so a 0.61 `windows` here would not accept
+# it (that is exactly the E0308 this bump had to fix).
+webview2-com = "0.39.1"
+windows-core = "0.62"
 # App-owned Windows SMTC session (src/media_controls.rs): track metadata,
 # transport buttons and the flyout timeline. The version matches the one
 # tauri 2.11 already pulls (Cargo.lock), so the extra features add no new
@@ -83,7 +92,7 @@ windows-core = "0.61.2"
 # generated `D3D11CreateDevice` binding is gated on it, and Dxgi_Common
 # because `CreateSurface`/`CreateTexture2D`/`D3D11_TEXTURE2D_DESC` are.
 # Features only — the crate version and the graph are unchanged.
-windows = { version = "0.61", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Com", "Win32_UI_HiDpi"] }
+windows = { version = "0.62", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Com", "Win32_UI_HiDpi"] }
 # Orphan guarantee for the mpv sidecar: Windows Job Object with
 # KILL_ON_JOB_CLOSE (see src/mpv/job.rs). Pinned to 0.59 to reuse the
 # version already in Cargo.lock (no new graph nodes). Win32_UI_WindowsAndMessaging
@@ -111,14 +120,14 @@ rand = "0.8.5"
 # ZipFile::enclosed_name — the safe-path (zip-slip) check the import relies on.
 zip = "2"
 
-# tao 0.35.3 holds the `window_state` mutex across an ITaskbarList COM call in
-# the TaskbarCreated handler (upstream issue #1263) — reentrant window handling
-# can then deadlock the main thread permanently (explorer restart / resume from
-# sleep). PR #1264 fixes it; this rev is the merge commit on `dev`, whose
-# Cargo.toml still declares tao 0.35.3 (satisfies tauri-runtime-wry's
-# `tao = "^0.35.0"`). Remove once a released tauri-runtime-wry pulls tao >= 0.36.
-[patch.crates-io]
-tao = { git = "https://github.com/tauri-apps/tao", rev = "f7f8173dc85287b2a18aceb9c47533097b8c123f" }
+# The `[patch.crates-io] tao` git rev is GONE. It existed because tao 0.35.3
+# holds the `window_state` mutex across an ITaskbarList COM call in the
+# TaskbarCreated handler (issue #1263, fixed by PR #1264). tauri-runtime-wry
+# 2.12.2 — the newest there is — requires tao ^0.37.0, so the old patch could
+# not satisfy it anyway. Released tao 0.37.1 carries the fix: the handler now
+# reads `userdata.window_state.lock().skip_taskbar` into a local, dropping the
+# guard at the end of that statement, so the lock is NOT held across the COM
+# call. Verified by diffing the published 0.35.3 and 0.37.1 sources.
 
 [profile.release]
 lto = true
