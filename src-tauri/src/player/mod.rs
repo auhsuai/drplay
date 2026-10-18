@@ -15,7 +15,6 @@ mod render;
 #[cfg(test)]
 mod tests;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use serde_json::{json, Value};
@@ -169,36 +168,7 @@ pub(crate) async fn command(cmd: Vec<String>) -> Result<Value, String> {
             log::warn!("[player] command {command_name} failed: {engine_error}");
             engine_error.wire_message()
         })?;
-    schedule_video_diagnostics(&engine, &command_name);
     Ok(json!({ "data": reply.data, "load_epoch": reply.load_epoch }))
-}
-
-/// MIGRATION-ONLY (S7): one-shot video diagnostics, `DRPLAY_DIAG_VIDEO=1`.
-///
-/// Why a load-triggered snapshot and not a render-triggered one: the render
-/// thread may call no mpv API besides `mpv_render_*`, so the properties can only
-/// be read from another thread. Firing once per session after the first load
-/// gives mpv time to demux, attach a VO and open the decoder — the whole
-/// window during which "no video track / no VO" would be true. One shot only:
-/// a video track that came up stays up, so repeating it per load would only add
-/// noise.
-fn schedule_video_diagnostics(engine: &Arc<engine::Engine>, command_name: &str) {
-    /// Settle time after loadfile before the properties mean anything: mpv
-    /// needs to demux, pick a VO and open the decoder first.
-    const SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    static DONE: AtomicBool = AtomicBool::new(false);
-    if !*ENABLED.get_or_init(|| std::env::var("DRPLAY_DIAG_VIDEO").is_ok_and(|v| v == "1")) {
-        return;
-    }
-    if command_name != "loadfile" || DONE.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let engine = Arc::clone(engine);
-    tokio::task::spawn_blocking(move || {
-        std::thread::sleep(SETTLE);
-        engine.log_video_diagnostics();
-    });
 }
 
 /// `mpv_get_property` in libmpv mode: the property value, or the legacy

@@ -190,32 +190,6 @@ pub fn run() {
                 .level(log_level_from_env())
                 .build(),
         )
-        // MIGRATION-ONLY (S4 composition proof): remove in S7.
-        // With DRPLAY_COMPOSITION_PROOF=1, inject the red proof overlay into
-        // the main webview once its page finishes loading. Why the page-load
-        // hook and not setup() eval: at setup time the webview has not
-        // navigated yet, so eval would run in the pre-navigation document and
-        // be wiped by the app page load; the builder hook fires with
-        // PageLoadEvent::Finished for config-created windows too (tauri
-        // 2.11.3 manager/webview.rs page-load path), which is deterministic.
-        // No-op when the variable is unset.
-        .on_page_load(|webview, payload| {
-            if webview.label() != "main" {
-                return;
-            }
-            if payload.event() != tauri::webview::PageLoadEvent::Finished {
-                return;
-            }
-            let proof_enabled =
-                matches!(std::env::var("DRPLAY_COMPOSITION_PROOF").as_deref(), Ok("1"));
-            if !proof_enabled {
-                return;
-            }
-            let proof = r#"document.body.insertAdjacentHTML('beforeend','<div id="drplay-composition-proof" style="position:fixed;left:calc(50% - 160px);top:32%;width:320px;height:120px;background:rgba(220,30,30,0.85);color:#fff;font:600 16px sans-serif;display:flex;align-items:center;justify-content:center;z-index:999999;border-radius:8px">REACT OVER VIDEO (z=999999)</div>')"#;
-            if let Err(error) = webview.eval(proof) {
-                log::warn!("[drplay] composition proof overlay eval failed: {error}");
-            }
-        })
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
 

@@ -16,8 +16,7 @@ use super::events;
 use super::ffi::{self, MpvEvent, MpvNode};
 use super::options;
 use super::render::{
-    diag_lifecycle, diag_loop_enabled, RenderHost, RenderSurface, RENDER_INITIAL_HEIGHT,
-    RENDER_INITIAL_WIDTH, RENDER_READY_TIMEOUT,
+    RenderHost, RenderSurface, RENDER_INITIAL_HEIGHT, RENDER_INITIAL_WIDTH, RENDER_READY_TIMEOUT,
 };
 use crate::mpv::{EventSink, IpcMessage};
 
@@ -33,13 +32,6 @@ const LOADFILE_COMMAND: &str = "loadfile";
 /// Name of the event thread (observable via `GetThreadDescription`; the
 /// integration tests use it to assert the thread lifecycle precisely).
 pub(crate) const EVENT_THREAD_NAME: &str = "libmpv-events";
-/// MIGRATION-ONLY (S7): name of the property-sampler thread. Not asserted by
-/// any test — it only exists while `DRPLAY_DIAG_LOOP=1`.
-const LOOP_DIAG_THREAD_NAME: &str = "libmpv-loopdiag";
-/// Bound for the sampler to notice the shutdown flag. It sleeps in slices
-/// (see [`loop_diag_sampler`]) and checks the flag between them, so this is a
-/// guard, not a wait.
-const LOOP_DIAG_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Log level requested from libmpv: warn and above reach the app log.
 ///
 /// MIGRATION-ONLY (S7): `DRPLAY_MPV_LOG_LEVEL` overrides it. The default stays
@@ -254,9 +246,6 @@ pub(crate) struct Engine {
     shutdown_flag: Arc<AtomicBool>,
     destroyed: AtomicBool,
     event_thread: Mutex<Option<JoinHandle<()>>>,
-    /// MIGRATION-ONLY (S7): the property sampler feeding the render thread's
-    /// expanded log line. `None` unless `DRPLAY_DIAG_LOOP=1`.
-    loop_diag_thread: Mutex<Option<JoinHandle<()>>>,
     teardown_hooks: Mutex<Vec<TeardownHook>>,
     /// S2: the GL render context. Set during `setup_player` (after
     /// `mpv_initialize`, before the engine is handed out); a successfully
@@ -296,7 +285,6 @@ impl Engine {
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             destroyed: AtomicBool::new(false),
             event_thread: Mutex::new(None),
-            loop_diag_thread: Mutex::new(None),
             teardown_hooks: Mutex::new(Vec::new()),
             render: OnceLock::new(),
         });
@@ -330,11 +318,8 @@ impl Engine {
             return Err(setup_error);
         }
         let surface = Arc::clone(engine.render.get().expect("setup_player sets the render surface"));
-        engine.add_teardown_hook(Box::new(move |_engine| surface.shutdown()));
-        // MIGRATION-ONLY (S7): started last so the sampler never races a
-        // half-built engine. A no-op unless DRPLAY_DIAG_LOOP=1.
-        engine.start_loop_diagnostics();
-        log::info!("[player] libmpv engine created (conn {})", engine.conn());
+engine.add_teardown_hook(Box::new(move |_engine| surface.shutdown()));
+log::info!("[player] libmpv engine created (conn {})", engine.conn());
         Ok(engine)
     }
 
@@ -483,16 +468,6 @@ impl Engine {
     pub(crate) fn send_command(&self, args: &[String]) -> Result<CommandReply, EngineError> {
         let _guard = self.lock_read();
         self.ensure_running()?;
-        // MIGRATION-ONLY (S7): logged at the command, not on an event, because
-        // this is the only place the URL is known — `file-loaded` carries no
-        // filename and mpv's own START_FILE would need a playlist lookup just
-        // to name the file. Basename only; see [`url_basename`].
-        if args.first().map(String::as_str) == Some(LOADFILE_COMMAND) && diag_lifecycle() {
-            log::info!(
-                "[player][diag] loadfile {}",
-                args.get(1).map(|url| url_basename(url)).unwrap_or_else(|| "<no url>".to_string())
-            );
-        }
         // A new media item means the previous item's first-frame signal must not
         // count: re-arm the one-shot BEFORE the command goes out, so the next
         // present the render thread sees belongs to what is loading now. This is
@@ -578,150 +553,6 @@ impl Engine {
         let _guard = self.lock_read();
         self.ensure_running()?;
         self.read_property_node(property)
-    }
-
-    /// MIGRATION-ONLY (S7): one-shot snapshot of everything that decides
-    /// whether a video frame can exist at all. The S4b symptom was "no video,
-    /// no warning", and these are the exact properties that answer it: is
-    /// video enabled (`video`), did a VO come up (`current-vo`), did the
-    /// decoder open (`video-params`), what does the VO output look like
-    /// (`video-out-params`), did hwdec engage (`hwdec-current`), and how many
-    /// video tracks the file actually has.
-    ///
-    /// Runs on the caller's (blocking-pool) thread through the ordinary
-    /// property-read path — never on the render thread, which may call no mpv
-    /// API other than `mpv_render_*` (render module threading contract).
-    pub(crate) fn log_video_diagnostics(&self) {
-        // `video` and `current-vo` are logged as plain values because a
-        // "video=no" / "current-vo=None" line is the whole diagnosis; the
-        // rest are dumped verbatim so an unexpected shape is visible.
-        for property in [
-            "video",
-            "current-vo",
-            "video-params",
-            "video-out-params",
-            "hwdec-current",
-        ] {
-            match self.get_property(property) {
-                Ok(value) => log::info!("[player][diag] {property} = {value}"),
-                Err(property_error) => {
-                    log::info!("[player][diag] {property} is unavailable: {property_error}")
-                }
-            }
-        }
-        // Counted rather than dumped: a 40-entry track-list is unreadable in a
-        // log, and "0 video tracks" is the finding that matters.
-        let video_tracks = self.count_video_tracks();
-        log::info!(
-            "[player][diag] video track count = {}",
-            video_tracks.map_or("unavailable".to_string(), |count| count.to_string())
-        );
-        if let Some(surface) = self.render.get() {
-            log::info!(
-                "[player][diag] update callbacks = {}, rendered = {}, presented = {}",
-                surface.update_notifications(),
-                surface.frame_count(),
-                surface.presented_frame_count()
-            );
-        }
-    }
-
-    /// Number of tracks whose `type` is `"video"`, read FRESH on every call.
-    ///
-    /// Re-read rather than cached: the one-shot snapshot above is taken on a
-    /// timer after loadfile and reported 0 tracks, which is indistinguishable
-    /// between "this file has no video" and "mpv had not finished demuxing
-    /// yet". Only a value that changes over time settles that, so every sample
-    /// pays for a fresh read.
-    ///
-    /// `None` when the property itself is unreadable — kept distinct from
-    /// `Some(0)`, because "no track list" and "no video tracks" are different
-    /// findings and the log must not merge them.
-    fn count_video_tracks(&self) -> Option<usize> {
-        self.get_property("track-list").ok().and_then(|list| {
-            list.as_array().map(|tracks| {
-                tracks
-                    .iter()
-                    .filter(|track| track.get("type").and_then(Value::as_str) == Some("video"))
-                    .count()
-            })
-        })
-    }
-
-    /// Render one property compactly for the 2s loop line. `video-params` is
-    /// reduced to `w x h`: the codec/dsp fields around it are long and would
-    /// push the rest of the line out of view.
-    fn describe_property(property: &str, value: &Value) -> String {
-        if property == "video-params" {
-            return match (
-                value.get("w").and_then(Value::as_u64),
-                value.get("h").and_then(Value::as_u64),
-            ) {
-                (Some(width), Some(height)) => format!("{width}x{height}"),
-                // Present but shaped differently than expected: report THAT,
-                // never a fake 0x0 that reads like "no video".
-                _ => "present without w/h".to_string(),
-            };
-        }
-        match value {
-            Value::Null => "unavailable".to_string(),
-            other => other.to_string(),
-        }
-    }
-
-    /// MIGRATION-ONLY (S7): one sample of every mpv-side property the
-    /// expanded render-loop line needs, pre-formatted for the log.
-    ///
-    /// Runs on the sampler thread, never on the render thread: that thread
-    /// may call no mpv API besides `mpv_render_*`. Failures are rendered
-    /// inline (`unavailable (...)`) instead of aborting the sample, so one
-    /// unreadable property cannot hide the five that did resolve.
-    fn sample_loop_diag(&self) -> String {
-        let mut parts: Vec<String> = Vec::with_capacity(6);
-        for property in
-            ["time-pos", "pause", "eof-reached", "video-params", "cached-duration"]
-        {
-            let value = match self.get_property(property) {
-                Ok(value) => Self::describe_property(property, &value),
-                Err(property_error) => format!("unavailable ({property_error})"),
-            };
-            parts.push(format!("{property}={value}"));
-        }
-        parts.push(format!(
-            "video_tracks={}",
-            self.count_video_tracks()
-                .map_or_else(|| "unavailable".to_string(), |count| count.to_string())
-        ));
-        parts.join(" ")
-    }
-
-    /// MIGRATION-ONLY (S7): start the property sampler that feeds the render
-    /// thread's expanded log line.
-    ///
-    /// A dedicated thread rather than extra work on the event thread: the
-    /// event thread owns `mpv_wait_event` for the handle's whole lifetime and
-    /// must not be parked in a sleep between events. No-op unless
-    /// `DRPLAY_DIAG_LOOP=1`.
-    fn start_loop_diagnostics(self: &Arc<Self>) {
-        if !diag_loop_enabled() {
-            return;
-        }
-        let engine = Arc::clone(self);
-        match thread::Builder::new()
-            .name(LOOP_DIAG_THREAD_NAME.to_string())
-            .spawn(move || loop_diag_sampler(engine))
-        {
-            Ok(handle) => {
-                *self
-                    .loop_diag_thread
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
-                log::info!("[player][diag] loop diagnostics sampler started ({LOOP_DIAG_THREAD_NAME})");
-            }
-            Err(spawn_error) => log::error!(
-                "[player][diag] loop diagnostics sampler could not start: {spawn_error}"
-            ),
-        }
     }
 
     fn read_property_node(&self, property: &str) -> Result<Value, EngineError> {
@@ -811,12 +642,6 @@ impl Engine {
             // A thread that does not exit leaves the handle alive on purpose:
             // destroying it while a wait_event may still be inside is worse.
             join_with_timeout(thread, EVENT_THREAD_JOIN_TIMEOUT, EVENT_THREAD_NAME)?;
-        }
-        // MIGRATION-ONLY (S7): the sampler stops on the same flag and is
-        // joined before mpv_destroy, so it can never be mid-property-read when
-        // the handle goes away.
-        if let Some(thread) = self.loop_diag_thread.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
-            join_with_timeout(thread, LOOP_DIAG_JOIN_TIMEOUT, LOOP_DIAG_THREAD_NAME)?;
         }
         if !commanded {
             // Engine loss must surface exactly like the sidecar pipe close did
@@ -970,15 +795,6 @@ fn dispatch_end_file(api: &ffi::Api, event: &MpvEvent, core: &WireState) {
     let end_file = unsafe { &*(event.data as *const ffi::MpvEventEndFile) };
     let (reason, error) =
         events::end_file_payload(end_file.reason, end_file.error, |code| mpv_error_message(api, code));
-    // MIGRATION-ONLY (S7): on the existing event thread, no extra plumbing.
-    // `reason` separates the three cases that look identical on screen — a
-    // clean eof, an error, and a stop/replace — and `error` names the code.
-    if diag_lifecycle() {
-        log::info!(
-            "[player][diag] end-file reason={reason} error={}",
-            error.as_deref().unwrap_or("none")
-        );
-    }
     core.emit(IpcMessage::MpvEvent {
         event: event_name(api, event.event_id),
         reason: Some(reason),
@@ -1023,49 +839,6 @@ fn join_with_timeout(
     thread.join().map_err(|_panic| EngineError::EventThread {
         message: format!("{thread_name} panicked during teardown"),
     })
-}
-
-/// MIGRATION-ONLY (S7): sample the mpv-side state on a cadence and publish it
-/// to the render thread, which is the only place allowed to log it (it owns
-/// the 2s line) but also the only place forbidden from measuring it.
-///
-/// Runs until the engine starts shutting down. The wait is sliced rather than
-/// one long sleep so `destroy` is never held up by a full interval: the flag
-/// is re-checked between slices, which bounds shutdown latency at one slice.
-fn loop_diag_sampler(engine: Arc<Engine>) {
-    const SLICE: Duration = Duration::from_millis(100);
-    /// ~2s, matching the render loop's own diagnostic cadence so the two logs
-    /// interleave predictably instead of drifting against each other.
-    const SLICES_PER_SAMPLE: usize = 20;
-    while engine.is_alive() {
-        let snapshot = engine.sample_loop_diag();
-        if let Some(surface) = engine.render.get() {
-            surface.publish_mpv_diag(snapshot);
-        }
-        for _ in 0..SLICES_PER_SAMPLE {
-            if !engine.is_alive() {
-                return;
-            }
-            thread::sleep(SLICE);
-        }
-    }
-}
-
-/// Last path segment of a loadfile URL, for the lifecycle log.
-///
-/// The basename ONLY, never the whole URL: Drive links carry signed query
-/// parameters and object ids, and a diagnostic that copies a bearer token into
-/// the log is a worse problem than the one being debugged. Query and fragment
-/// go first, then the last segment after either separator, so
-/// `https://host/file.mkv?sig=...`, `file:///C:/x/y.mkv` and `C:\x\y.mkv` all
-/// log just `y.mkv`.
-fn url_basename(url: &str) -> String {
-    let without_query = url.split(['?', '#']).next().unwrap_or(url);
-    without_query
-        .rsplit(['/', '\\'])
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(without_query)
-        .to_string()
 }
 
 /// Reply of `mpv_command`: the command's data plus the load epoch current at

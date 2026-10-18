@@ -27,11 +27,16 @@
 //!
 //! Pixel formats: GL_RGBA8 (memory R,G,B,A on little-endian) is paired with
 //! DXGI_FORMAT_R8G8B8A8_UNORM for the interop texture and the DComp surface,
-//! so no channel swizzle is needed anywhere; CopyResource requires the source
-//! and destination formats to match exactly, which they do. Alpha mode is
+//! so no channel swizzle is needed anywhere. The two textures do NOT have
+//! identical extents: DirectComposition hands back a ROW-ALIGNED surface
+//! texture that is routinely taller than the interop texture (measured here:
+//! 1280x720 interop into a 1280x736 surface, 736 = 23 x 32), which is why
+//! `present` copies the intersected region with `CopySubresourceRegion`
+//! instead of a whole-texture `CopyResource`. Alpha mode is
 //! DXGI_ALPHA_MODE_IGNORE (the video occupies its rect opaquely; the WebView2
 //! layer composites ABOVE this visual, so the visual itself needs no alpha).
 
+use std::cell::Cell;
 use std::ffi::c_void;
 
 use windows::core::{Interface, IUnknown};
@@ -41,9 +46,8 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_FEATURE_LEVEL_11_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
-    ID3D11Texture2D, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BOX,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice3, IDCompositionDesktopDevice, IDCompositionDevice2,
@@ -192,6 +196,11 @@ pub(crate) struct Composition {
     dpi_scale: f32,
     offset_dip: (f32, f32),
     visible: bool,
+    /// MIGRATION-ONLY latch for the empty-overlap warning in `present`: a
+    /// `Cell` because `present` takes `&self`. The two sizes are fixed for the
+    /// life of the texture pair, so a per-frame warning would be one line per
+    /// frame forever.
+    copy_overlap_empty_logged: Cell<bool>,
 }
 
 impl Composition {
@@ -289,6 +298,7 @@ impl Composition {
             dpi_scale: window_dpi_scale(hwnd),
             offset_dip: (0.0, 0.0),
             visible: false,
+            copy_overlap_empty_logged: Cell::new(false),
         })
     }
 
@@ -347,14 +357,10 @@ impl Composition {
         self.interop_texture.as_ref().map(Interface::as_raw).unwrap_or(std::ptr::null_mut())
     }
 
-    /// BeginDraw -> CopyResource(interop texture -> surface texture) ->
-    /// EndDraw -> Commit. The DComp surface pixels are the whole frame.
-    ///
-    /// MIGRATION-ONLY (S7): with `DRPLAY_DIAG_SOLID=1` the video copy is
-    /// SKIPPED and the surface is cleared magenta instead. That is the only
-    /// way to separate "the webview is painting over the rect" from "the engine
-    /// has no frame": magenta on screen proves the page really is alpha=0
-    /// there, so a still-black rect is an engine-side problem.
+    /// BeginDraw -> CopySubresourceRegion(interop texture -> surface texture)
+    /// -> EndDraw -> Commit. Only the region the two textures share is
+    /// copied (why that is not a plain `CopyResource` is spelled out at the
+    /// call).
     pub(crate) fn present(&self) -> Result<(), CompositionError> {
         let Some(source) = self.interop_texture.as_ref() else {
             return Err(CompositionError::Call {
@@ -368,37 +374,83 @@ impl Composition {
             // SAFETY: None = full-surface update; update_offset is a live local.
             unsafe { self.surface.BeginDraw(None, &mut update_offset) },
         )?;
-        if super::diag_solid_fill() {
-            self.clear_magenta(&update_texture)?;
+        // CopySubresourceRegion has no failure return; a removed device
+        // surfaces at EndDraw/Commit below.
+        //
+        // WHY A REGION AND NOT `CopyResource`: CopyResource requires
+        // IDENTICAL dimensions and identical formats. DirectComposition
+        // hands back a row-aligned surface texture, so the destination is
+        // routinely TALLER than the interop texture drawn from — measured
+        // on this machine as a 1280x720 interop texture into a 1280x736
+        // surface texture (736 = 23 x 32, the alignment DComp applies).
+        // With mismatched extents CopyResource is undefined behaviour, and
+        // the debug layer is deliberately not enabled, so the driver
+        // silently produces an ALL-ZERO surface: video on screen is black
+        // while every source-side readback is perfect. Do not "simplify"
+        // this back into CopyResource.
+        //
+        // The region comes from the two live descriptors rather than from
+        // hardcoded numbers, so it stays correct whether the destination
+        // is taller, the same size, or smaller — a mismatch cannot creep
+        // back in when DirectComposition changes its alignment.
+        let mut source_description = D3D11_TEXTURE2D_DESC::default();
+        // SAFETY: `source_description` is a live local and GetDesc only
+        // writes the struct through this pointer.
+        unsafe { source.GetDesc(&mut source_description) };
+        let mut destination_description = D3D11_TEXTURE2D_DESC::default();
+        // SAFETY: `update_texture` is the live BeginDraw result and
+        // `destination_description` is a live local.
+        unsafe { update_texture.GetDesc(&mut destination_description) };
+        // The top-left region both textures actually have. An empty
+        // intersection is NOT handed to D3D: `right == left` /
+        // `bottom == top` is not a box the runtime accepts.
+        let width = source_description.Width.min(destination_description.Width);
+        let height = source_description.Height.min(destination_description.Height);
+        if width == 0 || height == 0 {
+            if !self.copy_overlap_empty_logged.get() {
+                self.copy_overlap_empty_logged.set(true);
+                log::warn!(
+                    "[player] interop/surface overlap is empty; skipping the frame copy \
+                     (interop {}x{}, surface {}x{})",
+                    source_description.Width,
+                    source_description.Height,
+                    destination_description.Width,
+                    destination_description.Height,
+                );
+            }
         } else {
-            // CopyResource has no failure return; a removed device surfaces at
-            // EndDraw/Commit below.
-            // SAFETY: both textures are live ID3D11 textures of identical size and
-            // format; CopyResource is documented for exactly this pair.
-            unsafe { self.context.CopyResource(&update_texture, source) };
+            // Rows past the source height are left untouched: they are
+            // outside the surface's logical size, nothing reads them back,
+            // and DXGI_ALPHA_MODE_IGNORE means they cannot interact with
+            // the video rows above.
+            let region = D3D11_BOX {
+                left: 0,
+                top: 0,
+                front: 0,
+                right: width,
+                bottom: height,
+                back: 1,
+            };
+            // SAFETY: both textures are live ID3D11 textures owned by this
+            // render thread with the same format; the box is non-empty and
+            // inside both extents; subresource 0 is the whole texture of
+            // each (MipLevels = 1, ArraySize = 1); `region` is a live local
+            // borrowed for the duration of the call.
+            unsafe {
+                self.context.CopySubresourceRegion(
+                    &update_texture,
+                    0,
+                    0,
+                    0,
+                    0,
+                    source,
+                    0,
+                    Some(&region as *const D3D11_BOX),
+                )
+            };
         }
         call("EndDraw", unsafe { self.surface.EndDraw() })?;
         call("Commit", unsafe { self.device2.Commit() })?;
-        Ok(())
-    }
-
-    /// Clear the surface texture to the diagnostic magenta. A NULL RTV
-    /// descriptor is the documented single-mip form of an ID3D11Texture2D.
-    fn clear_magenta(&self, surface_texture: &ID3D11Texture2D) -> Result<(), CompositionError> {
-        let mut target: Option<ID3D11RenderTargetView> = None;
-        call(
-            "CreateRenderTargetView(diag)",
-            // SAFETY: the texture is the live BeginDraw result; the out-parameter
-            // is owned here.
-            unsafe { self.device.CreateRenderTargetView(surface_texture, None, Some(&mut target)) },
-        )?;
-        let target = target.ok_or(CompositionError::Call {
-            step: "CreateRenderTargetView(diag)",
-            detail: "no ID3D11RenderTargetView returned".to_string(),
-        })?;
-        // SAFETY: the context and the view are both live and owned by this
-        // render thread; the color slice is the documented 4-float RGBA.
-        unsafe { self.context.ClearRenderTargetView(&target, &super::DIAG_SOLID_COLOR) };
         Ok(())
     }
 

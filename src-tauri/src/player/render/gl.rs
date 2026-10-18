@@ -12,7 +12,6 @@
 //! `wglGetProcAddress` (the GL 1.1 exports return NULL there).
 
 use std::ffi::{c_char, c_int, c_void, CStr};
-use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
@@ -454,6 +453,9 @@ pub(crate) struct GlContext {
     context: *mut c_void,
     module: HMODULE,
     fbo_api: FboApi,
+    /// `glFlush`, loaded through the same `load_gl_fn` helper as `fbo_api`
+    /// (see `flush`).
+    flush: unsafe extern "system" fn(),
     texture: u32,
     fbo: u32,
     width: u32,
@@ -472,6 +474,10 @@ impl GlContext {
             return Err(format!("GetModuleHandleW(opengl32.dll) failed (win32 error {})", last_error()));
         }
         let fbo_api = FboApi::load(module)?;
+        // `glFlush`, needed by the NV_DX_interop hand-off (see `flush`). Loaded
+        // with the same `load_gl_fn` helper as `FboApi`, so a missing symbol is
+        // a typed error naming it rather than a failure at link time.
+        let flush: unsafe extern "system" fn() = load_gl_fn(module, c"glFlush")?;
         let (texture, fbo) = create_target(&fbo_api, width, height)?;
         let gl_context = GlContext {
             window: guard.window,
@@ -479,6 +485,7 @@ impl GlContext {
             context: guard.context,
             module,
             fbo_api,
+            flush,
             texture,
             fbo,
             width,
@@ -544,6 +551,28 @@ impl GlContext {
             return Err(format!("framebuffer incomplete after resize (GL status 0x{status:X})"));
         }
         Ok(())
+    }
+
+    /// `glFlush`: submit the commands queued by mpv's render so the driver
+    /// starts executing them.
+    ///
+    /// This exists for the NV_DX_interop hand-off, NOT for GL itself. mpv's
+    /// render call only ENQUEUES the drawing commands; nothing has told the GPU
+    /// to run them yet. The very next thing the render loop does is unlock the
+    /// interop object, and Direct3D copies that texture immediately — so
+    /// without a flush in between, D3D copies the texture before the frame has
+    /// been submitted and the screen stays black, while a readback of the SAME
+    /// texture a moment later (now submitted) looks perfectly correct. That
+    /// asymmetry is the whole bug this call fixes.
+    ///
+    /// A flush, never a `glFinish`: a flush guarantees the queued commands are
+    /// SUBMITTED in order, which is all the D3D copy needs; a finish blocks
+    /// until every one of them has EXECUTED, stalling the pipeline once per
+    /// frame for no benefit. See the module docs in interop.rs.
+    pub(crate) fn flush(&self) {
+        // SAFETY: glFlush has no preconditions; the context is current and the
+        // pointer was resolved by `load_gl_fn` at creation time.
+        unsafe { (self.flush)() };
     }
 
     /// Read the whole FBO back (RGBA8, GL row order: row 0 = bottom).
@@ -649,192 +678,6 @@ fn create_target(fbo_api: &FboApi, width: u32, height: u32) -> Result<(u32, u32)
         glClear(GL_COLOR_BUFFER_BIT);
     }
     Ok((texture, fbo))
-}
-
-// ---------------------------------------------------------------------------
-// MIGRATION-ONLY frame dump (S7): a real 24-bit BMP the Main Agent can open.
-//
-// Purpose: the render counters prove mpv rendered AND DirectComposition
-// accepted the frame, but not whether the pixels are actually there. A black
-// FBO and a healthy FBO both end in `presented=N` with no error. Writing the
-// readback to a file answers it without depending on a screenshot, and the
-// per-channel min/max/mean answers it in the log even when the file is never
-// opened.
-//
-// Hand-rolled on purpose: a PNG encoder would be a new dependency for a
-// temporary diagnostic, and BMP needs no compression or encoder at all.
-// ---------------------------------------------------------------------------
-
-/// Byte offset where the pixel array starts: BITMAPFILEHEADER (14) +
-/// BITMAPINFOHEADER (40).
-const BMP_PIXEL_OFFSET: usize = 54;
-/// The only bit depth written. 32-bit would carry a fourth byte per pixel
-/// that no viewer needs; 24 is the plain uncompressed baseline.
-const BMP_BITS_PER_PIXEL: u32 = 24;
-
-/// Per-channel minimum, maximum and mean over a WHOLE readback. Whole-frame
-/// statistics, not a spot check: one non-black pixel says nothing, whereas
-/// "every R, G and B sample is 0" is proof of a black frame.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ChannelStats {
-    pub(crate) min: u8,
-    pub(crate) max: u8,
-    pub(crate) avg: f32,
-}
-
-impl ChannelStats {
-    /// One-line rendering for the dump log line (`r[0..255 mean=12.3]`).
-    pub(crate) fn summary(&self, name: &str) -> String {
-        format!("{name}[min={} max={} mean={:.1}]", self.min, self.max, self.avg)
-    }
-}
-
-/// Min/max/mean of each of the four channels of an RGBA8 buffer. A trailing
-/// partial pixel is ignored rather than panicking, so a truncated readback
-/// degrades to slightly-wrong statistics instead of a crashed render thread.
-pub(crate) fn channel_stats(rgba: &[u8]) -> [ChannelStats; 4] {
-    let mut min = [u8::MAX; 4];
-    let mut max = [0u8; 4];
-    let mut sum = [0u64; 4];
-    let mut pixels = 0u64;
-    for pixel in rgba.chunks_exact(BYTES_PER_PIXEL) {
-        for (channel, &value) in pixel.iter().enumerate() {
-            min[channel] = min[channel].min(value);
-            max[channel] = max[channel].max(value);
-            sum[channel] += u64::from(value);
-        }
-        pixels += 1;
-    }
-    let divisor = pixels.max(1) as f32;
-    std::array::from_fn(|channel| ChannelStats {
-        min: min[channel],
-        max: max[channel],
-        // An empty readback reports min=255/max=0; zero the mean instead so a
-        // zero-pixel dump cannot masquerade as real signal.
-        avg: if pixels == 0 { 0.0 } else { sum[channel] as f32 / divisor },
-    })
-}
-
-/// Bytes per pixel-array row, padded up to the 4-byte boundary every BMP row
-/// must end on. Computed in u64 so a hostile width cannot wrap.
-///
-/// 24-bit means THREE bytes per pixel in the file, not 24: the stride is a
-/// byte count, so the bit depth has to be divided by 8 before it is scaled by
-/// the width.
-fn bmp_row_stride(width: u32) -> u64 {
-    let bytes_per_pixel = u64::from(BMP_BITS_PER_PIXEL / 8);
-    (u64::from(width) * bytes_per_pixel).div_ceil(4) * 4
-}
-
-/// Encode an RGBA8 readback as a complete, uncompressed 24-bit BMP file.
-///
-/// # Orientation — read this before trusting the picture
-///
-/// `glReadPixels` returns GL row order: **row 0 is the BOTTOM** row of the
-/// rendered frame. A BMP whose `biHeight` is POSITIVE is stored bottom-up,
-/// i.e. its first stored scanline is the image's bottom scanline. The two
-/// conventions agree, so the readback rows are written out in the order they
-/// arrive and the file reproduces the frame exactly as it was rendered. No
-/// row flip is applied.
-///
-/// What this file therefore shows is the raw FBO memory order. mpv's GL
-/// renderer writes the frame top-down (memory row 0 = the picture's TOP),
-/// while glReadPixels + a bottom-up BMP both treat the first memory row as
-/// the image's bottom — so the viewer shows the picture vertically mirrored.
-/// That is this file's convention, not an on-screen flip: D3D11 and
-/// DirectComposition use the same row 0 = top order as mpv, so the on-screen
-/// presentation is upright with no flip anywhere (composition.rs applies
-/// scale/offset only). Reading the FBO after `present()` is safe and
-/// faithful: presentation COPIES the interop texture into D3D11, it does not
-/// consume or clear the GL framebuffer.
-///
-/// # Colour
-///
-/// 24-bit BMP has no alpha channel and stores pixels in BGR order, which is
-/// the format's native byte order, so R/G/B are emitted swapped and the alpha
-/// byte is dropped. Rows are zero-padded to the stride above.
-pub(crate) fn encode_bmp24(
-    width: u32,
-    height: u32,
-    rgba: &[u8],
-) -> Result<Vec<u8>, String> {
-    if width == 0 || height == 0 {
-        return Err(format!("cannot encode a {width}x{height} frame into a BMP"));
-    }
-    let expected = u64::from(width) * u64::from(height) * BYTES_PER_PIXEL as u64;
-    if rgba.len() as u64 != expected {
-        return Err(format!(
-            "RGBA buffer is {} bytes, but {width}x{height} needs {expected}",
-            rgba.len()
-        ));
-    }
-    let stride = bmp_row_stride(width);
-    let image_size = stride * u64::from(height);
-    let file_size = BMP_PIXEL_OFFSET as u64 + image_size;
-    if file_size > u64::from(u32::MAX) {
-        return Err(format!("a {width}x{height} frame does not fit a 32-bit BMP header"));
-    }
-    let mut out = Vec::with_capacity(file_size as usize);
-
-    // BITMAPFILEHEADER. `bfOffBits` is the one field a decoder cannot guess.
-    out.extend_from_slice(b"BM");
-    out.extend_from_slice(&(file_size as u32).to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes()); // bfReserved1
-    out.extend_from_slice(&0u16.to_le_bytes()); // bfReserved2
-    out.extend_from_slice(&(BMP_PIXEL_OFFSET as u32).to_le_bytes());
-
-    // BITMAPINFOHEADER. The positive height is what selects bottom-up row
-    // order and matches glReadPixels; see the orientation note above.
-    out.extend_from_slice(&40u32.to_le_bytes()); // biSize
-    out.extend_from_slice(&(width as i32).to_le_bytes());
-    out.extend_from_slice(&(height as i32).to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes()); // biPlanes
-    out.extend_from_slice(&(BMP_BITS_PER_PIXEL as u16).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes()); // biCompression = BI_RGB
-    out.extend_from_slice(&(image_size as u32).to_le_bytes());
-    out.extend_from_slice(&2835i32.to_le_bytes()); // 72 DPI
-    out.extend_from_slice(&2835i32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes()); // biClrUsed: no palette
-    out.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
-
-    debug_assert_eq!(out.len(), BMP_PIXEL_OFFSET, "header must end at bfOffBits");
-
-    let width_usize = width as usize;
-    let line_bytes = width_usize * BYTES_PER_PIXEL;
-    // 24-bit = 3 bytes per pixel in the file, so the padding is whatever the
-    // stride adds on top of the unpadded row.
-    let unpadded_row = u64::from(width) * u64::from(BMP_BITS_PER_PIXEL / 8);
-    let padding = (stride - unpadded_row) as usize;
-    for row in 0..height as usize {
-        let line = &rgba[row * line_bytes..(row + 1) * line_bytes];
-        for pixel in line.chunks_exact(BYTES_PER_PIXEL) {
-            out.push(pixel[2]); // B
-            out.push(pixel[1]); // G
-            out.push(pixel[0]); // R
-        }
-        out.resize(out.len() + padding, 0); // row padding must be zeroed
-    }
-
-    debug_assert_eq!(out.len() as u64, file_size, "payload must match the declared size");
-    Ok(out)
-}
-
-/// Encode a readback and write it to `path`, returning the whole-frame
-/// statistics for the log line plus the number of bytes written. The
-/// statistics are computed from the SAME buffer that was written, so the
-/// numbers in the log always describe the pixels in the file.
-pub(crate) fn write_bmp24(
-    path: &Path,
-    width: u32,
-    height: u32,
-    rgba: &[u8],
-) -> Result<([ChannelStats; 4], usize), String> {
-    let stats = channel_stats(rgba);
-    let encoded = encode_bmp24(width, height, rgba)?;
-    let written = encoded.len();
-    std::fs::write(path, &encoded)
-        .map_err(|write_error| format!("cannot write {}: {write_error}", path.display()))?;
-    Ok((stats, written))
 }
 
 #[cfg(test)]

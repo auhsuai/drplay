@@ -85,156 +85,6 @@ fn emit_first_frame() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MIGRATION-ONLY diagnostics (S7 removes this whole block)
-// ---------------------------------------------------------------------------
-//
-// Why these exist: the S3 hidden-window tests prove the render pipeline works
-// end to end on this machine (frames rendered, presented, non-black readback),
-// yet the REAL app showed no video and logged no warning at all. The three
-// possible causes — no video track / no VO, a size-desynced interop, or the
-// webview painting over the DComp visual — are indistinguishable from the
-// outside, because a silent "render nothing / present nothing / paint over it"
-// path produces exactly zero warnings. These gates turn each of them into a
-// line in the log. All of it is temporary and off unless the env var is set.
-
-/// Solid-fill diagnostic: skip the video copy and clear the DComp surface
-/// magenta instead. Magenta on screen proves the webview really has alpha=0
-/// over the rect (so a black rect is an engine problem, not a CSS one).
-const DIAG_SOLID_ENV: &str = "DRPLAY_DIAG_SOLID";
-/// Throttled render-loop diagnostics (frame counters, sizes, present errors).
-const DIAG_LOOP_ENV: &str = "DRPLAY_DIAG_LOOP";
-/// The magenta the solid-fill diagnostic clears with, as RGBA floats. #FF00FF
-/// on screen; pinned by a test because Main Agent's screenshot pass/fail test
-/// is literally "is the rect magenta".
-pub(crate) const DIAG_SOLID_COLOR: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
-/// One steady-state line every 2s. Slow enough to read, fast enough to see
-/// counters move and to catch a state that never changes.
-const DIAG_PUMP_INTERVAL: Duration = Duration::from_secs(2);
-
-/// Read one on/off diagnostic gate. Read per call (never cached): a diagnostic
-/// that only takes effect at process start is useless when you are already
-/// staring at a running app.
-fn diag_flag(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| value == "1")
-}
-
-/// Whether the solid-fill diagnostic is on for this render thread's pipeline.
-pub(crate) fn diag_solid_fill() -> bool {
-    diag_flag(DIAG_SOLID_ENV)
-}
-
-fn diag_loop() -> bool {
-    diag_flag(DIAG_LOOP_ENV)
-}
-
-/// MIGRATION-ONLY: on when the render loop should log its expanded per-state
-/// line. Read by the engine, which owns the only thread allowed to read mpv
-/// properties (engine.rs: the render thread may call no mpv API besides
-/// `mpv_render_*`).
-pub(crate) fn diag_loop_enabled() -> bool {
-    diag_loop()
-}
-
-/// MIGRATION-ONLY: on when loadfile / end-file transitions are logged.
-/// Separate from `DIAG_LOOP_ENV` because these fire once per FILE: useful on
-/// their own while chasing a wrong file, without the 2s steady-state spam.
-pub(crate) fn diag_lifecycle() -> bool {
-    diag_flag(DIAG_LIFECYCLE_ENV)
-}
-
-/// Frame-dump destination: a filesystem path. Despite the historical `_PNG`
-/// name the payload is a 24-bit BMP — hand-rolled, dependency-free (the whole
-/// point of this diagnostic is to avoid pulling in an encoder crate).
-const DIAG_FRAME_ENV: &str = "DRPLAY_DIAG_FRAME_PNG";
-/// Optional override for the frame at which the first dump is taken.
-const DIAG_FRAME_AT_ENV: &str = "DRPLAY_DIAG_FRAME_PNG_AT";
-/// Lifecycle logging (loadfile / end-file) is gated separately from the loop
-/// and frame dumps, so each can be turned on alone.
-const DIAG_LIFECYCLE_ENV: &str = "DRPLAY_DIAG_LIFECYCLE";
-
-/// Presented frames to wait for before the first dump. Low enough to be
-/// reached while the pipeline is still settling, high enough to skip the
-/// very first frames (which mpv renders before the VO has its real size).
-const FRAME_DUMP_DEFAULT_AT: u64 = 30;
-/// Hard cap on dumps per engine. Three samples spread over a few seconds
-/// separate "always black" from "one bad frame" without filling the disk.
-const FRAME_DUMP_MAX: usize = 3;
-/// Minimum gap between dumps: the samples have to land on DIFFERENT frames,
-/// or three copies of the same black frame prove nothing.
-const FRAME_DUMP_INTERVAL: Duration = Duration::from_secs(2);
-
-/// MIGRATION-ONLY state for the FBO frame dump. Lives on the render thread
-/// (it owns the GL context), so nothing here is shared or synchronized.
-struct FrameDump {
-    /// Base path from the env var. Dump #0 uses it verbatim; later dumps get
-    /// an index inserted, otherwise each one would overwrite the last and
-    /// "three samples" would be one sample written three times.
-    path: PathBuf,
-    /// Presented-frame count that arms the first dump.
-    at: u64,
-    /// Dumps written so far; reaching `FRAME_DUMP_MAX` disarms the whole
-    /// thing so a long session cannot keep writing.
-    done: usize,
-    /// Earliest time the next dump may be taken.
-    next_at: Option<Instant>,
-}
-
-impl FrameDump {
-    /// Build the dump state from the environment, or `None` when the
-    /// diagnostic is off. `Err` only for an unparseable threshold — a bad
-    /// override must be loud rather than silently falling back, because a
-    /// threshold that does not apply looks exactly like "the dump never fired".
-    fn from_env() -> Result<Option<Self>, String> {
-        let Ok(path) = std::env::var(DIAG_FRAME_ENV) else {
-            return Ok(None);
-        };
-        if path.trim().is_empty() {
-            return Ok(None);
-        }
-        let at = match std::env::var(DIAG_FRAME_AT_ENV) {
-            Ok(raw) => raw.trim().parse::<u64>().map_err(|parse_error| {
-                format!("{DIAG_FRAME_AT_ENV}={raw:?} is not a frame count: {parse_error}")
-            })?,
-            Err(_) => FRAME_DUMP_DEFAULT_AT,
-        };
-        log::info!(
-            "[player][diag] frame dump armed: {} (after {at} presented frames, max {FRAME_DUMP_MAX})",
-            Path::new(&path).display()
-        );
-        Ok(Some(Self { path: PathBuf::from(path), at, done: 0, next_at: None }))
-    }
-
-    /// The file this dump index writes to. Index 0 keeps the configured path
-    /// exactly as given, so the documented path always exists.
-    fn path_for(&self, index: usize) -> PathBuf {
-        if index == 0 {
-            return self.path.clone();
-        }
-        let stem = self.path.file_stem().map(|s| s.to_string_lossy().into_owned());
-        let Some(stem) = stem.filter(|stem| !stem.is_empty()) else {
-            return self.path.clone();
-        };
-        self.path.with_file_name(format!("{stem}-{index}.bmp"))
-    }
-
-    /// Whether a dump is due now, given the presented-frame count.
-    fn is_due(&self, presented: u64) -> bool {
-        if self.done >= FRAME_DUMP_MAX || presented < self.at {
-            return false;
-        }
-        self.next_at.is_none_or(|next_at| Instant::now() >= next_at)
-    }
-
-    /// Record that a dump was attempted (successful or not) and arm the next
-    /// one. Counting failures too is deliberate: a failing dump path must not
-    /// turn into an endless per-frame error log.
-    fn record_attempt(&mut self, index: usize) {
-        self.done = index + 1;
-        self.next_at = Some(Instant::now() + FRAME_DUMP_INTERVAL);
-    }
-}
-
 /// Poll interval while waiting for the render context to come up.
 const RENDER_READY_POLL: Duration = Duration::from_millis(10);
 
@@ -422,13 +272,6 @@ struct SharedInner {
     present_scale: Option<f32>,
     /// The visual's logical rect in DIP (x, y, w, h) as presented.
     present_visual_rect_dip: Option<(f32, f32, f32, f32)>,
-    /// MIGRATION-ONLY (S7): the latest mpv-side property snapshot, formatted
-    /// by the engine's sampler thread. It lives HERE because the render
-    /// thread may call no mpv API besides `mpv_render_*`, so it can only ever
-    /// *read* what another thread measured. `None` until the first sample
-    /// lands, which is why the log line says "pending" rather than pretending
-    /// the properties are zero.
-    mpv_diag: Option<String>,
 }
 
 struct SharedState {
@@ -462,7 +305,6 @@ impl SharedState {
                 present_surface_size: None,
                 present_scale: None,
                 present_visual_rect_dip: None,
-                mpv_diag: None,
             }),
             wake: Condvar::new(),
             frames: AtomicU64::new(0),
@@ -474,13 +316,6 @@ impl SharedState {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, SharedInner> {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Latest mpv-side property snapshot, or `None` before the first sample
-    /// lands. Cloned under the lock because the render thread formats it into
-    /// a log line while it is still holding no other borrow.
-    fn mpv_diag(&self) -> Option<String> {
-        self.lock().mpv_diag.clone()
     }
 
     /// Consume the one-shot [`FIRST_FRAME_EVENT`] signal. `true` exactly once
@@ -560,7 +395,11 @@ impl PresentPipeline {
             .register(gl.texture(), composition.interop_texture_raw())
             .map_err(|e| e.to_string())?;
         log::info!("[player] interop registered (GL texture {}, {width}x{height})", gl.texture());
-        Ok(Self { object: Some(object), device, composition })
+        Ok(Self {
+            object: Some(object),
+            device,
+            composition,
+        })
     }
 
     /// A frame may be presented only with a registered interop object, a
@@ -575,14 +414,20 @@ impl PresentPipeline {
 
     fn lock(&self) -> Result<(), String> {
         match self.object.as_ref() {
-            Some(object) => object.lock().map_err(|e| e.to_string()),
+            Some(object) => {
+                object.lock().map_err(|e| e.to_string())?;
+                Ok(())
+            }
             None => Err("interop object is not registered".to_string()),
         }
     }
 
     fn unlock(&self) -> Result<(), String> {
         match self.object.as_ref() {
-            Some(object) => object.unlock().map_err(|e| e.to_string()),
+            Some(object) => {
+                object.unlock().map_err(|e| e.to_string())?;
+                Ok(())
+            }
             None => Err("interop object is not registered".to_string()),
         }
     }
@@ -654,19 +499,6 @@ struct RenderThreadState {
     /// it a resize while paused/buffering never repaints and the video area
     /// stays black until the next frame arrives.
     needs_repaint: bool,
-    // --- MIGRATION-ONLY diagnostic state (S7) ---
-    /// When the throttled pump line was last emitted.
-    last_pump_log: Instant,
-    /// Last `can_present()` value, to log the transition (it gates every
-    /// present; a silent flip to false is exactly the invisible-video case).
-    last_can_present: Option<bool>,
-    /// Full text of the most recent present failure, kept so the throttled
-    /// line can name it instead of only the counter.
-    last_present_error: Option<String>,
-    /// MIGRATION-ONLY (S7): armed FBO dump (see [`FrameDump`]). `None`
-    /// unless `DRPLAY_DIAG_FRAME_PNG` is set, so the default path allocates
-    /// nothing and does no readback.
-    frame_dump: Option<FrameDump>,
 }
 
 impl RenderThreadState {
@@ -678,10 +510,6 @@ impl RenderThreadState {
         hwnd: Option<usize>,
     ) -> Result<Self, String> {
         let api = RenderApi::load(dll_path).map_err(|load_error| load_error.to_string())?;
-        // Read on the render thread before anything else is built: an
-        // unparseable threshold must fail loudly here rather than turn into a
-        // dump that silently never fires.
-        let frame_dump = FrameDump::from_env()?;
         let gl_context = GlContext::create(width, height)?;
         // The composition pipeline is created here, on the render thread,
         // right after the GL context (wglDXOpenDeviceNV needs it current) and
@@ -732,87 +560,14 @@ impl RenderThreadState {
             gl_context,
             render_ctx,
             needs_repaint: false,
-            last_pump_log: Instant::now(),
-            last_can_present: None,
-            last_present_error: None,
-            frame_dump,
         })
     }
 
-    /// MIGRATION-ONLY (S7): the throttled render-loop line, plus an immediate
-    /// line on every `can_present()` transition. The cumulative counters in
-    /// `shared` are bumped by the caller AFTER this returns, so they lag by the
-    /// frame in flight — irrelevant for a 2s throttle, and `outcome` carries
-    /// the current frame separately.
-    fn log_pump_diagnostic(&mut self, outcome: PumpOutcome, shared: &SharedState) {
-        if !diag_loop() {
-            return;
-        }
-        if let Some(present) = self.present.as_ref() {
-            let can_present = present.can_present();
-            if self.last_can_present != Some(can_present) {
-                let (_, _, w, h) = present.composition.rect();
-                self.last_can_present = Some(can_present);
-                log::info!(
-                    "[player][diag] can_present -> {can_present} (rect {w}x{h}, visible={}, interop_registered={})",
-                    present.composition.visible(),
-                    present.object.as_ref().is_some_and(InteropObject::is_registered)
-                );
-            }
-        }
-        if self.last_pump_log.elapsed() < DIAG_PUMP_INTERVAL {
-            return;
-        }
-        self.last_pump_log = Instant::now();
-        let (fbo_w, fbo_h) = (self.gl_context.width(), self.gl_context.height());
-        let interop = match self.present.as_ref() {
-            None => "headless(no composition pipeline)".to_string(),
-            Some(present) => format!(
-                "dcomp_surface={:?} interop_registered={}",
-                present.composition.size(),
-                present.object.as_ref().is_some_and(InteropObject::is_registered)
-            ),
-        };
-        // rect / visible / can_present are re-read every line, not only on a
-        // transition: the original symptom was a rect that was already wrong
-        // before anyone started watching, so a transition-only log would have
-        // stayed silent for exactly the state that needed reporting.
-        let (rect, visible, can_present) = match self.present.as_ref() {
-            None => ("n/a".to_string(), "n/a".to_string(), "n/a".to_string()),
-            Some(present) => {
-                let (rx, ry, rw, rh) = present.composition.rect();
-                (
-                    format!("{rx},{ry} {rw}x{rh}"),
-                    present.composition.visible().to_string(),
-                    present.can_present().to_string(),
-                )
-            }
-        };
-        log::info!(
-            "[player][diag] rendered={} presented={} gl_fbo={fbo_w}x{fbo_h} {interop} rect={rect} visible={visible} can_present={can_present} this_frame=(rendered:{}, presented:{}) last_present_error={} mpv=[{}]",
-            shared.frames.load(Ordering::SeqCst),
-            shared.presented.load(Ordering::SeqCst),
-            outcome.rendered,
-            outcome.presented,
-            self.last_present_error.as_deref().unwrap_or("none"),
-            // Read through the shared state: the mpv properties were measured
-            // on the engine's sampler thread, never here.
-            shared.mpv_diag().as_deref().unwrap_or("pending (no sample yet)")
-        );
-    }
-
-    /// `mpv_render_context_update()` → on `MPV_RENDER_UPDATE_FRAME`, render,
-    /// present when the pipeline is live and visible, and report the swap, then
-    /// emit the S4b diagnostics. `shared` is only read, after the frame.
-    fn pump(&mut self, shared: &SharedState) -> PumpOutcome {
-        let outcome = self.pump_frames();
-        self.log_pump_diagnostic(outcome, shared);
-        outcome
-    }
-
     /// Presentation order mirrors the NV_DX_interop spec's own sample loop:
-    /// `lock -> GL renders -> unlock -> D3D copies` (GL may only touch the
-    /// registered texture while locked). Hidden/collapsed frames render with
+    /// `lock -> GL renders -> glFlush -> unlock -> D3D copies` (GL may only
+    /// touch the registered texture while locked, and the queued GL commands
+    /// must be submitted before the hand-off — see the `glFlush` call below).
+    /// Hidden/collapsed frames render with
     /// MPV_RENDER_PARAM_SKIP_RENDERING so playback timing keeps running
     /// without touching the texture. A headless engine (no composition
     /// pipeline, S2 tests) always renders normally — skipping there would
@@ -867,6 +622,26 @@ impl RenderThreadState {
             };
         }
         let rendered = render_frame(&self.api, &self.gl_context, self.render_ctx, false);
+        // WHY THIS EXACT LINE — do not move it, do not fold it into `unlock`,
+        // do not "clean it up" as redundant:
+        //
+        // mpv's render call only ENQUEUES the drawing commands; nothing has
+        // told the GPU to execute them. `present.unlock()` on the next line
+        // hands the interop texture to Direct3D, whose
+        // `CopySubresourceRegion` runs immediately — and without this flush in
+        // between that copy reads the
+        // texture before the frame is submitted, so the screen is black. Every
+        // measurement taken LATER (the D3D interop readback) is correct,
+        // because by then the commands have been submitted. Flushing elsewhere
+        // is not a fix: after the unlock is too late (D3D owns the resource
+        // and GL may no longer touch it), before the render is before the
+        // writes exist.
+        //
+        // Both preconditions hold by construction on this path: the
+        // skip/hidden, headless and lock-failure paths all returned above, so
+        // this runs only after a real render into the texture AND only while
+        // the interop object is still locked.
+        self.gl_context.flush();
         let unlocked = present.unlock();
         match (rendered, unlocked) {
             (Ok(()), Ok(())) => {
@@ -877,15 +652,8 @@ impl RenderThreadState {
                 // flag kept, so the next pump retries immediately.
                 self.needs_repaint = false;
                 match present.present() {
-                    Ok(()) => {
-                        self.last_present_error = None;
-                        PumpOutcome { rendered: true, presented: true }
-                    }
+                    Ok(()) => PumpOutcome { rendered: true, presented: true },
                     Err(present_error) => {
-                        // Kept for the throttled diagnostic: a per-frame error log
-                        // alone does not survive a busy log, and this is the only
-                        // record of WHY nothing reached the screen.
-                        self.last_present_error = Some(present_error.clone());
                         log::error!("[player] DComp present failed: {present_error}");
                         PumpOutcome { rendered: true, presented: false }
                     }
@@ -904,87 +672,6 @@ impl RenderThreadState {
                 }
                 PumpOutcome { rendered: rendered_ok, presented: false }
             }
-        }
-    }
-
-    /// MIGRATION-ONLY (S7): when the frame-dump diagnostic is armed and the
-    /// presented count has reached its threshold, read the FBO back and write
-    /// it out as a BMP.
-    ///
-    /// Runs on the render thread immediately after the pump, so the pixels
-    /// read are exactly the ones the last successful `present()` copied into
-    /// D3D11 — presentation COPIES the interop texture and does not consume or
-    /// clear the GL framebuffer, so reading after it is faithful. Reading
-    /// before present would be equally valid; after was chosen because the
-    /// trigger condition is a present.
-    ///
-    /// The readback is bracketed by the interop lock exactly like
-    /// `Request::Sample`: NV_DX_interop forbids GL touching a registered
-    /// texture while it is unlocked.
-    fn maybe_dump_frame(&mut self, shared: &SharedState) {
-        let presented = shared.presented.load(Ordering::SeqCst);
-        if !self.frame_dump.as_ref().is_some_and(|dump| dump.is_due(presented)) {
-            return;
-        }
-        let index = self.frame_dump.as_ref().map_or(0, |dump| dump.done);
-        let Some(path) = self.frame_dump.as_ref().map(|dump| dump.path_for(index)) else {
-            return;
-        };
-
-        let lock_result = match self.present.as_ref() {
-            Some(present) => present.lock(),
-            None => Ok(()),
-        };
-        let read = match lock_result {
-            Ok(()) => {
-                let read = self
-                    .gl_context
-                    .read_pixels()
-                    .map(|pixels| (self.gl_context.width(), self.gl_context.height(), pixels));
-                if let Some(present) = self.present.as_ref() {
-                    if let Err(unlock_error) = present.unlock() {
-                        log::warn!(
-                            "[player][diag] interop unlock after the frame dump failed: {unlock_error}"
-                        );
-                    }
-                }
-                read
-            }
-            Err(lock_error) => Err(lock_error),
-        };
-
-        match read {
-            Ok((width, height, pixels)) => {
-                match gl::write_bmp24(&path, width, height, &pixels) {
-                    Ok((stats, written)) => log::info!(
-                        "[player][diag] frame dump #{} -> {} ({width}x{height}, {written} bytes BMP, readback after present) {} {} {} {}",
-                        index + 1,
-                        path.display(),
-                        stats[0].summary("r"),
-                        stats[1].summary("g"),
-                        stats[2].summary("b"),
-                        stats[3].summary("a"),
-                    ),
-                    Err(write_error) => log::error!(
-                        "[player][diag] frame dump #{} failed: {write_error}",
-                        index + 1
-                    ),
-                }
-            }
-            Err(read_error) => log::warn!(
-                "[player][diag] frame dump #{} readback failed: {read_error}",
-                index + 1
-            ),
-        }
-
-        if let Some(dump) = self.frame_dump.as_mut() {
-            dump.record_attempt(index);
-        }
-        if self.frame_dump.as_ref().is_some_and(|dump| dump.done >= FRAME_DUMP_MAX) {
-            log::info!(
-                "[player][diag] frame dump done ({FRAME_DUMP_MAX} dumps); disarming the diagnostic"
-            );
-            self.frame_dump = None;
         }
     }
 }
@@ -1236,14 +923,6 @@ impl RenderSurface {
         self.shared.lock().present_visual_rect_dip
     }
 
-    /// MIGRATION-ONLY (S7): hand the render thread the latest mpv-side
-    /// property snapshot. Called by the engine's sampler thread, because the
-    /// render thread may call no mpv API besides `mpv_render_*` and therefore
-    /// cannot measure these itself.
-    pub(crate) fn publish_mpv_diag(&self, snapshot: String) {
-        self.shared.lock().mpv_diag = Some(snapshot);
-    }
-
     /// Read the FBO back from the render thread (test helper). Runs
     /// `glReadPixels` on the render thread between two of its renders.
     #[allow(dead_code)] // test/diagnostic today; the S3 interop reads via the GPU path
@@ -1402,7 +1081,7 @@ fn render_thread_main(
 
         // The only mpv API this thread ever calls: mpv_render_* on its own
         // context, with the GL context current (render.h threading rules).
-        let outcome = state.pump(&shared);
+        let outcome = state.pump_frames();
         if outcome.rendered {
             shared.frames.fetch_add(1, Ordering::SeqCst);
         }
@@ -1416,8 +1095,6 @@ fn render_thread_main(
                 emit_first_frame();
             }
         }
-        // After the counters, so `is_due` sees the present that just happened.
-        state.maybe_dump_frame(&shared);
     }
 
     drop(state); // frees render context -> present pipeline -> GL/WGL -> anchor
@@ -1429,8 +1106,8 @@ fn render_thread_main(
 /// Whether a frontend rect request requires rebuilding the whole present
 /// pipeline (GL FBO storage -> interop texture -> registration -> DComp
 /// surface). Pure so the resize/sync contract is unit-tested without a GL or
-/// D3D context — CopyResource pairs the interop texture with the surface
-/// texture, so the two must never drift apart in size.
+/// D3D context — the present-time `CopySubresourceRegion` pairs the interop
+/// texture with the surface texture, so the two must never drift apart in size.
 ///
 /// A COLLAPSED rect (zero/negative, minimized window or a pre-layout read)
 /// never rebuilds: there is no target size to build, and `Composition::set_rect`
@@ -1461,8 +1138,9 @@ fn apply_set_rect(
         // Why the early return: a failed rebuild leaves the GL FBO and the
         // interop texture at the OLD size. Applying the rect anyway would
         // recreate the DComp surface at the NEW size, and the next present
-        // would CopyResource mismatched resources — undefined behaviour that
-        // can also silently succeed and present garbage. Stopping here keeps
+        // would copy a frame sized for the OLD geometry into the NEW one —
+        // a silently "successful" present that shows stale content. Stopping
+        // here keeps
         // the pipeline internally consistent; the next frontend update retries.
         if let Err(message) = present.refresh_size(&mut state.gl_context, w, h) {
             log::error!(

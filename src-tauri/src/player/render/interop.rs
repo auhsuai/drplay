@@ -12,10 +12,26 @@
 //! - The D3D resource must be created with `D3D11_USAGE_DEFAULT` (spec Table
 //!   `wgl.restrictions`); enforced by `Composition::create_d3d_texture`.
 //! - Lock/Unlock are the synchronization points (the spec's own sample loop
-//!   locks BEFORE GL renders and unlocks before Direct3D reads). No `glFinish`
-//!   is needed: "The Lock/Unlock calls serve as synchronization points between
-//!   OpenGL and DirectX." The per-frame order here is therefore:
-//!   lock -> GL renders -> unlock -> Direct3D copies.
+//!   locks BEFORE GL renders and unlocks before Direct3D reads): "The
+//!   Lock/Unlock calls serve as synchronization points between OpenGL and
+//!   DirectX. They ensure that any rendering operations that affect the
+//!   resource on one driver are complete before the other driver takes
+//!   ownership of it." (WGL_NV_DX_interop, Issues 2, DISCUSSION.)
+//!   "Complete ... before the other driver takes ownership" is the operative
+//!   requirement, and the unlock alone does not deliver it: mpv's render call
+//!   only ENQUEUES the drawing commands, so the GL writes must be flushed into
+//!   the driver before `wglDXUnlockObjectsNV` hands the resource over. The
+//!   per-frame order here is therefore:
+//!   lock -> GL renders -> glFlush -> unlock -> Direct3D copies.
+//!   Without the flush the `CopySubresourceRegion` that follows the unlock reads
+//!   the texture before the frame is submitted: a black screen whose every LATER
+//!   readback of the same texture is correct.
+//! - A flush, not a `glFinish`: a flush guarantees the queued commands are
+//!   SUBMITTED in order, which is what the D3D-side copy needs; a finish blocks
+//!   until every one of them has EXECUTED, stalling the pipeline once per
+//!   frame. No fence and no status query is involved either — see
+//!   `GlContext::flush` (render/gl.rs) and its single call site in
+//!   `RenderThreadState::pump_frames` (render/mod.rs).
 //! - Access `WGL_ACCESS_READ_WRITE_NV`: GL renders into the texture (write)
 //!   and the FBO readback test may read it; READ_ONLY would make GL writes
 //!   undefined per the spec.
@@ -220,8 +236,13 @@ impl InteropObject {
         Ok(())
     }
 
-    /// `wglDXUnlockObjectsNV`: GL's rendering is flushed and D3D takes over
-    /// (this is the spec's synchronization point; no glFinish needed).
+    /// `wglDXUnlockObjectsNV`: GL's rendering is flushed and D3D takes over.
+    ///
+    /// This IS the hand-off point, and it does not wait for the GL pipeline:
+    /// the caller must have flushed the commands that wrote the resource
+    /// before calling it (`pump_frames` does, between mpv's render and here —
+    /// see the module docs). Unflushed, the D3D copy that follows copies the
+    /// texture before the frame was submitted and the screen stays black.
     pub(crate) fn unlock(&self) -> Result<(), InteropError> {
         if !self.registered {
             return Err(InteropError::Call { step: "unlock (unregistered object)", code: 0 });
