@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * Inactivity window before the fullscreen player bar hides itself. Named
  * constant (Luật 4): the ONLY place a fullscreen-chrome delay is written down.
  */
-export const FULLSCREEN_CHROME_HIDE_MS = 3000;
+export const FULLSCREEN_CHROME_HIDE_MS = 1000;
 
 export interface FullscreenChrome {
   /** Whether the controls should be painted. */

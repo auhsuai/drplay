@@ -296,7 +296,7 @@ function App() {
   }, []);
 
   // Slice 1 (B/C): the ONE owner of the fullscreen player-bar visibility
-  // policy (one state, one 3000ms timer). It lives here because App owns both
+  // policy (one state, one 1000ms timer). It lives here because App owns both
   // `isPlayerFullscreen` and the player command context, so the keyboard path,
   // the bar buttons and the pointer path all feed the same instance — no
   // second timer or state anywhere else.
@@ -305,7 +305,7 @@ function App() {
   });
 
   // The Media Information dialog suspends the fullscreen auto-hide through the
-  // SAME seam as the video menu: open = reveal + suspend, close = FRESH 3000 ms
+  // SAME seam as the video menu: open = reveal + suspend, close = FRESH 1000 ms
   // countdown. It is derived from the one dialog open-state, so there is no
   // second timer, no second owner, and no playback/fullscreen state touched.
   useEffect(() => {
@@ -399,7 +399,7 @@ function App() {
   // the submenus and the dispatch path cannot drift between them. Its open
   // state drives the chrome suspension that Slice 1 wired to the native-menu
   // promise: `setMenuOpen` reveals + suspends on open and restarts a FRESH
-  // 3000ms countdown on close. Both callbacks below are stable, so the
+  // 1000ms countdown on close. Both callbacks below are stable, so the
   // memoized NowPlayingView is not invalidated on every App render.
   const videoMenu = useVideoMenu({
     ctx: playerCommandContext,

@@ -1,7 +1,7 @@
 ﻿// @vitest-environment jsdom
 /**
  * The ONE owner of the fullscreen player-bar visibility policy: a single
- * 3000ms auto-hide timer that only runs in fullscreen, is suspended while a
+ * 1000ms auto-hide timer that only runs in fullscreen, is suspended while a
  * menu is open, coalesces mousemove through one rAF and leaves no timer or
  * listener behind on exit / unmount.
  */
@@ -121,7 +121,7 @@ afterEach(() => {
 });
 
 describe("useFullscreenChrome: enter / auto-hide", () => {
-  it("entering fullscreen shows the chrome, and 3000ms of no activity hides it", () => {
+  it("entering fullscreen shows the chrome, and 1000ms of no activity hides it", () => {
     const { rerender } = renderHarness(false);
     expect(visible()).toBe(true);
 
@@ -135,8 +135,8 @@ describe("useFullscreenChrome: enter / auto-hide", () => {
     expect(visible()).toBe(false);
   });
 
-  it("uses a 3000ms constant", () => {
-    expect(FULLSCREEN_CHROME_HIDE_MS).toBe(3000);
+  it("uses a 1000ms constant", () => {
+    expect(FULLSCREEN_CHROME_HIDE_MS).toBe(1000);
   });
 
   it("never auto-hides outside fullscreen (windowed layout is unchanged)", () => {
@@ -212,7 +212,7 @@ describe("useFullscreenChrome: activity reveal", () => {
 });
 
 describe("useFullscreenChrome: menus suspend the hide", () => {
-  it("an open menu suspends the countdown; closing it resumes with a fresh 3000ms", () => {
+  it("an open menu suspends the countdown; closing it resumes with a fresh 1000ms", () => {
     const { rerender } = renderHarness(false);
     rerender(<Harness isFullscreen />);
 

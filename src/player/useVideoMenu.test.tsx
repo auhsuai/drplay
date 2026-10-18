@@ -452,11 +452,11 @@ describe("useVideoMenu: one tree, two entry points", () => {
 
 // ---------------------------------------------------------------------------
 // Timer coordination with Slice 1's useFullscreenChrome: opening the menu
-// suspends the hide, closing it restarts a FRESH 3000ms countdown, and a
-// submenu keeps working past 3000ms because the menu itself is still open.
+// suspends the hide, closing it restarts a FRESH 1000ms countdown, and a
+// submenu keeps working past 1000ms because the menu itself is still open.
 // ---------------------------------------------------------------------------
 describe("useVideoMenu + useFullscreenChrome", () => {
-  it("open suspends; close restarts a fresh countdown; an open submenu survives 3000ms", async () => {
+  it("open suspends; close restarts a fresh countdown; an open submenu survives 1000ms", async () => {
     vi.useFakeTimers();
     const ctx = makeCtx(true);
     const events: boolean[] = [];
