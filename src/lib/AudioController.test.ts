@@ -8,6 +8,9 @@ import type { Track } from "../types";
 // sources must never reference DOM audio (or the removed factory) again.
 import audioControllerSource from "../lib/AudioController.ts?raw";
 import mpvAudioSource from "../lib/mpvAudio.ts?raw";
+import mpvAudioEngineSessionSource from "../lib/mpvAudio/engineSession.ts?raw";
+import mpvAudioEventHubSource from "../lib/mpvAudio/eventHub.ts?raw";
+import mpvAudioLogSource from "../lib/mpvAudio/log.ts?raw";
 import audioNativeEventsSource from "../lib/audioNativeEvents.ts?raw";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -238,6 +241,9 @@ describe("guard: web audio path stays removed (mpv cutover)", () => {
     const sources = [
       ["AudioController.ts", audioControllerSource],
       ["mpvAudio.ts", mpvAudioSource],
+      ["mpvAudio/engineSession.ts", mpvAudioEngineSessionSource],
+      ["mpvAudio/eventHub.ts", mpvAudioEventHubSource],
+      ["mpvAudio/log.ts", mpvAudioLogSource],
       ["audioNativeEvents.ts", audioNativeEventsSource],
     ] as const;
     for (const [file, source] of sources) {

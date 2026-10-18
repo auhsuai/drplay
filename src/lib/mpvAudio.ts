@@ -1,9 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
 import type { Track } from "../types";
-import { captureError } from "../utils/errorLog";
 import { classifyMediaKind, MEDIA_KIND_VIDEO } from "../utils/mediaKind";
-import { ensureVideoHostAcquired } from "./videoHost";
 import type { BufferedSource } from "../utils/bufferedRange";
 import type {
   AudioEventIdentity,
@@ -16,14 +14,10 @@ import {
   buildProxyStreamUrl,
   classifyEndFileError,
   describeError,
-  dispatchMpvEvent,
-  dispatchPropertyEvent,
   extractCacheRanges,
   freshThrottleClocks,
-  isRecord,
   LOADFILE_DEADLINE_MS,
   LOADFILE_RESTART_MAX_ATTEMPTS,
-  LOADFILE_RESTART_TIMEOUT_MS,
   maxRangeEnd,
   MPV_BOOL,
   MPV_COMMANDS,
@@ -31,13 +25,10 @@ import {
   MPV_PROPERTIES,
   MPV_VIDEO,
   parseProxyError,
-  PROXY_START_TIMEOUT_MS,
   SEEK_ACK_TIMEOUT_MS,
   SEEK_ACK_TOLERANCE_SECS,
   STALL_MIN_RESUME_SECS,
   TAURI_COMMANDS,
-  TAURI_EVENTS,
-  THROTTLE_MS,
   toTimeRanges,
   VOLUME_SCALE,
   withStallQueryTimeout,
@@ -50,41 +41,17 @@ import {
   type StallTruth,
   TimePosWatchdog,
 } from "./mpvPlaybackMachines";
+import { detachListeners, EventHub } from "./mpvAudio/eventHub";
+import { EngineSession } from "./mpvAudio/engineSession";
+import { logError, logWarn, throttled } from "./mpvAudio/log";
 import { TimeInterpolator } from "./timeInterpolator";
 import { TimerRegistry } from "./timerRegistry";
 
 /** MpvEngine — mpv sidecar playback over Tauri JSON IPC; Rust contract + watchdog in mpvProtocol.ts. */
 
-const LOGGER_SOURCE = "MpvAudioController";
-
 export class MpvAudioController {
-  private listeners: { [K in keyof AudioEventMap]?: AudioEventHandler<K>[] } =
-    {};
+  private hub = new EventHub();
   private unlistenFns: UnlistenFn[] = [];
-  private started = false;
-  // Why: release() must invalidate every async continuation still in flight
-  // (listener attach / spawn / loadfile) so none resurrects engine state.
-  private lifecycleEpoch = 0;
-  // Why (Fix B3): stale-event identity across a loadfile — Rust tags every
-  // mpv-property/mpv-event with the load-epoch of the sidecar connection it
-  // was dispatched under, and every `mpv_command` reply carries the current
-  // tag (`load_epoch`). Events below the latest loadfile reply's epoch belong
-  // to the previous track and must not drive the new one.
-  private engineEpoch = 0;
-  // Why (R2.2): the epoch counter is per connection — a fresh sidecar restarts
-  // it at 0 (Fix B3), so an in-flight event of the REPLACED connection can sit
-  // above the new base and pass the epoch filter (B1), and release() resetting
-  // the base to 0 lets late events drive a torn-down engine (RC-1). Rust mints
-  // a process-wide monotonic `conn` per connection and tags every event with
-  // it; the engine adopts it from the `mpv_spawn` reply and drops every event
-  // of another connection. `null` = no live connection (pre-spawn / released).
-  private engineConn: number | null = null;
-  /** Shared in-flight spawn attempt — concurrent playTrack calls join it. */
-  private startPromise: Promise<boolean> | null = null;
-  /** Shared in-flight sidecar swap of a load-deadline restart (F8-1): every
-   *  new load request parks on it (ensureStarted) instead of issuing a
-   *  loadfile into the dying process. */
-  private restartInFlight: Promise<void> | null = null;
   /** Monotonic id of the latest load request that supersedes the current
    *  playback (a track switch, never a same-track no-op/resume click). A
    *  deadline restart captured the id it belongs to and must never reload a
@@ -97,7 +64,6 @@ export class MpvAudioController {
    *  from `loadRequestSeq` (supersede tracking, F8-1) and from the
    *  intent-level attemptId of RC-1/R3.1. Monotonic; never reset. */
   private loadAttemptSeq = 0;
-  private proxyPort: number | null = null;
   /** Latest `stream-proxy-error` for the current stream (R05) — state only,
    *  never a display channel: mpv's end-file is the single place an error
    *  surfaces (the two events describe the same failure — dedupe). */
@@ -305,13 +271,10 @@ export class MpvAudioController {
     onEngineClosed: (cause) => {
       // Why (R02-2): mpv died without an end-file — nothing else tells the
       // engine; reset lifecycle so the next playTrack respawns via mpv_spawn.
-      this.logError(`mpv engine closed: ${cause}`);
-      this.started = false;
-      // R2.2: the connection is gone — any further event tagged with its id is
-      // late by definition and must not drive the engine.
-      this.engineConn = null;
+      logError(`mpv engine closed: ${cause}`);
+      this.session.markEngineClosed();
       this.clearLoadDeadline();
-      this.detachListeners(this.unlistenFns);
+      detachListeners(this.unlistenFns);
       this.unlistenFns = [];
       this.playbackFinished = true;
       this.watchdog.stop();
@@ -334,26 +297,40 @@ export class MpvAudioController {
       );
     },
     onMalformed: (detail) => {
-      this.logWarn(detail);
+      logWarn(detail);
     },
   };
 
-  private getHandlers<K extends keyof AudioEventMap>(
-    event: K,
-  ): AudioEventHandler<K>[] {
-    return this.listeners[event] ?? (this.listeners[event] = []);
+  /** Engine lifecycle/connection state (spawn dedupe, epochs, proxy port). */
+  private readonly session = new EngineSession({
+    events: this.events,
+    noteProxyError: (payload) => {
+      this.noteProxyError(payload);
+    },
+    applyVolume: () => {
+      this.applyVolume();
+    },
+    getUnlistenFns: () => this.unlistenFns,
+    setUnlistenFns: (fns) => {
+      this.unlistenFns = fns;
+    },
+  });
+
+  /** Read-only observability bridge: the epoch/conn state lives in the
+   *  session, but guard tests pin its resets through these property reads. */
+  protected get engineEpoch(): number {
+    return this.session.engineEpoch;
+  }
+
+  protected get engineConn(): number | null {
+    return this.session.engineConn;
   }
 
   public on<K extends keyof AudioEventMap>(
     event: K,
     handler: AudioEventHandler<K>,
   ): () => void {
-    const list = this.getHandlers(event);
-    list.push(handler);
-    return () => {
-      const idx = list.indexOf(handler);
-      if (idx >= 0) list.splice(idx, 1);
-    };
+    return this.hub.on(event, handler);
   }
 
   /** Identity attached to every emitted event (R2.1). `trackIdOverride`
@@ -374,7 +351,7 @@ export class MpvAudioController {
     payload: AudioEventMap[K],
     trackIdOverride?: string,
   ) {
-    const handlers = this.listeners[event];
+    const handlers = this.hub.handlersFor(event);
     if (handlers) {
       // Tag every payload with the engine identity (R2.1). Spread keeps the
       // event's own fields authoritative and tolerates `undefined` payloads.
@@ -388,31 +365,14 @@ export class MpvAudioController {
     }
   }
 
-  private logWarn(message: string): void {
-    void captureError({ level: "warn", source: LOGGER_SOURCE, message });
-  }
-
-  private logError(message: string): void {
-    void captureError({ level: "error", source: LOGGER_SOURCE, message });
-  }
-
-  private throttled(clock: { last: number }, emit: () => void): void {
-    const now = Date.now();
-    // `last === 0` sentinel: FIRST event always emits; Date.now() is monotonic.
-    if (clock.last === 0 || now - clock.last > THROTTLE_MS) {
-      clock.last = now;
-      emit();
-    }
-  }
-
   private emitTimeupdate(time: number): void {
-    this.throttled(this.throttle.lastTimeUpdate, () => {
+    throttled(this.throttle.lastTimeUpdate, () => {
       this.emit("timeupdate", { currentTime: time, duration: this.duration });
     });
   }
 
   private emitProgress(): void {
-    this.throttled(this.throttle.lastProgressEmit, () => {
+    throttled(this.throttle.lastProgressEmit, () => {
       this.emit("progress", undefined);
     });
   }
@@ -421,7 +381,7 @@ export class MpvAudioController {
   private noteProxyError(payload: unknown): void {
     const parsed = parseProxyError(payload);
     if (parsed === null) {
-      this.logWarn("stream-proxy-error payload malformed (skipped)");
+      logWarn("stream-proxy-error payload malformed (skipped)");
       return;
     }
     this.lastProxyError = parsed;
@@ -436,7 +396,7 @@ export class MpvAudioController {
   }
 
   private emitEndFileError(): void {
-    this.logError("mpv end-file reason=error (track failed to play)");
+    logError("mpv end-file reason=error (track failed to play)");
     this.emit("error", {
       message: "File lỗi định dạng, đang bỏ qua...",
       code: "format_error",
@@ -451,157 +411,6 @@ export class MpvAudioController {
     return invoke(TAURI_COMMANDS.mpvCommand, { cmd });
   }
 
-  /** True when a tagged event payload cannot drive THIS engine (Fix B3 +
-   *  R2.2): its connection is not the live one, or it predates the latest
-   *  loadfile reply. Robust by contract: a payload missing the tag passes, so
-   *  an older sender stays compatible. */
-  private isStaleEnginePayload(payload: unknown): boolean {
-    if (!isRecord(payload)) return false;
-    const conn = payload["conn"];
-    if (
-      typeof conn === "number" &&
-      (this.engineConn === null || conn !== this.engineConn)
-    ) {
-      // A tagged event of a replaced (or absent) connection: its epoch base
-      // was reset by the respawn/release, so it must never drive this engine.
-      return true;
-    }
-    const epoch = payload["epoch"];
-    return typeof epoch === "number" && epoch < this.engineEpoch;
-  }
-
-  /** Adopt the connection identity of an `mpv_spawn` reply (R2.2). Idempotent
-   *  for the spawn no-op path (running sidecar answers with its own id); a
-   *  malformed/legacy reply without a numeric `conn` is a no-op. */
-  private noteSpawnReply(reply: unknown): void {
-    if (!isRecord(reply)) return;
-    const conn = reply["conn"];
-    if (typeof conn === "number") this.engineConn = conn;
-  }
-
-  /** Adopt the load epoch of a `loadfile` reply (Rust returns
-   *  `{ data, load_epoch }` for every `mpv_command`). Monotonic — a lower tag
-   *  never lowers the base; a missing/malformed tag is a no-op. */
-  private noteLoadEpoch(reply: unknown): void {
-    if (!isRecord(reply)) return;
-    const epoch = reply["load_epoch"];
-    if (typeof epoch !== "number") return;
-    this.engineEpoch = Math.max(this.engineEpoch, epoch);
-  }
-
-  private detachListeners(fns: UnlistenFn[]): void {
-    for (const fn of fns) {
-      try {
-        // Why (B6): runtime unlisten returns a promise despite UnlistenFn's
-        // `() => void` signature — without this handler a rejection would
-        // surface as an unhandled rejection during teardown.
-        const call = fn as () => Promise<unknown> | undefined;
-        void Promise.resolve(call()).catch((e: unknown) => {
-          this.logWarn(`unlisten-failed: ${describeError(e)}`);
-        });
-      } catch (e: unknown) {
-        this.logWarn(`unlisten-failed: ${describeError(e)}`);
-      }
-    }
-  }
-
-  private async ensureStarted(epoch: number): Promise<boolean> {
-    // Why (F8-1): a load-deadline restart swaps the sidecar internally — the
-    // old mpv is going away and its replacement is not up yet, so issuing a
-    // loadfile now would race a dying process (and the restart's own reload
-    // would then clobber the newcomer). Park the request until the swap
-    // settles; `started` deliberately stays true across it. A failed swap
-    // resolves the wait and lets the request surface its own bounded failure.
-    if (this.restartInFlight) {
-      try {
-        await this.restartInFlight;
-      } catch {
-        // onLoadDeadline owns the swap's single failure surface (F8-6 dedupe).
-      }
-      // Release during the wait: this request belongs to a torn-down
-      // lifecycle — it must not boot a fresh engine (no resurrection).
-      if (this.isStale(epoch)) return false;
-    }
-    if (this.started) return true;
-    // Why: dedupe concurrent playTrack calls — one spawn attempt wins, the
-    // rest join it instead of attaching a second listener set.
-    if (this.startPromise) return this.startPromise;
-    const attempt = this.startEngine();
-    this.startPromise = attempt;
-    try {
-      return await attempt;
-    } finally {
-      // Identity check: only this exact attempt owns the memo — a release or
-      // a newer attempt must never be clobbered here.
-      if (this.startPromise === attempt) this.startPromise = null;
-    }
-  }
-
-  /** Spawn attempt body. Returns false when release() made it stale mid-flight. */
-  private async startEngine(): Promise<boolean> {
-    const epoch = this.lifecycleEpoch;
-    const attached: UnlistenFn[] = [];
-    try {
-      attached.push(
-        await listen(TAURI_EVENTS.property, (event) => {
-          if (this.isStaleEnginePayload(event.payload)) return;
-          dispatchPropertyEvent(event.payload, this.events);
-        }),
-      );
-      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
-      attached.push(
-        await listen(TAURI_EVENTS.event, (event) => {
-          if (this.isStaleEnginePayload(event.payload)) return;
-          dispatchMpvEvent(event.payload, this.events);
-        }),
-      );
-      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
-      attached.push(
-        await listen(TAURI_EVENTS.streamProxyError, (event) => {
-          this.noteProxyError(event.payload);
-        }),
-      );
-      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
-      // ORDERING CONTRACT (Slice 2): mpv reads `--wid` ONCE, at spawn, so the
-      // native video host must exist BEFORE this call — otherwise video opens
-      // in mpv's own top-level window for the whole engine session. The
-      // acquire resolves 0 (never throws) when the host is unavailable, which
-      // degrades to exactly that pre-Slice-1 behavior instead of failing the
-      // spawn. App also acquires on startup (src/App.tsx), so by the time a
-      // first play reaches here the handle is usually already memoized.
-      await ensureVideoHostAcquired();
-      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
-      const reply = await invoke(TAURI_COMMANDS.mpvSpawn);
-      if (this.isStale(epoch)) return this.disposeStaleStart(attached);
-      // Fix B3: a fresh sidecar's load epoch restarts at 0 (the Rust counter
-      // is per connection) — adopting that base keeps its events from being
-      // dropped below a previous track's epoch after a crash respawn.
-      this.engineEpoch = 0;
-      // R2.2: adopt the new connection's identity so its events — and only
-      // its — are accepted from here on.
-      this.noteSpawnReply(reply);
-    } catch (e: unknown) {
-      this.detachListeners(attached);
-      throw e;
-    }
-    this.unlistenFns = attached;
-    this.started = true;
-    // Fresh mpv starts at volume 100 — re-apply the stored (or muted) volume.
-    this.applyVolume();
-    return true;
-  }
-
-  /** True when release() bumped the epoch past the captured one. */
-  private isStale(epoch: number): boolean {
-    return epoch !== this.lifecycleEpoch;
-  }
-
-  /** A stale start owns handles release() never saw: drop them, touch no state. */
-  private disposeStaleStart(attached: UnlistenFn[]): boolean {
-    this.detachListeners(attached);
-    return false;
-  }
-
   /** Why (F8-1): true when a load-deadline's load was superseded while the
    *  restart awaited — released, a newer track request, or a terminal outcome.
    *  A method (not inline field reads) so TypeScript's flow narrowing cannot
@@ -612,25 +421,11 @@ export class MpvAudioController {
     seq: number,
   ): boolean {
     return (
-      this.isStale(epoch) ||
+      this.session.isStale(epoch) ||
       this.playbackFinished ||
       this.currentTrackId !== trackId ||
       this.loadRequestSeq !== seq
     );
-  }
-
-  private async ensureProxyPort(): Promise<number> {
-    if (this.proxyPort === null) {
-      // Why (D8): a hung stream_proxy_start reply must not hold the playback
-      // attempt open forever. The timeout throws before the assignment, so
-      // proxyPort stays null — the next attempt re-invokes (Rust side is
-      // idempotent) and a late reply can never write a stale port.
-      this.proxyPort = await withStallQueryTimeout(
-        invoke<number>(TAURI_COMMANDS.streamProxyStart),
-        PROXY_START_TIMEOUT_MS,
-      );
-    }
-    return this.proxyPort;
   }
 
   private applyVolume(): void {
@@ -640,7 +435,7 @@ export class MpvAudioController {
       MPV_PROPERTY_ARGS.volume,
       String(Math.round(mpvVolume)),
     ]).catch((e: unknown) => {
-      this.logWarn(`volume-apply-failed: ${describeError(e)}`);
+      logWarn(`volume-apply-failed: ${describeError(e)}`);
     });
   }
 
@@ -703,7 +498,7 @@ export class MpvAudioController {
       MPV_PROPERTY_ARGS.pause,
       keepPaused ? MPV_BOOL.yes : MPV_BOOL.no,
     ]).catch((e: unknown) => {
-      this.logWarn(`initial-pause-apply-failed: ${describeError(e)}`);
+      logWarn(`initial-pause-apply-failed: ${describeError(e)}`);
     });
   }
 
@@ -730,7 +525,7 @@ export class MpvAudioController {
     // reloading. All other callers set it before surfacing already.
     this.playbackFinished = true;
     this.playing = false;
-    this.logError(`${where}: ${describeError(e)}`);
+    logError(`${where}: ${describeError(e)}`);
     // Why (S4): a failed command means no ticks will ever confirm progress —
     // never leave the spinner hanging on a dead path.
     this.buffering.settle();
@@ -745,7 +540,7 @@ export class MpvAudioController {
   }
 
   public async playTrack(track: Track, startTime?: number): Promise<void> {
-    const epoch = this.lifecycleEpoch;
+    const epoch = this.session.epoch;
     // Any explicit play request supersedes a pending pause intent — including
     // a retry after a failure, where the store is false without a user pause.
     this.pauseIntent = false;
@@ -768,10 +563,10 @@ export class MpvAudioController {
       // no-op/resume clicks deliberately do not bump: the restart's reload is
       // still the cure for the track they refer to.
       this.loadRequestSeq += 1;
-      if (!(await this.ensureStarted(epoch))) return;
+      if (!(await this.session.ensureStarted(epoch))) return;
       // Why: release() mid-start must abort silently — no loadfile into a
       // shutdown mpv and no state resurrection after the teardown.
-      if (this.isStale(epoch)) return;
+      if (this.session.isStale(epoch)) return;
       // A user/UI load attempt owns a fresh sidecar-restart budget (the
       // restart-reload below must NOT reset its own budget).
       this.loadRestarts = 0;
@@ -779,7 +574,7 @@ export class MpvAudioController {
     } catch (e: unknown) {
       // Why: a command failing because release() tore the engine down is not
       // a playback failure — release paths are deliberately silent.
-      if (this.isStale(epoch)) return;
+      if (this.session.isStale(epoch)) return;
       // Why (R2.1): this failure is ABOUT the requested track, which the
       // engine may not have begun yet (loadfile/command rejected) — attribute
       // it to that target so a track-switch failure still surfaces on it.
@@ -796,8 +591,8 @@ export class MpvAudioController {
     epoch: number,
     requestSeq?: number,
   ): Promise<void> {
-    const port = await this.ensureProxyPort();
-    if (this.isStale(epoch)) return;
+    const port = await this.session.ensureProxyPort();
+    if (this.session.isStale(epoch)) return;
     // Phase B: mpv's `video` is a PROCESS-GLOBAL option (like `pause`), so it
     // is set on EVERY load — a video->audio switch must turn the video output
     // back off or the last movie's window stays up. Set before the loadfile so
@@ -813,7 +608,7 @@ export class MpvAudioController {
       MPV_PROPERTY_ARGS.video,
       videoValue,
     ]);
-    if (this.isStale(epoch)) return;
+    if (this.session.isStale(epoch)) return;
     const reply = await this.sendCommand([
       MPV_COMMANDS.loadfile,
       // Same localhost Range proxy URL as audio — video needs no new scheme,
@@ -821,8 +616,8 @@ export class MpvAudioController {
       buildProxyStreamUrl(track.id, port),
       MPV_COMMANDS.replace,
     ]);
-    this.noteLoadEpoch(reply);
-    if (this.isStale(epoch)) return;
+    this.session.noteLoadEpoch(reply);
+    if (this.session.isStale(epoch)) return;
     // Why (F8-1): a deadline restart's reload must not begin the stale track
     // if a newer load request landed while the loadfile reply was in flight —
     // the loadfile itself predates the switch, but the newcomer owns the
@@ -851,7 +646,7 @@ export class MpvAudioController {
       MPV_PROPERTY_ARGS.pause,
       resuming ? MPV_BOOL.no : MPV_BOOL.yes,
     ]).catch((e: unknown) => {
-      this.logWarn(`toggle-play-failed: ${describeError(e)}`);
+      logWarn(`toggle-play-failed: ${describeError(e)}`);
     });
   }
 
@@ -866,7 +661,7 @@ export class MpvAudioController {
       MPV_PROPERTY_ARGS.pause,
       MPV_BOOL.yes,
     ]).catch((e: unknown) => {
-      this.logWarn(`pause-failed: ${describeError(e)}`);
+      logWarn(`pause-failed: ${describeError(e)}`);
     });
   }
 
@@ -874,7 +669,7 @@ export class MpvAudioController {
     // Symmetric with pause(): after end-file there is no live track — a seek
     // would hit an idle mpv, reject, and arm a dead spinner window.
     if (!this.currentTrackId || this.playbackFinished) {
-      this.logWarn(`seek dropped: no active track, requested=${String(time)}s`);
+      logWarn(`seek dropped: no active track, requested=${String(time)}s`);
       return;
     }
     this.sendSeek(time);
@@ -883,12 +678,12 @@ export class MpvAudioController {
   public setVolume(vol: number): void {
     this.volume = Math.max(0, Math.min(1, vol));
     // Muted: keep silent at 0 (unmute restores); pre-spawn it just stores — applied in ensureStarted.
-    if (!this.muted && this.started) this.applyVolume();
+    if (!this.muted && this.session.isStarted) this.applyVolume();
   }
 
   public toggleMute(): boolean {
     this.muted = !this.muted;
-    if (this.started) this.applyVolume();
+    if (this.session.isStarted) this.applyVolume();
     return this.muted;
   }
 
@@ -936,18 +731,10 @@ export class MpvAudioController {
   public release(): void {
     // Why: bump FIRST so every in-flight continuation (listener attach, spawn,
     // loadfile) observes the teardown at its next await boundary and aborts.
-    this.lifecycleEpoch += 1;
-    this.startPromise = null;
-    this.restartInFlight = null;
-    this.detachListeners(this.unlistenFns);
+    this.session.beginRelease();
+    detachListeners(this.unlistenFns);
     this.unlistenFns = [];
-    this.started = false;
-    // Fix B3: a torn-down sidecar owns no epoch — the next spawn starts fresh.
-    this.engineEpoch = 0;
-    // R2.2: and no connection — late events of the torn-down sidecar (already
-    // queued in the bridge) must not revive timers/state (RC-1).
-    this.engineConn = null;
-    this.proxyPort = null;
+    this.session.finishRelease();
     this.lastProxyError = null;
     this.lastTrack = null;
     this.currentTrackId = null;
@@ -974,7 +761,7 @@ export class MpvAudioController {
     this.interpolator.reset();
     this.throttle = freshThrottleClocks();
     void invoke(TAURI_COMMANDS.mpvShutdown).catch((e: unknown) => {
-      this.logWarn(`mpv-shutdown-failed: ${describeError(e)}`);
+      logWarn(`mpv-shutdown-failed: ${describeError(e)}`);
     });
   }
 
@@ -1012,7 +799,7 @@ export class MpvAudioController {
       // A failed seek cannot ack: unfilter at once instead of waiting out the
       // failsafe timer.
       this.clearSeekAck();
-      this.logWarn(`seek-failed: ${describeError(e)}`);
+      logWarn(`seek-failed: ${describeError(e)}`);
     });
   }
 
@@ -1059,14 +846,14 @@ export class MpvAudioController {
   /** Stall self-heal step 1: reload the stream at the pinned position. */
   private recoverFromStall(pinnedTime: number, attempt: number): void {
     const trackId = this.currentTrackId;
-    const port = this.proxyPort;
+    const port = this.session.port;
     if (trackId === null || port === null) {
-      this.logWarn(
+      logWarn(
         `stall-recovery attempt=${String(attempt)} skipped: no active stream`,
       );
       return;
     }
-    this.logWarn(
+    logWarn(
       `stall-recovery attempt=${String(attempt)} pinned=${pinnedTime.toFixed(1)}s`,
     );
     // Why: resume at the pinned position once the reloaded file reports ready
@@ -1078,12 +865,12 @@ export class MpvAudioController {
       MPV_COMMANDS.replace,
     ])
       .then((reply) => {
-        this.noteLoadEpoch(reply);
+        this.session.noteLoadEpoch(reply);
       })
       .catch((e: unknown) => {
         // Why: a failed reload consumes this attempt only — the next reconcile
         // window still runs and the exhausted path is the single error surface.
-        this.logWarn(`stall-recovery-reload-failed: ${describeError(e)}`);
+        logWarn(`stall-recovery-reload-failed: ${describeError(e)}`);
       });
     // Keep the spinner up across the reload window.
     this.buffering.request(true);
@@ -1119,7 +906,7 @@ export class MpvAudioController {
    *  chain and restarts the sidecar (the only proven cure). */
   private armLoadDeadline(trackId: string): void {
     this.clearLoadDeadline();
-    const epoch = this.lifecycleEpoch;
+    const epoch = this.session.epoch;
     this.loadDeadline = this.timers.setTimeout(
       "load-deadline",
       () => {
@@ -1137,41 +924,13 @@ export class MpvAudioController {
     }
   }
 
-  /** One load-deadline sidecar swap (F8-1): shutdown the wedged mpv, spawn
-   *  the replacement, then re-base the per-connection state (Fix B3 epoch,
-   *  facade volume). Shared through `restartInFlight` so concurrent load
-   *  requests wait it out instead of racing a dying process. Each IPC call is
-   *  bounded; a release mid-swap aborts at the next await boundary. */
-  private async swapSidecar(epoch: number): Promise<void> {
-    await withStallQueryTimeout(
-      invoke(TAURI_COMMANDS.mpvShutdown),
-      LOADFILE_RESTART_TIMEOUT_MS,
-    );
-    if (this.isStale(epoch)) return;
-    // Same `--wid` ordering contract as startEngine: the replacement sidecar
-    // reads the flag at ITS spawn too. Memoized, so this is a no-op resolve
-    // for every restart after the first.
-    await ensureVideoHostAcquired();
-    if (this.isStale(epoch)) return;
-    const reply = await withStallQueryTimeout(
-      invoke(TAURI_COMMANDS.mpvSpawn),
-      LOADFILE_RESTART_TIMEOUT_MS,
-    );
-    if (this.isStale(epoch)) return;
-    // Fix B3: the replacement sidecar's epoch counter restarts at 0 — a stale
-    // engineEpoch would drop every event of whatever loads next.
-    this.engineEpoch = 0;
-    // R2.2: the replacement is a new connection — the old id's events (its
-    // epoch base reset above) must never pass again.
-    this.noteSpawnReply(reply);
-    // A fresh mpv starts at volume 100 — re-apply the facade volume.
-    this.applyVolume();
-  }
-
+  /** One load-deadline sidecar swap (F8-1) lives in EngineSession.swapSidecar;
+   *  the restart promise is shared through the session so concurrent load
+   *  requests wait it out instead of racing a dying process. */
   private async onLoadDeadline(trackId: string, epoch: number): Promise<void> {
     // Stale (release/teardown) or superseded (another track loading, or a
     // terminal outcome already decided): this deadline has nothing to cure.
-    if (this.isStale(epoch)) return;
+    if (this.session.isStale(epoch)) return;
     if (this.currentTrackId !== trackId) return;
     if (this.playbackFinished) return;
     // The deadline restart is a fresh load sub-attempt: its own failure
@@ -1185,7 +944,7 @@ export class MpvAudioController {
       return;
     }
     this.loadRestarts += 1;
-    this.logWarn(
+    logWarn(
       `load-deadline: no file-loaded for ${trackId} within ${String(LOADFILE_DEADLINE_MS)}ms — restarting the mpv sidecar (attempt ${String(this.loadRestarts)})`,
     );
     const track = this.lastTrack;
@@ -1193,8 +952,8 @@ export class MpvAudioController {
     // Why (F8-1): the load request this deadline belongs to. A newer request
     // must never be clobbered by the stale reload below.
     const seq = this.loadRequestSeq;
-    const swap = this.swapSidecar(epoch);
-    this.restartInFlight = swap;
+    const swap = this.session.swapSidecar(epoch);
+    this.session.trackRestart(swap);
     try {
       await swap;
       // Superseded while the sidecar swapped (user switched, release, or a
@@ -1208,12 +967,12 @@ export class MpvAudioController {
       const resumeAt = this.pendingSeek;
       await this.loadTrack(track, resumeAt ?? undefined, epoch, seq);
     } catch (e: unknown) {
-      if (this.isStale(epoch)) return;
+      if (this.session.isStale(epoch)) return;
       // Why (per 0/6): a failed restart or reload is terminal for this load —
       // surface the bounded error instead of retrying the sidecar forever.
       this.failTerminal("load-deadline-restart-failed", e);
     } finally {
-      if (this.restartInFlight === swap) this.restartInFlight = null;
+      this.session.clearRestart(swap);
     }
   }
 }
