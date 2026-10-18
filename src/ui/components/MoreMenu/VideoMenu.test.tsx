@@ -224,6 +224,30 @@ describe("VideoMenu submenus (DrPlay style, APG)", () => {
     ]);
   });
 
+  it("positions the flyout against its row (absolute), never the viewport (fixed)", () => {
+    renderMenu();
+
+    // Only ONE positioning utility may live in a panel's class: `fixed` and
+    // `absolute` are the same specificity, so whichever Tailwind emits later in
+    // the stylesheet wins. Merged into one constant, `fixed` won on the flyout
+    // — which then had no inline style, so `left-full`/`right-full` resolved
+    // against the VIEWPORT and pushed the whole submenu off-screen.
+    const root = rootMenu();
+    expect(root.className).toContain("fixed");
+    expect(root.className).not.toContain("absolute");
+
+    fireEvent.click(rowByLabel(root, /Audio/));
+    const submenu = document.querySelector<HTMLElement>(
+      '[role="menu"][data-submenu="true"]',
+    );
+    expect(submenu).not.toBeNull();
+    // The flyout must anchor to its `relative` row (VideoMenu.tsx wraps each
+    // parent in one), which is what makes left-full/right-full place it beside
+    // the row instead of at the viewport edge.
+    expect(submenu?.className).toContain("absolute");
+    expect(submenu?.className).not.toContain("fixed");
+  });
+
   it("picking a nested entry dispatches its own id exactly once", () => {
     const { props } = renderMenu();
 

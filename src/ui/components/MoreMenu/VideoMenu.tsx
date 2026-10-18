@@ -65,8 +65,23 @@ import { useMoreMenuEvents } from "./useMoreMenuEvents";
  * single id -> Lucide map instead of being threaded through menuModel.
  */
 
-const PANEL_CLASS =
-  "fixed z-[10000] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none";
+/** Everything EXCEPT positioning — shared by the root panel and every flyout. */
+const PANEL_BASE_CLASS =
+  "z-[10000] w-60 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-lg p-1.5 flex flex-col transition-all animate-in fade-in zoom-in-95 duration-200 border border-transparent ring-0 outline-none";
+
+/**
+ * The root panel is placed by `getContextMenuStyle`'s inline left/top, so it is
+ * viewport-positioned. The flyouts carry NO inline style and resolve
+ * left-full/right-full against the `relative` row that wraps each parent — so
+ * they must be `absolute`. The positioning utility therefore lives in a
+ * SEPARATE constant on purpose: `fixed` and `absolute` have equal specificity,
+ * so in one merged class whichever Tailwind emits later in the stylesheet wins
+ * (measured: `.fixed` after `.absolute`), which silently turned every flyout
+ * into a viewport-anchored panel and pushed it off-screen.
+ */
+const ROOT_PANEL_CLASS = `fixed ${PANEL_BASE_CLASS}`;
+
+const SUBMENU_PANEL_CLASS = `absolute ${PANEL_BASE_CLASS}`;
 
 /** Mirrors MENU_WIDTH_PX in menuPositioning (both panels are w-60). */
 const SUBMENU_WIDTH_PX = 240;
@@ -409,7 +424,7 @@ export function VideoMenu({
             role="menu"
             data-submenu="true"
             aria-label={entry.label}
-            className={`${PANEL_CLASS} absolute bottom-0 ${
+            className={`${SUBMENU_PANEL_CLASS} bottom-0 ${
               openLeft ? "right-full mr-3" : "left-full ml-3"
             }`}
           >
@@ -426,7 +441,7 @@ export function VideoMenu({
       role="menu"
       aria-label={t("player.menu.video_menu")}
       tabIndex={-1}
-      className={PANEL_CLASS}
+      className={ROOT_PANEL_CLASS}
       style={getContextMenuStyle({ anchorPoint, buttonRect, openUpwards })}
       onClick={(e) => {
         e.stopPropagation();
