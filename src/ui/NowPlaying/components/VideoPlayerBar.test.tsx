@@ -40,8 +40,15 @@ vi.mock("../../../lib/AudioController", () => ({
   AudioController: { getInstance: () => audioMock },
 }));
 
+// Records the props so a test can assert WHICH seekbar variant the bar asks
+// for — the stub itself renders nothing (the real rail's markup is SeekBar's
+// own test suite).
+const seekbarProps: { variant?: string | undefined } = {};
 vi.mock("../../components/SeekBar", () => ({
-  SeekBar: () => <div data-testid="seekbar-stub" />,
+  SeekBar: (props: { variant?: string }) => {
+    seekbarProps.variant = props.variant;
+    return <div data-testid="seekbar-stub" />;
+  },
 }));
 
 import { VideoPlayerBar } from "./VideoPlayerBar";
@@ -76,6 +83,45 @@ function baseProps() {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("VideoPlayerBar seekbar matches the collapsed PlayerBar", () => {
+  it("asks for the same `top` variant the PlayerBar uses", () => {
+    render(<VideoPlayerBar {...baseProps()} />);
+
+    // `top` pins the rail to the bar's top edge, edge-to-edge and square —
+    // the exact line the collapsed PlayerBar shows. The in-flow default put it
+    // between two clocks in the middle of the row instead.
+    expect(seekbarProps.variant).toBe("top");
+  });
+
+  it("renders the seekbar as a direct child of the bar, with no empty wrapper", () => {
+    const { container } = render(<VideoPlayerBar {...baseProps()} />);
+
+    const stub = container.querySelector("[data-testid='seekbar-stub']");
+    expect(stub?.parentElement).toBe(
+      container.querySelector("[data-testid='video-player-bar']"),
+    );
+  });
+
+  it("is positioned in both modes — the windowed bar needs a positioned root", () => {
+    // In fullscreen the bar root is already `absolute`; windowed it has to opt
+    // in, or the rail's `absolute inset-x-0 top-0` would resolve against some
+    // distant ancestor and fly to the top of the app.
+    const windowed = render(<VideoPlayerBar {...baseProps()} />);
+    const windowedBar = windowed.container.querySelector(
+      "[data-testid='video-player-bar']",
+    ) as HTMLElement;
+    expect(windowedBar.className).toContain("relative");
+    windowed.unmount();
+
+    render(<VideoPlayerBar {...baseProps()} isFullscreen />);
+    const fullBar = document.querySelector(
+      "[data-testid='video-player-bar']",
+    ) as HTMLElement;
+    expect(fullBar.className).toContain("absolute");
+    expect(fullBar.className).not.toContain("relative");
+  });
 });
 
 describe("VideoPlayerBar structure", () => {

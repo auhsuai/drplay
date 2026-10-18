@@ -568,21 +568,27 @@ describe("SeekBar rail hit area + degenerate geometry", () => {
     expect(screen.getByTestId("progress-fill").style.width).toBe("0%");
   });
 
-  it("expands the interactive hit area to ~24px via a rail pseudo-element while the visible track stays 6px", () => {
+  it("expands the interactive hit area to ~22px via a rail pseudo-element while the visible track stays 4px", () => {
     renderSeekBar();
     const rail = screen.getByRole("slider");
-    expect(rail.className).toContain("h-1.5");
+    // The rail is the unified 4px design (PlayerBar's); the hit area is
+    // independent of it and stays roomy on both sides in flow.
+    expect(rail.className).toContain("h-1");
+    expect(rail.className).not.toContain("h-1.5");
     expect(rail.className).toContain("before:content-['']");
     expect(rail.className).toContain("before:-inset-y-[9px]");
   });
 });
 
-describe("SeekBar fill rounding at the buffer seam", () => {
+describe("SeekBar fill contour at the buffer seam", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("BUG regression: fill is fully rounded (rounded-full) at mid-track widths", () => {
+  // The rail is square on every variant now, so the regression these three guard
+  // is no longer "the fill must be rounded" but "the fill must be CLIPPED, with
+  // no per-side radius that would draw a visible step at the fill head".
+  it("BUG regression: the fill head carries no per-side radius at mid-track width", () => {
     renderSeekBar();
     act(() => {
       fakeController._emit("durationchange", { duration: 100 });
@@ -596,12 +602,12 @@ describe("SeekBar fill rounding at the buffer seam", () => {
 
     const fill = screen.getByTestId("progress-fill");
     expect(fill.style.width).toBe("50%");
-    expect(fill.className).toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
+    expect(fill.className).not.toContain("rounded-full");
   });
 
-  it("BUG regression: fill stays fully rounded (rounded-full) at the rail end (100%)", () => {
+  it("BUG regression: no per-side radius at the rail end (100%) either", () => {
     renderSeekBar();
     act(() => {
       fakeController._emit("durationchange", { duration: 100 });
@@ -615,12 +621,12 @@ describe("SeekBar fill rounding at the buffer seam", () => {
 
     const fill = screen.getByTestId("progress-fill");
     expect(fill.style.width).toBe("100%");
-    expect(fill.className).toContain("rounded-full");
     expect(fill.className).not.toContain("rounded-r-xs");
     expect(fill.className).not.toContain("rounded-r-full");
+    expect(fill.className).not.toContain("rounded-full");
   });
 
-  it("BUG regression: dragging the fill keeps it fully rounded (rounded-full) (drag path)", () => {
+  it("BUG regression: dragging the fill keeps the same flat head (drag path)", () => {
     renderSeekBar();
     act(() => {
       fakeController._emit("durationchange", { duration: 240 });
@@ -630,11 +636,11 @@ describe("SeekBar fill rounding at the buffer seam", () => {
     act(() => {
       fireEvent.pointerDown(bar, { clientX: 200, pointerId: 1 });
     });
-    expect(screen.getByTestId("progress-fill").className).toContain(
-      "rounded-full",
-    );
     expect(screen.getByTestId("progress-fill").className).not.toContain(
       "rounded-r-xs",
+    );
+    expect(screen.getByTestId("progress-fill").className).not.toContain(
+      "rounded-full",
     );
 
     act(() => {
@@ -730,13 +736,12 @@ describe("SeekBar progress fill clipper + rail-anchored thumb (needle fix v2)", 
     expect(thumb.style.left).toBe("0%");
   });
 
-  it("BUG regression: the fill is wrapped by an overflow-hidden rounded-full clipper (rounded contour at any width, iifx/SO pattern)", () => {
+  it("BUG regression: the fill is wrapped by an overflow-hidden clipper at any width (iifx/SO pattern)", () => {
     renderSeekBar();
 
     const clip = screen.getByTestId("progress-fill")
       .parentElement as HTMLElement;
     expect(clip.className).toContain("overflow-hidden");
-    expect(clip.className).toContain("rounded-full");
   });
 
   it("BUG regression: the thumb is NOT inside the clipper — a direct child of the rail so the 0%/100% half-overhang is never cut", () => {
@@ -1368,7 +1373,8 @@ describe("SeekBar no-track guards (slice A: hover without a loaded track)", () =
       const classes = rail.className.split(" ");
       expect(classes).toContain("cursor-pointer");
       expect(classes).not.toContain("cursor-default");
-      if (variant === "top") expect(classes).toContain("hover:h-1.5");
+      // Both variants share the rail design now, so the hover grow is universal.
+      expect(classes).toContain("hover:h-1.5");
       unmount();
     }
   });
@@ -1443,6 +1449,77 @@ describe("SeekBar thumb clamp inside the edge-to-edge rail (slice A2)", () => {
   });
 });
 
+describe("SeekBar rail design is identical on every variant", () => {
+  /** The tokens that make up the BAR itself — not the layout around it. */
+  function railDesign(): string[] {
+    const rail = screen.getByRole("slider");
+    return rail.className
+      .split(" ")
+      .filter((c) =>
+        [
+          "h-1",
+          "h-1.5",
+          "hover:h-1.5",
+          "transition-[height]",
+          "bg-gray-300",
+          "dark:bg-[#2A2A2A]",
+          "rounded-full",
+        ].includes(c),
+      );
+  }
+
+  it("the full-screen bar and the PlayerBar bar are the same design", () => {
+    const { unmount } = renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const fullScreen = railDesign();
+    unmount();
+
+    const top = renderSeekBar({ variant: "top" });
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    expect(railDesign()).toEqual(fullScreen);
+    top.unmount();
+  });
+
+  it("only the hit-area direction and the root layout still differ", () => {
+    const { unmount } = renderSeekBar();
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const fullScreen = screen.getByRole("slider").className.split(" ");
+    unmount();
+
+    renderSeekBar({ variant: "top" });
+    act(() => {
+      fakeController._emit("durationchange", { duration: 240 });
+    });
+    const topClasses = screen.getByRole("slider").className.split(" ");
+
+    // A rail pinned to the bar's top edge must not steal clicks from above.
+    expect(fullScreen).toContain("before:-inset-y-[9px]");
+    expect(topClasses).toContain("before:top-0");
+    expect(topClasses).toContain("before:h-3");
+    expect(topClasses).not.toContain("before:-inset-y-[9px]");
+  });
+
+  it("the full-screen bar still shows both clocks — only the bar changed", () => {
+    renderSeekBar();
+    const rail = screen.getByRole("slider");
+
+    // Layout is untouched by the unification.
+    expect(
+      (rail.previousElementSibling as HTMLElement).className,
+    ).not.toContain("hidden");
+    expect((rail.nextElementSibling as HTMLElement).className).not.toContain(
+      "hidden",
+    );
+    expect(rail.className).toContain("h-1");
+  });
+});
+
 describe('SeekBar flat corners in variant "top" (slice C, square edge-flush rail)', () => {
   function renderTopWithHover() {
     renderSeekBar({ variant: "top" });
@@ -1478,7 +1555,7 @@ describe('SeekBar flat corners in variant "top" (slice C, square edge-flush rail
     expect(previewClip.className).toContain("overflow-hidden");
   });
 
-  it("default variant keeps rounded-full on rail, clips and fill (pinned old behavior)", () => {
+  it("default variant is square too — the rail look is shared, not per-variant", () => {
     renderSeekBar();
     act(() => {
       fakeController._emit("durationchange", { duration: 240 });
@@ -1488,20 +1565,22 @@ describe('SeekBar flat corners in variant "top" (slice C, square edge-flush rail
       fireEvent.pointerEnter(rail, { pointerId: 1 });
     });
 
-    expect(rail.className).toContain("rounded-full");
-    expect(screen.getByTestId("buffer-fill").className).toContain(
+    // The full-screen views now draw exactly the PlayerBar's bar: a 4px square
+    // rail that thickens under the pointer, no pill caps anywhere.
+    expect(rail.className).not.toContain("rounded-full");
+    expect(screen.getByTestId("buffer-fill").className).not.toContain(
       "rounded-full",
     );
-    expect(screen.getByTestId("progress-fill").className).toContain(
+    expect(screen.getByTestId("progress-fill").className).not.toContain(
       "rounded-full",
     );
     expect(
       (screen.getByTestId("progress-fill").parentElement as HTMLElement)
         .className,
-    ).toContain("rounded-full");
+    ).not.toContain("rounded-full");
     expect(
       (screen.getByTestId("buffer-preview").parentElement as HTMLElement)
         .className,
-    ).toContain("rounded-full");
+    ).not.toContain("rounded-full");
   });
 });

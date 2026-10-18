@@ -15,9 +15,9 @@ export interface SeekRailProps {
   onPointerEnter: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerLeave: () => void;
-  /** "top" (PlayerBar) renders a thinner line whose hit area grows only
-   *  DOWNWARD — the default 9px overhang would steal clicks from the content
-   *  above the bar. */
+  /** Only the hit area differs per variant: the "top" (PlayerBar) rail's grows
+   *  DOWNWARD only — the default 9px overhang would steal clicks from the content
+   *  above the bar. The rail's own look is shared; see the rail classes below. */
   variant?: "default" | "top";
 }
 
@@ -44,18 +44,22 @@ export function SeekRail({
   // interaction that cannot resolve to a position. NaN > 0 is false.
   const seekable = duration > 0;
 
-  const variantClasses =
-    variant === "top"
-      ? `h-1 before:top-0 before:h-3 transition-[height]${
-          seekable ? " hover:h-1.5" : ""
-        }`
-      : "h-1.5 before:-inset-y-[9px]";
-
-  // Slice C: the "top" rail is edge-to-edge and flush with the flat bar/window
-  // edges, so its contour must be square — a rounded cap on the rail, the
-  // fill or either clipper would float visibly inside the flat bar. The
-  // default (NowPlaying) rail keeps its pill look (rounded-full everywhere).
-  const corner = variant === "top" ? "" : " rounded-full";
+  // ONE rail design everywhere: a 4px square track that thickens to 6px under
+  // the pointer. The PlayerBar's bar is the reference and is now the single
+  // source — the default variant (NowPlaying + the full-screen video bar) used
+  // to ship its own 6px rounded pill, which is exactly why those screens did
+  // not match the collapsed bar.
+  //
+  // What still differs per variant is NOT visual. Only two things, both
+  // behavioural: the ROOT layout (pinned to the bar's top edge vs in flow
+  // between the two clocks — see SeekBar) and the hit-area direction. A rail
+  // pinned to the top edge must not steal clicks from the content ABOVE it, so
+  // its pseudo-element grows only downward; the in-flow rail keeps the roomier
+  // 9px pad on both sides. Neither is visible, so both views now draw the
+  // identical bar.
+  const railClasses =
+    `h-1 transition-[height]${seekable ? " hover:h-1.5" : ""} ` +
+    (variant === "top" ? "before:top-0 before:h-3" : "before:-inset-y-[9px]");
 
   return (
     <div
@@ -66,9 +70,9 @@ export function SeekRail({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className={`flex-1 bg-gray-300 dark:bg-[#2A2A2A]${corner} group relative flex items-center before:absolute before:inset-x-0 before:content-[''] ${
+      className={`flex-1 bg-gray-300 dark:bg-[#2A2A2A] group relative flex items-center before:absolute before:inset-x-0 before:content-[''] ${
         seekable ? "cursor-pointer" : "cursor-default"
-      } ${variantClasses}`}
+      } ${railClasses}`}
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerMove={onPointerMove}
@@ -77,19 +81,15 @@ export function SeekRail({
       <div
         ref={bufferFillRef}
         data-testid="buffer-fill"
-        className={`absolute inset-0 overflow-hidden${corner} pointer-events-none`}
+        className="absolute inset-0 overflow-hidden pointer-events-none"
       ></div>
       {isHovering && (
         // Clip wrapper for the hover preview — mirrors buffer-fill's
-        // overflow-hidden clipper (rounded-full only on the default rail) so
-        // the preview's flat head follows the rail contour when its
-        // negative-head pad clamps to 0. On the square top rail the flat head
-        // is already the target shape. The wrapper is a SIBLING of
-        // progress-fill on purpose: clipping the track itself would cut the
-        // thumb's deliberate translate-x-1/2 overhang.
-        <div
-          className={`absolute inset-0 overflow-hidden${corner} pointer-events-none`}
-        >
+        // overflow-hidden clipper so the preview's flat head follows the rail
+        // contour when its negative-head pad clamps to 0. The wrapper is a
+        // SIBLING of progress-fill on purpose: clipping the track itself would
+        // cut the thumb's deliberate translate-x-1/2 overhang.
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div
             ref={bufferPreviewRef}
             data-testid="buffer-preview"
@@ -98,24 +98,20 @@ export function SeekRail({
           ></div>
         </div>
       )}
-      {/* The fill sits inside an overflow-hidden clipper (rounded-full only on
-          the default rail): the clipper cuts the fill to the track's contour
-          at ANY width, so the fill keeps its true percent width with no
-          min-width clamp (the old 6px clamp jumped the fill 0→6px the moment
-          progress > 0, reading as a notch while seeking). On the square top
-          rail the fill edge stays a plain straight cut.
+      {/* The fill sits inside an overflow-hidden clipper: the clipper cuts the
+          fill to the rail's contour at ANY width, so the fill keeps its true
+          percent width with no min-width clamp (the old 6px clamp jumped the
+          fill 0→6px the moment progress > 0, reading as a notch while seeking).
           https://iifx.dev/en/articles/460222310 (rounded CSS progress bar —
           track overflow-hidden clips the fill to the rounded contour)
           https://stackoverflow.com/questions/77801099 (rounded corner
           overlap — radius scaling breaks on narrow children, fix via
           clipping the parent). */}
-      <div
-        className={`absolute inset-0 overflow-hidden${corner} pointer-events-none`}
-      >
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div
           ref={progressFillRef}
           data-testid="progress-fill"
-          className={`absolute left-0 h-full bg-brand-primary${corner} transform-gpu will-change-[width]`}
+          className="absolute left-0 h-full bg-brand-primary transform-gpu will-change-[width]"
         ></div>
       </div>
       {/* Rail-anchored thumb (NOT inside the clipper): positioned from the

@@ -107,7 +107,7 @@ export function VideoPlayerBar({
     ? `w-full flex flex-nowrap items-center gap-2 px-3 py-2 absolute inset-x-0 bottom-0 z-30 border-t border-gray-200 dark:border-[#2A2A2A] bg-white dark:bg-[#202124] transition-opacity duration-200 ${
         chromeVisible ? "opacity-100" : "opacity-0 pointer-events-none"
       }`
-    : "w-full flex flex-nowrap items-center gap-2 px-3 py-2 shrink-0 z-20 bg-white dark:bg-[#202124] border-t border-gray-200 dark:border-[#2A2A2A] opacity-100";
+    : "w-full flex flex-nowrap items-center gap-2 px-3 py-2 shrink-0 z-20 relative bg-white dark:bg-[#202124] border-t border-gray-200 dark:border-[#2A2A2A] opacity-100";
 
   return (
     <div data-testid="video-player-bar" className={barClass}>
@@ -133,10 +133,21 @@ export function VideoPlayerBar({
         >
           {currentTrack.title}
         </span>
-        <div className="flex-1 min-w-[120px]">
-          <SeekBar currentTrack={currentTrack} audio={audio} active={active} />
-        </div>
       </div>
+
+      {/* The PlayerBar's seekbar, verbatim: `variant="top"` pins the rail to
+          this bar's top edge, edge-to-edge and square — the same line the
+          collapsed PlayerBar shows — instead of the old in-flow bar between two
+          clocks. The bar root is the positioned ancestor it resolves against
+          (`relative` windowed, `absolute` fullscreen). A direct child, not a
+          wrapper: in this variant the rail is out of flow, so a wrapper div
+          would only reserve empty width between the title and the controls. */}
+      <SeekBar
+        currentTrack={currentTrack}
+        audio={audio}
+        active={active}
+        variant="top"
+      />
 
       <div className="shrink-0 flex items-center gap-1">
         {/* Default form of the shared slider: rail from the xl breakpoint up
