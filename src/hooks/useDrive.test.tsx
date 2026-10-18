@@ -10,6 +10,7 @@ import { useDriveStore } from "../store/driveStore";
 import {
   ROOT_FOLDER_KEY,
   ROOT_FOLDERS_KEY,
+  ROOT_FOLDERS_UPDATED_KEY,
   USER_EMAIL_KEY,
   DB_NAV_STATE_KEY,
 } from "../utils/storageKeys";
@@ -899,7 +900,7 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
     expect(useDriveStore.getState().folderHistory).toEqual([]);
   });
 
-  it("keeps the saved name when restoring a non-primary configured root", async () => {
+  it("restores a non-primary configured root with its verified root name", async () => {
     seedLocalRoots(
       [
         { id: "root-A", name: "A" },
@@ -932,7 +933,231 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
     await waitFor(() => {
       expect(useDriveStore.getState().currentFolderId).toBe("root-B");
     });
-    expect(useDriveStore.getState().currentFolderName).toBe("Bee's Folder");
+    // The persisted name is stale; the verified root name must win.
+    expect(useDriveStore.getState().currentFolderName).toBe("B");
+  });
+});
+
+describe("useDrive nav restore with persisted branch-root identity", () => {
+  const MULTI_ROOTS = [
+    { id: "root-A", name: "A" },
+    { id: "root-B", name: "B" },
+  ];
+
+  const seedMultiRoots = () => {
+    seedLocalRoots(MULTI_ROOTS, "root-A");
+  };
+  const configMultiRoots = () => {
+    mockedGetAppConfig.mockResolvedValue({
+      rootFolderId: "root-A",
+      rootFolders: MULTI_ROOTS,
+    });
+    mockVerifyByRootId({
+      "root-A": okFolderResponse("Music"),
+      "root-B": okFolderResponse("Archive"),
+    });
+  };
+  const seedSingleRoot = () => {
+    seedLocalRoots([{ id: "root-A", name: "A" }], "root-A");
+  };
+  const configSingleRoot = () => {
+    mockedGetAppConfig.mockResolvedValue({
+      rootFolderId: "root-A",
+      rootFolders: [{ id: "root-A", name: "A" }],
+    });
+    mockVerifyByRootId({ "root-A": okFolderResponse("Music") });
+  };
+  const seedNav = (value: Record<string, unknown>) =>
+    db.syncState.put({ key: DB_NAV_STATE_KEY, value });
+  const waitForVirtualRestore = () =>
+    waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(VIRTUAL_ROOT_ID);
+    });
+
+  it("restores a nested folder when its snapshot names an active branch root", async () => {
+    seedMultiRoots();
+    configMultiRoots();
+    await seedNav({
+      id: "A/child",
+      name: "Child",
+      rootId: "root-A",
+      history: [
+        { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+        { id: "root-A", name: "A" },
+      ],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("A/child");
+    });
+    expect(useDriveStore.getState().currentFolderName).toBe("Child");
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+      { id: "root-A", name: "A" },
+    ]);
+  });
+
+  it("falls back to the virtual root when the saved branch root was removed", async () => {
+    seedMultiRoots();
+    configMultiRoots();
+    await seedNav({
+      id: "A/child",
+      name: "Child",
+      rootId: "root-C",
+      history: [{ id: "root-C", name: "Removed C" }],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitForVirtualRestore();
+    expect(useDriveStore.getState().currentFolderName).toBe(VIRTUAL_ROOT_NAME);
+    expect(useDriveStore.getState().folderHistory).toEqual([]);
+  });
+
+  it("falls back to the virtual root for a legacy snapshot with a nested folder in multi-root mode", async () => {
+    seedMultiRoots();
+    configMultiRoots();
+    await seedNav({
+      id: "A/child",
+      name: "Child",
+      history: [{ id: "root-A", name: "A" }],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitForVirtualRestore();
+    expect(useDriveStore.getState().currentFolderName).toBe(VIRTUAL_ROOT_NAME);
+    expect(useDriveStore.getState().folderHistory).toEqual([]);
+  });
+
+  it("uses the verified root name when resuming a configured root", async () => {
+    seedMultiRoots();
+    configMultiRoots();
+    await seedNav({
+      id: "root-B",
+      name: "Old B",
+      rootId: "root-B",
+      history: [{ id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME }],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("root-B");
+    });
+    expect(useDriveStore.getState().currentFolderName).toBe("Archive");
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+    ]);
+  });
+
+  it("drops removed roots from a saved virtual-root trail", async () => {
+    seedMultiRoots();
+    configMultiRoots();
+    await seedNav({
+      id: VIRTUAL_ROOT_ID,
+      name: "Stale Virtual",
+      history: [
+        { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+        { id: "root-C", name: "Removed C" },
+      ],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitForVirtualRestore();
+    expect(useDriveStore.getState().currentFolderName).toBe(VIRTUAL_ROOT_NAME);
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+    ]);
+  });
+
+  it("restores a legacy nested folder in single-root mode and drops virtual entries", async () => {
+    seedSingleRoot();
+    configSingleRoot();
+    await seedNav({
+      id: "A/child",
+      name: "Child",
+      history: [
+        { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+        { id: "root-A", name: "A" },
+      ],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("A/child");
+    });
+    expect(useDriveStore.getState().currentFolderName).toBe("Child");
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: "root-A", name: "A" },
+    ]);
+  });
+
+  it("restores a nested folder in single-root mode when the snapshot names the active root", async () => {
+    seedSingleRoot();
+    configSingleRoot();
+    await seedNav({
+      id: "A/child",
+      name: "Child",
+      rootId: "root-A",
+      history: [{ id: "root-A", name: "A" }],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("A/child");
+    });
+    expect(useDriveStore.getState().currentFolderName).toBe("Child");
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: "root-A", name: "A" },
+    ]);
+  });
+
+  it("falls back to the single root when the snapshot names a non-active root", async () => {
+    seedSingleRoot();
+    configSingleRoot();
+    await seedNav({
+      id: "A/child",
+      name: "Child",
+      rootId: "root-B",
+      history: [{ id: "root-B", name: "B" }],
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("root-A");
+    });
+    expect(useDriveStore.getState().currentFolderName).toBe(MY_DRIVE_TAB);
+    expect(useDriveStore.getState().folderHistory).toEqual([]);
+  });
+
+  it("persists the resolved branch root id in the nav snapshot", async () => {
+    seedMultiRoots();
+    configMultiRoots();
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitForVirtualRestore();
+    act(() => {
+      useDriveStore.getState().setFolderHistory([
+        { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+        { id: "root-A", name: "Music" },
+      ]);
+      useDriveStore.getState().setCurrentFolderId("A/child");
+      useDriveStore.getState().setCurrentFolderName("Child");
+    });
+
+    await waitFor(async () => {
+      const saved = await db.syncState.get(DB_NAV_STATE_KEY);
+      const value = saved?.value as { rootId?: string } | undefined;
+      expect(value?.rootId).toBe("root-A");
+    });
   });
 });
 
@@ -1079,5 +1304,294 @@ describe("useDrive initApp transient verify failures keep stored roots (B v2)", 
         ) as unknown as string,
       }),
     );
+  });
+});
+
+describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
+  const settleAfter = async (ms: number) => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, ms));
+    });
+  };
+
+  it("lets a newer local commit win over a stale remote list without wiping", async () => {
+    const committedAt = Date.now() - 10_000;
+    seedLocalRoots(
+      [
+        { id: "root-A", name: "A" },
+        { id: "root-B", name: "B" },
+      ],
+      "root-A",
+    );
+    localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(committedAt));
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    mockedGetAppConfig.mockResolvedValue({
+      rootFolderId: "root-A",
+      rootFolders: [{ id: "root-A", name: "A" }],
+      updatedAt: committedAt - 1_000,
+    });
+    mockVerifyByRootId({
+      "root-A": okFolderResponse("A"),
+      "root-B": okFolderResponse("B"),
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().rootFolders).toHaveLength(2);
+    });
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(VIRTUAL_ROOT_ID);
+    });
+    await settleAfter(20);
+
+    expect(useDriveStore.getState().rootFolders).toEqual([
+      { id: "root-A", name: "A" },
+      { id: "root-B", name: "B" },
+    ]);
+    expect(readStoredRoots()).toEqual([
+      { id: "root-A", name: "A" },
+      { id: "root-B", name: "B" },
+    ]);
+    expect(localStorage.getItem(ROOT_FOLDER_KEY)).toBe("root-A");
+    expect(localStorage.getItem(ROOT_FOLDERS_UPDATED_KEY)).toBe(
+      String(committedAt),
+    );
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(2);
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+    expect(mockedInvoke).not.toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+  });
+
+  it("still adopts a genuinely newer remote list from another device", async () => {
+    const localMarker = Date.now() - 10_000;
+    seedLocalRoots([{ id: "root-A", name: "A" }], "root-A");
+    localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(localMarker));
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    mockedGetAppConfig.mockResolvedValue({
+      rootFolderId: "root-A",
+      rootFolders: [
+        { id: "root-A", name: "A" },
+        { id: "root-B", name: "B" },
+      ],
+      updatedAt: Date.now() - 1_000,
+    });
+    mockVerifyByRootId({
+      "root-A": okFolderResponse("A real"),
+      "root-B": okFolderResponse("B real"),
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(VIRTUAL_ROOT_ID);
+    });
+    expect(useDriveStore.getState().rootFolders).toEqual([
+      { id: "root-A", name: "A real" },
+      { id: "root-B", name: "B real" },
+    ]);
+    expect(readStoredRoots()).toEqual([
+      { id: "root-A", name: "A real" },
+      { id: "root-B", name: "B real" },
+    ]);
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledTimes(1);
+    expect(mockedInvoke).toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+    expect(
+      Number(localStorage.getItem(ROOT_FOLDERS_UPDATED_KEY)),
+    ).toBeGreaterThan(localMarker);
+  });
+
+  it("keeps newer local roots over a legacy-only remote config", async () => {
+    seedLocalRoots(
+      [
+        { id: "root-A", name: "A" },
+        { id: "root-B", name: "B" },
+      ],
+      "root-A",
+    );
+    localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(Date.now()));
+    mockedGetAppConfig.mockResolvedValue({
+      rootFolderId: "root-C",
+      rootFolderName: "Legacy C",
+    });
+    mockVerifyByRootId({
+      "root-A": okFolderResponse("A"),
+      "root-B": okFolderResponse("B"),
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().rootFolders).toHaveLength(2);
+    });
+    await settleAfter(20);
+
+    expect(useDriveStore.getState().rootFolders).toEqual([
+      { id: "root-A", name: "A" },
+      { id: "root-B", name: "B" },
+    ]);
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(2);
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+  });
+
+  it("persists a verified fallback locally and skips re-verifying the dropped root on the next boot", async () => {
+    const committedAt = Date.now() - 10_000;
+    seedLocalRoots([{ id: "root-A", name: "A" }], "root-A");
+    localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(committedAt));
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    const staleRemote = {
+      rootFolderId: "root-A",
+      rootFolders: [
+        { id: "root-A", name: "A" },
+        { id: "root-B", name: "B" },
+      ],
+      updatedAt: committedAt + 1_000,
+    };
+    mockedGetAppConfig.mockResolvedValue(staleRemote);
+    mockVerifyByRootId({
+      "root-A": okFolderResponse("Verified A"),
+      "root-B": errorResponse(404),
+    });
+
+    const { rerender } = renderHook(
+      ({ token }: { token: string | null }) => useDrive(true, token),
+      { initialProps: { token: "tok1" } },
+    );
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().appRootFolder).toBe("root-A");
+    });
+    await settleAfter(20);
+
+    expect(useDriveStore.getState().rootFolders).toEqual([
+      { id: "root-A", name: "Verified A" },
+    ]);
+    expect(readStoredRoots()).toEqual([{ id: "root-A", name: "Verified A" }]);
+    expect(localStorage.getItem(ROOT_FOLDER_KEY)).toBe("root-A");
+    expect(
+      Number(localStorage.getItem(ROOT_FOLDERS_UPDATED_KEY)),
+    ).toBeGreaterThan(staleRemote.updatedAt);
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+    expect(mockedInvoke).not.toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(2);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "verify-roots-partial-persist",
+        ) as unknown as string,
+      }),
+    );
+
+    // Next boot: the refreshed marker makes local win, so the stale remote
+    // secondary is never verified (and dropped) again.
+    mockedFetchWithAuth.mockClear();
+    act(() => {
+      rerender({ token: "tok2" });
+    });
+    await waitFor(() => {
+      expect(mockedFetchWithAuth).toHaveBeenCalledTimes(1);
+    });
+    await settleAfter(20);
+
+    expect(mockedFetchWithAuth).toHaveBeenCalledTimes(1);
+    const [verifyUrl] = mockedFetchWithAuth.mock.calls[0] ?? [];
+    const verifyUrlText =
+      typeof verifyUrl === "string" ? verifyUrl : (verifyUrl?.url ?? "");
+    expect(verifyUrlText).toContain(encodeURIComponent("root-A"));
+    expect(verifyUrlText).not.toContain(encodeURIComponent("root-B"));
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+  });
+
+  it("writes the reduced verified list, wipes and resets nav when it differs from local roots", async () => {
+    const committedAt = Date.now() - 10_000;
+    seedLocalRoots([{ id: "root-C", name: "C" }], "root-C");
+    localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(committedAt));
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    await db.syncState.put({
+      key: DB_NAV_STATE_KEY,
+      value: { id: "old-folder", name: "Old", history: [] },
+    });
+    mockedGetAppConfig.mockResolvedValue({
+      rootFolderId: "root-A",
+      rootFolders: [
+        { id: "root-A", name: "A" },
+        { id: "root-B", name: "B" },
+      ],
+      updatedAt: committedAt + 1_000,
+    });
+    mockVerifyByRootId({
+      "root-A": okFolderResponse("Verified A"),
+      "root-B": errorResponse(404),
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().appRootFolder).toBe("root-A");
+    });
+    await settleAfter(20);
+
+    expect(useDriveStore.getState().rootFolders).toEqual([
+      { id: "root-A", name: "Verified A" },
+    ]);
+    expect(useDriveStore.getState().currentFolderId).toBe("root-A");
+    expect(useDriveStore.getState().folderHistory).toEqual([]);
+    expect(readStoredRoots()).toEqual([{ id: "root-A", name: "Verified A" }]);
+    expect(localStorage.getItem(ROOT_FOLDER_KEY)).toBe("root-A");
+    expect(
+      Number(localStorage.getItem(ROOT_FOLDERS_UPDATED_KEY)),
+    ).toBeGreaterThan(committedAt + 1_000);
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledTimes(1);
+    expect(mockedWipeFileRowsForUser).toHaveBeenCalledWith("a@x");
+    expect(mockedInvoke).toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+  });
+
+  it("does not overwrite a user commit that lands after the last verify check", async () => {
+    seedLocalRoots([{ id: "root-A", name: "A" }], "root-A");
+    localStorage.setItem(USER_EMAIL_KEY, "a@x");
+    mockedGetAppConfig.mockResolvedValue({
+      rootFolderId: "root-A",
+      rootFolders: [
+        { id: "root-A", name: "A" },
+        { id: "root-B", name: "B" },
+      ],
+    });
+    mockVerifyByRootId({
+      "root-A": okFolderResponse("A"),
+      "root-B": okFolderResponse("B"),
+    });
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    // The init applies the remote roots AFTER its last rootChangedByUser()
+    // check and BEFORE the rootChanged local writes. Zustand notifies
+    // subscribers synchronously on that set, so writing the commit here lands
+    // exactly in that window.
+    const userMarker = "123456789";
+    let injected = false;
+    const unsubscribe = useDriveStore.subscribe((state, prev) => {
+      if (injected || state.rootFolders.length !== 2) return;
+      if (state.rootFolders === prev.rootFolders) return;
+      injected = true;
+      localStorage.setItem(ROOT_FOLDER_KEY, "root-X");
+      localStorage.setItem(
+        ROOT_FOLDERS_KEY,
+        JSON.stringify([{ id: "root-X", name: "X" }]),
+      );
+      localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, userMarker);
+    });
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().appRootFolder).not.toBeNull();
+    });
+    await settleAfter(50);
+    unsubscribe();
+
+    expect(injected).toBe(true);
+    expect(localStorage.getItem(ROOT_FOLDER_KEY)).toBe("root-X");
+    expect(readStoredRoots()).toEqual([{ id: "root-X", name: "X" }]);
+    expect(localStorage.getItem(ROOT_FOLDERS_UPDATED_KEY)).toBe(userMarker);
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+    expect(mockedInvoke).not.toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
   });
 });

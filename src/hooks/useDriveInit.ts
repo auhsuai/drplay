@@ -26,6 +26,7 @@ import {
   getCurrentUserEmail,
   ROOT_FOLDER_KEY,
   ROOT_FOLDERS_KEY,
+  ROOT_FOLDERS_UPDATED_KEY,
   CURRENT_FOLDER_ID_KEY,
   CURRENT_FOLDER_NAME_KEY,
   FOLDER_HISTORY_KEY,
@@ -193,6 +194,18 @@ export const useDriveInit = ({
         // choice wins (no adopt, no LS write, no wipe, no nav restore).
         const localStateAtStart = readLocalRootState(true);
         const localRoots = localStateAtStart.roots;
+        // Local commit marker (epoch ms): when it is NEWER than the remote
+        // updatedAt, the local list is a commit whose cloud save has not landed
+        // yet (or failed) and must win over the stale remote config.
+        const localUpdatedAtRaw = safeLocalStorageGet(
+          ROOT_FOLDERS_UPDATED_KEY,
+          "root-folders-updated-read",
+        );
+        const parsedLocalUpdatedAt =
+          localUpdatedAtRaw === null ? Number.NaN : Number(localUpdatedAtRaw);
+        const localUpdatedAt = Number.isFinite(parsedLocalUpdatedAt)
+          ? parsedLocalUpdatedAt
+          : 0;
         // Rebased after this run writes its own LS snapshot, so the guard only
         // reports changes made by the USER, not by our persist step.
         let expectedSignature = localStateAtStart.signature;
@@ -221,26 +234,45 @@ export const useDriveInit = ({
               // Cloud list is canonical when valid; otherwise migrate the
               // legacy single root. A missing remote config keeps whatever is
               // stored locally.
+              const remoteUpdatedAt =
+                remoteConfig !== null &&
+                typeof remoteConfig.updatedAt === "number" &&
+                Number.isFinite(remoteConfig.updatedAt)
+                  ? remoteConfig.updatedAt
+                  : 0;
+              const localIsNewer =
+                localRoots.length > 0 && localUpdatedAt > remoteUpdatedAt;
+              const localIsNewerThanLegacy =
+                localRoots.length > 0 && localUpdatedAt > 0;
               let proposed: RootFolder[];
               if (remoteConfig === null) {
                 proposed = localRoots;
               } else if (remoteConfig.rootFolders !== undefined) {
                 const remoteRoots = parseRootFolders(remoteConfig.rootFolders);
                 if (remoteRoots !== null) {
-                  proposed = remoteRoots;
-                  const remotePrimary = remoteRoots[0];
-                  if (
-                    remotePrimary !== undefined &&
-                    remoteConfig.rootFolderId !== remotePrimary.id
-                  ) {
-                    // Every writer keeps the legacy scalar in sync with index
-                    // 0; a mismatch means the scalar is stale, so the list
-                    // wins and its first entry remains the primary.
-                    void captureError({
-                      level: "warn",
-                      source: "useDrive",
-                      message: "config-primary-mismatch: using rootFolders[0]",
-                    });
+                  if (localIsNewer) {
+                    // GAP-3: this install committed after the remote config was
+                    // written (or its cloud save never landed). The stale remote
+                    // list — and its possibly-stale legacy primary — must not
+                    // overwrite the user's newer local choice.
+                    proposed = localRoots;
+                  } else {
+                    proposed = remoteRoots;
+                    const remotePrimary = remoteRoots[0];
+                    if (
+                      remotePrimary !== undefined &&
+                      remoteConfig.rootFolderId !== remotePrimary.id
+                    ) {
+                      // Every writer keeps the legacy scalar in sync with index
+                      // 0; a mismatch means the scalar is stale, so the list
+                      // wins and its first entry remains the primary.
+                      void captureError({
+                        level: "warn",
+                        source: "useDrive",
+                        message:
+                          "config-primary-mismatch: using rootFolders[0]",
+                      });
+                    }
                   }
                 } else {
                   void captureError({
@@ -254,6 +286,10 @@ export const useDriveInit = ({
                     ? [{ id: legacyId, name: readLegacyRootName(remoteConfig) }]
                     : localRoots;
                 }
+              } else if (localIsNewerThanLegacy) {
+                // A commit on this install is newer than a legacy-only remote
+                // document: keep the local list instead of migrating backwards.
+                proposed = localRoots;
               } else {
                 const legacyId = readLegacyRootId(remoteConfig);
                 proposed = legacyId
@@ -274,6 +310,9 @@ export const useDriveInit = ({
               // roots instead of flashing the setup gate, and a re-init keeps
               // the live ones. 4xx and shape errors stay definitive.
               let transientFailure = false;
+              // Set only when verification DEFINITIVELY dropped a root (never
+              // on a transient failure): the reduced list may need persisting.
+              let partialFallback = false;
               for (const root of proposed) {
                 const verifyUrl = `${DRIVE_FILES_URL}/${encodeURIComponent(root.id)}?fields=${VERIFY_FIELDS}`;
                 let verifyRes: Response;
@@ -393,6 +432,7 @@ export const useDriveInit = ({
                 if (verified.length === proposed.length) {
                   roots = verified;
                 } else {
+                  partialFallback = true;
                   const verifiedPrimary = verified[0];
                   const proposedPrimary = proposed[0];
                   if (
@@ -410,6 +450,46 @@ export const useDriveInit = ({
                     });
                   } else {
                     roots = [];
+                  }
+                }
+
+                // Final decision AFTER verification: a dropped secondary can
+                // reduce the remote proposal back to the stored list, in which
+                // case the cache wipe/nav reset must NOT run.
+                const finalChanged =
+                  rootsSignature(roots) !== rootsSignature(localRoots);
+                rootChanged = finalChanged;
+                if (!finalChanged && partialFallback) {
+                  const verifiedPrimaryRoot = roots[0];
+                  if (verifiedPrimaryRoot !== undefined) {
+                    // Re-check right before writing: a user commit may have
+                    // landed since the last in-loop check.
+                    if (isCancelled()) return;
+                    if (rootChangedByUser()) return;
+                    // GAP-2: persist the reduced verified list locally so the
+                    // next boot prefers it instead of re-verifying and dropping
+                    // the same root forever. NO cloud write: a possibly
+                    // transient 403 must not destroy a valid remote config.
+                    safeLocalStorageSet(
+                      ROOT_FOLDER_KEY,
+                      verifiedPrimaryRoot.id,
+                      "root-folder-write",
+                    );
+                    safeLocalStorageSet(
+                      ROOT_FOLDERS_KEY,
+                      JSON.stringify(roots),
+                      "root-folders-write",
+                    );
+                    safeLocalStorageSet(
+                      ROOT_FOLDERS_UPDATED_KEY,
+                      String(Date.now()),
+                      "root-folders-updated-write",
+                    );
+                    void captureError({
+                      level: "warn",
+                      source: "useDrive",
+                      message: `verify-roots-partial-persist: keeping verified roots locally, dropping [${invalidIds.join(", ")}]`,
+                    });
                   }
                 }
               }
@@ -457,16 +537,62 @@ export const useDriveInit = ({
             setCurrentFolderName(isMulti ? VIRTUAL_ROOT_NAME : MY_DRIVE_TAB);
           };
 
+          const activeRootIds = new Set(roots.map((root) => root.id));
+          const isActiveRoot = (id: string) => activeRootIds.has(id);
+
+          // At the virtual node the trail may only reference the synthetic
+          // node or roots that are still configured: a removed root id would
+          // render a path outside the active root set. A virtual marker below
+          // another entry (or repeated) cannot describe a real trail.
+          const sanitizeVirtualHistory = (
+            history: { id: string; name: string }[],
+          ) => {
+            const kept = history.filter(
+              (entry) =>
+                entry.id === VIRTUAL_ROOT_ID || activeRootIds.has(entry.id),
+            );
+            const firstVirtual = kept.findIndex(
+              (entry) => entry.id === VIRTUAL_ROOT_ID,
+            );
+            const duplicateVirtual =
+              kept.filter((entry) => entry.id === VIRTUAL_ROOT_ID).length > 1;
+            return duplicateVirtual || firstVirtual > 0 ? [] : kept;
+          };
+
+          // Keeps only the part of the trail at or below the branch marker:
+          // the virtual node when present, otherwise the branch root itself.
+          // No marker means the trail cannot be attributed to this branch.
+          const trimHistoryToBranch = (
+            history: { id: string; name: string }[],
+            branchRootId: string | null,
+          ) => {
+            const virtualIndex = history.findIndex(
+              (entry) => entry.id === VIRTUAL_ROOT_ID,
+            );
+            if (virtualIndex !== -1) return history.slice(virtualIndex);
+            if (branchRootId !== null) {
+              const branchIndex = history.findIndex(
+                (entry) => entry.id === branchRootId,
+              );
+              if (branchIndex !== -1) return history.slice(branchIndex);
+            }
+            return [];
+          };
+
+          const verifiedRootName = (rootId: string) =>
+            roots.find((root) => root.id === rootId)?.name;
+
           const applyRestoredNav = (
             savedId: string,
             savedName: string,
             savedHistory: { id: string; name: string }[],
+            savedRootId?: string,
           ) => {
             if (savedId === VIRTUAL_ROOT_ID) {
               if (isMulti) {
                 setCurrentFolderId(VIRTUAL_ROOT_ID);
                 setCurrentFolderName(VIRTUAL_ROOT_NAME);
-                setFolderHistory(savedHistory);
+                setFolderHistory(sanitizeVirtualHistory(savedHistory));
               } else {
                 // The synthetic node only exists while at least 2 roots are
                 // configured.
@@ -482,13 +608,63 @@ export const useDriveInit = ({
               setFolderHistory([]);
               return;
             }
+
+            if (isMulti) {
+              const savedIdIsRoot = isActiveRoot(savedId);
+              if (savedRootId === undefined) {
+                // Legacy snapshot: a nested id cannot be attributed to any
+                // branch of the active root set.
+                if (!savedIdIsRoot) {
+                  fallbackToRoot();
+                  setFolderHistory([]);
+                  return;
+                }
+                setCurrentFolderId(savedId);
+                setCurrentFolderName(verifiedRootName(savedId) ?? savedName);
+                setFolderHistory(trimHistoryToBranch(savedHistory, savedId));
+                return;
+              }
+              const validSavedRoot =
+                savedRootId === VIRTUAL_ROOT_ID || isActiveRoot(savedRootId);
+              if (
+                !validSavedRoot ||
+                (savedIdIsRoot && savedId !== savedRootId)
+              ) {
+                fallbackToRoot();
+                setFolderHistory([]);
+                return;
+              }
+              setCurrentFolderId(savedId);
+              setCurrentFolderName(
+                savedIdIsRoot
+                  ? (verifiedRootName(savedId) ?? savedName)
+                  : savedName,
+              );
+              setFolderHistory(
+                trimHistoryToBranch(
+                  savedHistory,
+                  savedRootId === VIRTUAL_ROOT_ID ? null : savedRootId,
+                ),
+              );
+              return;
+            }
+
+            // Single root: a real root id must match this root; the virtual
+            // node is invalid because it only exists in multi-root mode.
+            if (savedRootId !== undefined && savedRootId !== primaryId) {
+              fallbackToRoot();
+              setFolderHistory([]);
+              return;
+            }
             setCurrentFolderId(savedId);
             setCurrentFolderName(
               savedId === primaryId || savedId === ROOT_FOLDER_ID
                 ? MY_DRIVE_TAB
                 : savedName,
             );
-            setFolderHistory(savedHistory);
+            setFolderHistory(
+              savedHistory.filter((entry) => entry.id !== VIRTUAL_ROOT_ID),
+            );
           };
 
           // B12-5: the configured roots changed in this run — the cached
@@ -496,6 +672,9 @@ export const useDriveInit = ({
           // inside the OLD roots (out of the new scope). Land on the new root
           // instead of resuming a stale folder.
           if (rootChanged) {
+            // The last in-loop check ran before the remote roots were applied;
+            // a user commit landing since then must win over these writes.
+            if (rootChangedByUser()) return;
             safeLocalStorageSet(
               ROOT_FOLDER_KEY,
               primaryId,
@@ -505,6 +684,11 @@ export const useDriveInit = ({
               ROOT_FOLDERS_KEY,
               JSON.stringify(roots),
               "root-folders-write",
+            );
+            safeLocalStorageSet(
+              ROOT_FOLDERS_UPDATED_KEY,
+              String(Date.now()),
+              "root-folders-updated-write",
             );
             expectedSignature = readLocalRootState(false).signature;
             // Invalidate the local listing only when the configured roots
@@ -558,6 +742,7 @@ export const useDriveInit = ({
                     obj.id,
                     typeof obj.name === "string" ? obj.name : MY_DRIVE_TAB,
                     parseNavHistory(obj.history),
+                    typeof obj.rootId === "string" ? obj.rootId : undefined,
                   );
                 } else {
                   fallbackToRoot();

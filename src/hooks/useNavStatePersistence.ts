@@ -5,6 +5,7 @@ import { db } from "../db/db";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import { DB_NAV_STATE_KEY } from "../utils/storageKeys";
+import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
 import { classifyError } from "./useDriveShared";
 
 interface UseNavStatePersistenceParams {
@@ -21,6 +22,7 @@ export const useNavStatePersistence = ({
     currentFolderId,
     currentFolderName,
     folderHistory,
+    rootFolders,
     setAppRootFolder,
     setCurrentFolderId,
     setCurrentFolderName,
@@ -31,6 +33,7 @@ export const useNavStatePersistence = ({
       currentFolderId: state.currentFolderId,
       currentFolderName: state.currentFolderName,
       folderHistory: state.folderHistory,
+      rootFolders: state.rootFolders,
       setAppRootFolder: state.setAppRootFolder,
       setCurrentFolderId: state.setCurrentFolderId,
       setCurrentFolderName: state.setCurrentFolderName,
@@ -42,6 +45,23 @@ export const useNavStatePersistence = ({
   useEffect(() => {
     if (!hydratedRef.current) return;
     if (isLoggedIn && appRootFolder) {
+      // Which configured branch this position belongs to. A configured root
+      // wins over the synthetic virtual node: the virtual node only proves
+      // "multi-root mode", not which branch a nested folder lives in.
+      const resolveRootId = (): string | undefined => {
+        if (currentFolderId === VIRTUAL_ROOT_ID) return VIRTUAL_ROOT_ID;
+        if (rootFolders.some((root) => root.id === currentFolderId)) {
+          return currentFolderId;
+        }
+        const historyRoot = folderHistory.find((entry) =>
+          rootFolders.some((root) => root.id === entry.id),
+        );
+        if (historyRoot !== undefined) return historyRoot.id;
+        return folderHistory.some((entry) => entry.id === VIRTUAL_ROOT_ID)
+          ? VIRTUAL_ROOT_ID
+          : undefined;
+      };
+      const rootId = resolveRootId();
       db.syncState
         .put({
           key: DB_NAV_STATE_KEY,
@@ -49,6 +69,7 @@ export const useNavStatePersistence = ({
             id: currentFolderId,
             name: currentFolderName,
             history: folderHistory,
+            ...(rootId === undefined ? {} : { rootId }),
           },
         })
         .catch(
@@ -64,6 +85,7 @@ export const useNavStatePersistence = ({
     currentFolderId,
     currentFolderName,
     folderHistory,
+    rootFolders,
     isLoggedIn,
     appRootFolder,
     setAppRootFolder,

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
-import { HardDrive } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { FolderDialogHeader } from "../../components/FolderDialogHeader";
 
 const TITLE_ID = "root-folder-setup-title";
 
@@ -42,41 +42,13 @@ export function RootFolderSetupShell({
         tabIndex={-1}
         className="bg-white dark:bg-[#121212] w-full max-w-3xl h-[75vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
       >
-        {/* Header (same markup as FolderSelectionScreen) */}
-        <div className="px-6 py-5 flex items-center justify-between shrink-0">
-          <div>
-            <h1
-              id={TITLE_ID}
-              className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3"
-            >
-              <HardDrive className="text-brand-text w-6 h-6" />
-              {t("folder_selection.select_root")}
-            </h1>
-            <p className="text-xs text-gray-500 mt-1">
-              {t("folder_selection.select_music_folder")}
-            </p>
-          </div>
-          {onCancel && (
-            <button
-              onClick={onCancel}
-              className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M6 18L18 6M6 6l12 12"
-                ></path>
-              </svg>
-            </button>
-          )}
-        </div>
+        {/* Header */}
+        <FolderDialogHeader
+          titleId={TITLE_ID}
+          title={t("folder_selection.select_root")}
+          subtitle={t("folder_selection.select_music_folder")}
+          onCancel={onCancel}
+        />
 
         {/* Scrollable body: five slot cards must not push the footer off */}
         <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-5">

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import "fake-indexeddb/auto";
 import {
   act,
   cleanup,
@@ -13,7 +14,8 @@ import { FolderSelectionScreen } from "./FolderSelectionScreen";
 import en from "../../locales/en/translation.json";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
-import { ROOT_FOLDER_KEY } from "../../utils/storageKeys";
+import { ROOT_FOLDER_KEY, USER_EMAIL_KEY } from "../../utils/storageKeys";
+import { db } from "../../db/db";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -75,13 +77,11 @@ vi.mock("../../utils/simpleToast", () => ({
   showErrorToast: mocks.showErrorToast,
 }));
 vi.mock("../../utils/errorLog", () => ({ captureError: mocks.captureError }));
-vi.mock("../../db/db", () => {
-  const chain = {
-    equals: () => chain,
-    filter: () => chain,
-    toArray: () => Promise.resolve([]),
-  };
-  return { db: { files: { where: () => chain } } };
+
+// Real Dexie (fake-indexeddb) — root reconciliation is asserted against the
+// actual mirror rows instead of a stubbed query chain.
+afterEach(async () => {
+  await db.files.clear();
 });
 
 type DeferredCall = {
@@ -1406,5 +1406,192 @@ describe("FolderSelectionScreen onSelectFolderWithName (Slice C)", () => {
     fireEvent.click(screen.getByText(en.folder_selection.choose_folder));
 
     expect(onSelectFolder).toHaveBeenCalledWith("folderB");
+  });
+});
+
+describe("FolderSelectionScreen root cache authority", () => {
+  const ROOT_EMAIL = "root-cache@example.com";
+
+  beforeEach(async () => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+    localStorage.clear();
+    localStorage.setItem(USER_EMAIL_KEY, ROOT_EMAIL);
+    await db.files.clear();
+  });
+
+  afterEach(async () => {
+    cleanup();
+    localStorage.clear();
+    await db.files.clear();
+  });
+
+  function folderRow(id: string, name: string, parentId: string) {
+    return {
+      id,
+      name,
+      mimeType: mocks.driveApi.FOLDER_MIME,
+      parentId,
+      trashed: false,
+      isFolder: true,
+      userEmail: ROOT_EMAIL,
+    };
+  }
+
+  // A poisoned root bucket: both rows claim My Drive root, but only "legit"
+  // actually comes back from the live root listing.
+  async function seedRootRows() {
+    await db.files.bulkPut([
+      folderRow("legit", "Legit Folder", ROOT_FOLDER_ID),
+      folderRow("poison", "Poison Folder", ROOT_FOLDER_ID),
+    ]);
+  }
+
+  function renderRootPicker(startAtDriveRoot: boolean) {
+    return render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId={ROOT_FOLDER_ID}
+        initialFolderName="Old Root"
+        initialFolderHistory={[]}
+        startAtDriveRoot={startAtDriveRoot}
+      />,
+    );
+  }
+
+  async function resolveRootList(files: { id: string; name: string }[]) {
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).resolve(files);
+      await Promise.resolve();
+    });
+  }
+
+  it("startAtDriveRoot: renders exactly the API root folders and prunes poisoned cached root rows", async () => {
+    await seedRootRows();
+    renderRootPicker(true);
+    await resolveRootList([{ id: "legit", name: "Legit Folder" }]);
+
+    expect(mocks.driveApi.listFolderChildren).toHaveBeenCalledWith(
+      "test-token",
+      ROOT_FOLDER_ID,
+      expect.anything(),
+    );
+    expect(await screen.findByText("Legit Folder")).not.toBeNull();
+    expect(screen.queryByText("Poison Folder")).toBeNull();
+
+    await waitFor(async () => {
+      expect(await db.files.get([ROOT_EMAIL, "poison"])).toBeUndefined();
+    });
+    expect(await db.files.get([ROOT_EMAIL, "legit"])).toBeDefined();
+    await waitFor(() => {
+      expect(mocks.captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          source: "db/pruneRootRows",
+          message: expect.stringContaining(
+            "deletedCount=1",
+          ) as unknown as string,
+        }),
+      );
+    });
+  });
+
+  it("root open without startAtDriveRoot is authoritative too (no stored app root)", async () => {
+    localStorage.removeItem(ROOT_FOLDER_KEY);
+    await seedRootRows();
+    renderRootPicker(false);
+    await resolveRootList([{ id: "legit", name: "Legit Folder" }]);
+
+    expect(mocks.driveApi.listFolderChildren).toHaveBeenCalledWith(
+      "test-token",
+      ROOT_FOLDER_ID,
+      expect.anything(),
+    );
+    expect(screen.queryByText("Poison Folder")).toBeNull();
+    expect(screen.getByText("Legit Folder")).not.toBeNull();
+  });
+
+  it("root API failure keeps the error state and never falls back to cached root rows", async () => {
+    await seedRootRows();
+    renderRootPicker(true);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await act(async () => {
+      deferredCallAt(0).reject(new Error("HTTP 500"));
+      await Promise.resolve();
+    });
+
+    expect(mocks.showErrorToast).toHaveBeenCalled();
+    expect(screen.queryByText("Poison Folder")).toBeNull();
+    expect(screen.queryByText("Legit Folder")).toBeNull();
+    // Reconcile only runs after a successful list — cached rows stay put.
+    expect(await db.files.get([ROOT_EMAIL, "poison"])).toBeDefined();
+  });
+
+  it("non-root folders stay cache-first and never call the API when cached children exist", async () => {
+    await db.files.bulkPut([
+      folderRow("cached-child", "Cached Child", "folderB"),
+    ]);
+
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId="folderB"
+        initialFolderHistory={[{ id: ROOT_FOLDER_ID, name: "My Drive" }]}
+      />,
+    );
+
+    expect(await screen.findByText("Cached Child")).not.toBeNull();
+    expect(mocks.driveApi.listFolderChildren).not.toHaveBeenCalled();
+  });
+
+  it("selects an intentionally chosen shared root by its real Drive id", async () => {
+    const onSelectFolder = vi.fn();
+    const onSelectFolderWithName = vi.fn();
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={onSelectFolder}
+        onSelectFolderWithName={onSelectFolderWithName}
+        initialFolderId={ROOT_FOLDER_ID}
+        initialFolderName="Old Root"
+        initialFolderHistory={[]}
+        startAtDriveRoot
+      />,
+    );
+
+    // The picker's folder listing carries no ownership/shared metadata — a
+    // shared folder is just another folder with a real Drive id.
+    await resolveRootList([{ id: "shared-root-id", name: "Shared Music" }]);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Shared Music/ }),
+    );
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
+    await act(async () => {
+      deferredCallAt(1).resolve([]);
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByText(en.folder_selection.choose_folder));
+
+    expect(onSelectFolderWithName).toHaveBeenCalledWith(
+      "shared-root-id",
+      "Shared Music",
+    );
+    expect(onSelectFolder).not.toHaveBeenCalled();
   });
 });

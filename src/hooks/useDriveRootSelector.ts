@@ -15,10 +15,16 @@ import { parseRootFolders, type RootFolder } from "../utils/rootFolders";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import {
+  CURRENT_FOLDER_ID_KEY,
+  CURRENT_FOLDER_NAME_KEY,
+  DB_NAV_STATE_KEY,
   DEFAULT_USER_EMAIL,
+  FOLDER_HISTORY_KEY,
   getCurrentUserEmail,
   ROOT_FOLDER_KEY,
   ROOT_FOLDERS_KEY,
+  ROOT_FOLDERS_UPDATED_KEY,
+  safeLocalStorageRemove,
   safeLocalStorageSet,
 } from "../utils/storageKeys";
 import { classifyError } from "./useDriveShared";
@@ -68,6 +74,9 @@ export const useDriveRootSelector = () => {
       const isMulti = rest.length > 0;
       // Copy so later store consumers cannot mutate the committed snapshot.
       const committedRoots = parsed.map((root) => ({ ...root }));
+      // ONE timestamp for both the local version marker and the cloud save, so
+      // init can tell this commit apart from an older remote config.
+      const committedAt = Date.now();
 
       safeLocalStorageSet(ROOT_FOLDER_KEY, primary.id, "root-folder-write");
       safeLocalStorageSet(
@@ -75,12 +84,38 @@ export const useDriveRootSelector = () => {
         JSON.stringify(committedRoots),
         "root-folders-write",
       );
+      safeLocalStorageSet(
+        ROOT_FOLDERS_UPDATED_KEY,
+        String(committedAt),
+        "root-folders-updated-write",
+      );
 
       setRootFolders(committedRoots);
       setAppRootFolder(primary.id);
       setCurrentFolderId(isMulti ? VIRTUAL_ROOT_ID : primary.id);
       setCurrentFolderName(isMulti ? VIRTUAL_ROOT_NAME : MY_DRIVE_TAB);
       setFolderHistory([]);
+
+      // The persisted nav snapshot points into the OLD root set. Drop it before
+      // the await-heavy cache/cloud work so a crash or a concurrently-started
+      // init cannot restore navigation from the previous roots.
+      safeLocalStorageRemove(CURRENT_FOLDER_ID_KEY, "current-folder-id-remove");
+      safeLocalStorageRemove(
+        CURRENT_FOLDER_NAME_KEY,
+        "current-folder-name-remove",
+      );
+      safeLocalStorageRemove(FOLDER_HISTORY_KEY, "folder-history-remove");
+      try {
+        await db.syncState.delete(DB_NAV_STATE_KEY);
+      } catch (err: unknown) {
+        // Best effort: failing to clear the snapshot must never abort a commit
+        // the user already sees applied in memory/localStorage.
+        void captureError({
+          level: "warn",
+          source: "useDrive",
+          message: `commit-nav-state-clear-failed: ${classifyError(err)}`,
+        });
+      }
 
       try {
         const email = getCurrentUserEmail();
@@ -101,7 +136,7 @@ export const useDriveRootSelector = () => {
               rootFolderId: primary.id,
               rootFolderName: primary.name,
               rootFolders: committedRoots,
-              updatedAt: Date.now(),
+              updatedAt: committedAt,
             });
             if (!saved) {
               void captureError({

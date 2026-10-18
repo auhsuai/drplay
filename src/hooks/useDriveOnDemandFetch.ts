@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { db } from "../db/db";
 import { upsertFileRows, type UpsertableFileRow } from "../db/fileRows";
+import { pruneStaleRootRows } from "../db/pruneRootRows";
 import { driveFetch, FOLDER_MIME } from "../utils/driveApi";
 import type { DriveFileItem, DriveFilesListResponse } from "../utils/driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
@@ -9,12 +10,29 @@ import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import {
   DRIVE_FILES_CHANGED_EVENT,
+  ROOT_FOLDER_ID,
   VIRTUAL_ROOT_ID,
 } from "../utils/driveConstants";
 import { getCurrentUserEmail } from "../utils/storageKeys";
 import { rememberTotalSizesInServiceWorker } from "../utils/swPrefetch";
 
 const DRIVE_PAGE_SIZE = 1000;
+
+// The root reconcile is DESTRUCTIVE, so every page must be a fully valid
+// listing snapshot before any id is trusted: a non-null, non-array object
+// whose `files` is an array (the fields mask requests it, so a valid empty
+// page carries `files: []`). Anything else — null, arrays, primitives, a
+// missing/non-array `files` — is malformed and must never be read as an empty
+// authoritative listing.
+function isDriveFilesPage(
+  value: unknown,
+): value is DriveFilesListResponse & { files: DriveFileItem[] } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  if (!("files" in value)) return false;
+  return Array.isArray(value.files);
+}
 
 export function useDriveOnDemandFetch({
   currentFolderId,
@@ -62,6 +80,12 @@ export function useDriveOnDemandFetch({
         const q = getFolderMediaQuery(currentFolderId);
         let hasMore = true;
         let pageToken: string | undefined = undefined;
+        // Root reconciliation state: every id returned by a COMPLETE listing
+        // is valid; any failed page makes the snapshot partial, so it must
+        // never drive deletions.
+        const ownerEmail = getCurrentUserEmail();
+        const seenIds = new Set<string>();
+        let listingFailed = false;
 
         while (hasMore && isMounted && !abortController.signal.aborted) {
           const url = new URL(DRIVE_FILES_URL);
@@ -90,29 +114,32 @@ export function useDriveOnDemandFetch({
               source: "useDriveExplorer",
               message: `OnDemandFetch Drive API error: HTTP ${String(res.status)} (folder=${currentFolderId})`,
             });
+            listingFailed = true;
             break;
           }
-          const data = (await res.json()) as DriveFilesListResponse | null;
+          const data = (await res.json()) as unknown;
           if (isAborted()) break;
+          if (!isDriveFilesPage(data)) {
+            listingFailed = true;
+            break;
+          }
+          const pageFiles = data.files;
+          for (const f of pageFiles) seenIds.add(f.id);
 
           // Write each page to Dexie immediately instead of accumulating all
           // pages in memory (mirrors proSync.worker.ts full-sync pattern).
-          if (
-            stillMounted() &&
-            data &&
-            Array.isArray(data.files) &&
-            data.files.length > 0
-          ) {
+          if (stillMounted() && pageFiles.length > 0) {
             // Canonical-parent rule: parentId is derived INSIDE upsertFileRows
-            // from parents[0] of this very response — never from the folder
-            // being browsed (Drive's own parents is the single source of
-            // truth; a file returned by the query may report an ancestor).
+            // from parents[0] of this very response. When Drive omits parents,
+            // the listing query ('<folderId>' in parents) itself proves every
+            // returned item is a direct child of the folder being listed, so
+            // currentFolderId is the verified fallback (knownParents). The
+            // row's own parents still wins inside the helper.
             // `parents` is omitted entirely when absent (not set to undefined)
             // because UpsertableFileRow declares it as a plain optional prop.
             // Schema v10: rows carry the owning account — the helper overwrites
             // the composed userEmail with its own ownerEmail argument.
-            const ownerEmail = getCurrentUserEmail();
-            const rowsToUpsert: UpsertableFileRow[] = data.files.map(
+            const rowsToUpsert: UpsertableFileRow[] = pageFiles.map(
               (f: DriveFileItem) => ({
                 id: f.id,
                 name: f.name,
@@ -126,13 +153,14 @@ export function useDriveOnDemandFetch({
               }),
             );
             try {
-              await upsertFileRows(rowsToUpsert, ownerEmail);
+              await upsertFileRows(rowsToUpsert, ownerEmail, [currentFolderId]);
             } catch (dbErr) {
               void captureError({
                 level: "error",
                 source: "useDriveExplorer",
                 message: `OnDemandFetch Dexie bulkPut failed (folder=${currentFolderId}, count=${String(rowsToUpsert.length)}): ${String(dbErr)}`,
               });
+              listingFailed = true;
               break;
             }
             // Seed the SW's total-size cache from the listing's parsed `size`
@@ -161,8 +189,25 @@ export function useDriveOnDemandFetch({
             );
           }
 
-          pageToken = data?.nextPageToken;
+          pageToken = data.nextPageToken;
           if (!pageToken) hasMore = false;
+        }
+
+        // My Drive root is authoritative for everything cached under "root":
+        // once EVERY page was fetched and written without a failure, delete
+        // cached rows (folders AND media) the listing no longer returns.
+        // Non-root folders are never reconciled against the API here.
+        if (
+          currentFolderId === ROOT_FOLDER_ID &&
+          !listingFailed &&
+          !isAborted() &&
+          stillMounted()
+        ) {
+          // Fire-and-forget: rows are already written/displayed, and a prune
+          // failure is logged by the helper — it never breaks loading.
+          void pruneStaleRootRows(ownerEmail, seenIds, {
+            foldersOnly: false,
+          });
         }
       } catch (err) {
         if (abortController.signal.aborted) return;

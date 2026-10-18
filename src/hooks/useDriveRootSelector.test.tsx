@@ -11,8 +11,13 @@ import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { captureError } from "../utils/errorLog";
 import { useDriveStore } from "../store/driveStore";
 import {
+  CURRENT_FOLDER_ID_KEY,
+  CURRENT_FOLDER_NAME_KEY,
+  DB_NAV_STATE_KEY,
+  FOLDER_HISTORY_KEY,
   ROOT_FOLDER_KEY,
   ROOT_FOLDERS_KEY,
+  ROOT_FOLDERS_UPDATED_KEY,
   USER_EMAIL_KEY,
 } from "../utils/storageKeys";
 import {
@@ -306,6 +311,74 @@ describe("commitRootFolders - account-scoped cache invalidation", () => {
     expect(mockedWipeFileRowsForUser).toHaveBeenCalledWith("a@x");
     expect(clearSpy).toHaveBeenCalledTimes(0);
     expect(mockedInvoke).toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+  });
+});
+
+describe("commitRootFolders - local version marker & nav snapshot invalidation", () => {
+  it("writes the version marker and reuses it as saveAppConfig.updatedAt", async () => {
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    await act(async () => {
+      await result.current.commitRootFolders([{ id: "root-A", name: "Music" }]);
+    });
+
+    const markerRaw = localStorage.getItem(ROOT_FOLDERS_UPDATED_KEY);
+    expect(markerRaw).not.toBeNull();
+    const marker = Number(markerRaw);
+    expect(Number.isFinite(marker)).toBe(true);
+
+    expect(mockedSaveAppConfig).toHaveBeenCalledTimes(1);
+    const savedConfig = mockedSaveAppConfig.mock.calls[0]?.[1] as
+      Record<string, unknown> | undefined;
+    expect(savedConfig?.updatedAt).toBe(marker);
+  });
+
+  it("deletes the persisted nav snapshot (Dexie + legacy keys) on commit", async () => {
+    await db.syncState.put({
+      key: DB_NAV_STATE_KEY,
+      value: { id: "old-folder", name: "Old", history: [] },
+    });
+    localStorage.setItem(CURRENT_FOLDER_ID_KEY, "old-folder");
+    localStorage.setItem(CURRENT_FOLDER_NAME_KEY, "Old");
+    localStorage.setItem(
+      FOLDER_HISTORY_KEY,
+      JSON.stringify([{ id: "old-folder", name: "Old" }]),
+    );
+
+    const { result } = renderHook(() => useDriveRootSelector());
+    await act(async () => {
+      await result.current.commitRootFolders([{ id: "root-A", name: "Music" }]);
+    });
+
+    expect(await db.syncState.get(DB_NAV_STATE_KEY)).toBeUndefined();
+    expect(localStorage.getItem(CURRENT_FOLDER_ID_KEY)).toBeNull();
+    expect(localStorage.getItem(CURRENT_FOLDER_NAME_KEY)).toBeNull();
+    expect(localStorage.getItem(FOLDER_HISTORY_KEY)).toBeNull();
+  });
+
+  it("still commits when the nav-snapshot delete fails", async () => {
+    vi.spyOn(db.syncState, "delete").mockRejectedValue(new Error("dexie boom"));
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    let committed: boolean | undefined;
+    await act(async () => {
+      committed = await result.current.commitRootFolders([
+        { id: "root-A", name: "Music" },
+      ]);
+    });
+
+    expect(committed).toBe(true);
+    expect(useDriveStore.getState().appRootFolder).toBe("root-A");
+    expect(localStorage.getItem(ROOT_FOLDER_KEY)).toBe("root-A");
+    expect(mockedSaveAppConfig).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "commit-nav-state-clear-failed",
+        ) as unknown as string,
+      }),
+    );
   });
 });
 

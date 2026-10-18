@@ -5,6 +5,10 @@ import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import { captureError } from "../../utils/errorLog";
 import type { RootFolder } from "../../utils/rootFolders";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import {
+  PRIMARY_BUTTON_CLASS,
+  SECONDARY_BUTTON_CLASS,
+} from "../components/folderDialogButtonStyles";
 import { FolderSelectionScreen } from "./FolderSelectionScreen";
 import { AdditionalRootsDropdown } from "./rootFolderSetup/AdditionalRootsDropdown";
 import { RootFolderSetupShell } from "./rootFolderSetup/RootFolderSetupShell";
@@ -13,11 +17,6 @@ import { RootSlotCard } from "./rootFolderSetup/RootSlotCard";
 const SLOT_COUNT = 5;
 const MAX_ADDITIONAL_ROOTS = SLOT_COUNT - 1;
 const ADDITIONAL_ROOT_OPTIONS = [1, 2, 3, 4] as const;
-
-const PRIMARY_BUTTON_CLASS =
-  "flex items-center justify-center gap-2 bg-brand-primary hover:bg-brand-hover text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed";
-const SECONDARY_BUTTON_CLASS =
-  "px-5 py-2.5 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
 
 type Step = "mode" | "editor" | "single-picker" | "slot-picker" | "confirm";
 

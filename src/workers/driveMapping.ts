@@ -35,7 +35,9 @@ function toSize(raw: string | undefined | null): number | undefined {
 // pre-deriving it. This is THE single write path for synced rows (the
 // single-write-path rule in src/db/fileRows.ts): new writers must go through
 // this shape. `parents` passthrough keeps the response's own truth; the
-// helper owns the ?? ROOT_FOLDER_ID fallback.
+// helper derives the parent from it and skips the row when neither the
+// response nor the caller's known parent proves one (there is no root
+// fallback).
 //
 // Shared mapping of a Google Drive file resource to the DB row shape used by
 // both full-sync and delta-sync. isFolder is a parameter so callers that

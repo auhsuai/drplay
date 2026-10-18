@@ -1,46 +1,18 @@
-import { useState, useRef, useEffect } from "react";
-import { ChevronDown, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LANGUAGE_KEY } from "../../../utils/storageKeys";
 import { captureError } from "../../../utils/errorLog";
-import { useClickOutside } from "../../../hooks/useClickOutside";
+import { OptionDropdown } from "../../components/OptionDropdown";
 
 export function LanguageDropdown() {
   const { t, i18n } = useTranslation();
-  const [isOpen, setIsOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-
-  useClickOutside(
-    menuRef,
-    () => {
-      setIsOpen(false);
-    },
-    isOpen,
-  );
-
-  // Escape closes the menu and returns focus to the trigger (disclosure
-  // pattern: the trigger owns the open state).
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setIsOpen(false);
-      triggerRef.current?.focus();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isOpen]);
 
   const languages = [
-    { code: "en", label: t("settings.english") },
-    { code: "vi", label: t("settings.vietnamese") },
+    { value: "en", label: t("settings.english") },
+    { value: "vi", label: t("settings.vietnamese") },
   ];
 
-  const currentLang = languages.find((l) => l.code === i18n.language) ??
-    languages[0] ?? { code: "en", label: "English" };
+  const currentLang = languages.find((l) => l.value === i18n.language) ??
+    languages[0] ?? { value: "en", label: "English" };
 
   const handleSelect = (code: string) => {
     void i18n.changeLanguage(code);
@@ -53,49 +25,14 @@ export function LanguageDropdown() {
         message: `language-write-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
       });
     }
-    setIsOpen(false);
   };
 
   return (
-    <div className="relative" ref={menuRef}>
-      <button
-        ref={triggerRef}
-        aria-expanded={isOpen}
-        onClick={() => {
-          setIsOpen(!isOpen);
-        }}
-        className="flex items-center gap-3 bg-gray-100 dark:bg-[#1f2024] text-gray-900 dark:text-white text-sm font-medium rounded-xl px-4 py-2.5 hover:bg-gray-200 dark:hover:bg-[#2a2b2f] transition-all duration-200 w-44 justify-between focus:outline-none focus:ring-2 focus:ring-brand-primary/40 group"
-      >
-        <span className="truncate group-hover:text-brand-text transition-colors">
-          {currentLang.label}
-        </span>
-        <ChevronDown
-          className={`w-4 h-4 text-gray-500 group-hover:text-brand-text transition-transform duration-300 ${isOpen ? "rotate-180" : ""}`}
-        />
-      </button>
-
-      {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-44 bg-white dark:bg-[#2a2b2f] rounded-xl shadow-xl p-1 z-50 flex flex-col transform origin-top-right transition-all animate-in fade-in zoom-in-95 duration-200">
-          {languages.map((lang) => (
-            <button
-              key={lang.code}
-              onClick={() => {
-                handleSelect(lang.code);
-              }}
-              className="w-full text-left px-3 py-2 text-sm flex items-center justify-between rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors group"
-            >
-              <span
-                className={`truncate ${currentLang.code === lang.code ? "text-brand-text font-semibold" : "text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors"}`}
-              >
-                {lang.label}
-              </span>
-              {currentLang.code === lang.code && (
-                <Check className="w-4 h-4 text-brand-text" />
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <OptionDropdown
+      ariaLabel={currentLang.label}
+      value={currentLang.value}
+      options={languages}
+      onChange={handleSelect}
+    />
   );
 }

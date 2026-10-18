@@ -64,7 +64,11 @@ import {
   loadMinimizeToTrayState,
   saveMinimizeToTrayState,
 } from "./appUiState";
-import { ROOT_FOLDERS_KEY, safeLocalStorageRemove } from "./utils/storageKeys";
+import {
+  ROOT_FOLDERS_KEY,
+  ROOT_FOLDERS_UPDATED_KEY,
+  safeLocalStorageRemove,
+} from "./utils/storageKeys";
 
 export { loadMinimizeToTrayState };
 
@@ -93,6 +97,7 @@ function App() {
     // (partial cleanup would leak the previous account's folder state).
     safeLocalStorageRemove(LS_ROOT_FOLDER, "logout-cleanup", "App");
     safeLocalStorageRemove(ROOT_FOLDERS_KEY, "logout-cleanup", "App");
+    safeLocalStorageRemove(ROOT_FOLDERS_UPDATED_KEY, "logout-cleanup", "App");
     safeLocalStorageRemove(LS_CURRENT_FOLDER_ID, "logout-cleanup", "App");
     safeLocalStorageRemove(LS_CURRENT_FOLDER_NAME, "logout-cleanup", "App");
     safeLocalStorageRemove(LS_FOLDER_HISTORY, "logout-cleanup", "App");

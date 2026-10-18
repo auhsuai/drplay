@@ -14,6 +14,10 @@ import {
   LS_FOLDER_HISTORY,
   LS_ROOT_FOLDER,
 } from "./appUiState";
+import {
+  ROOT_FOLDERS_KEY,
+  ROOT_FOLDERS_UPDATED_KEY,
+} from "./utils/storageKeys";
 
 // Shared state for App-level mocks: hoisted so vi.mock factories (which are
 // hoisted above imports) can reach it. authState is MUTABLE so tests can flip
@@ -252,7 +256,7 @@ describe("onLogoutExt folder-state cleanup (B20-2)", () => {
     vi.restoreAllMocks();
   });
 
-  it("attempts all 4 nav-key removals even when the first removeItem throws", () => {
+  it("attempts every root/nav-key removal even when the first removeItem throws", () => {
     render(<App />);
     const onLogoutExt = mocks.lastLogoutExt.value;
     if (onLogoutExt === null)
@@ -269,6 +273,8 @@ describe("onLogoutExt folder-state cleanup (B20-2)", () => {
     });
 
     expect(removeSpy).toHaveBeenCalledWith(LS_ROOT_FOLDER);
+    expect(removeSpy).toHaveBeenCalledWith(ROOT_FOLDERS_KEY);
+    expect(removeSpy).toHaveBeenCalledWith(ROOT_FOLDERS_UPDATED_KEY);
     expect(removeSpy).toHaveBeenCalledWith(LS_CURRENT_FOLDER_ID);
     expect(removeSpy).toHaveBeenCalledWith(LS_CURRENT_FOLDER_NAME);
     expect(removeSpy).toHaveBeenCalledWith(LS_FOLDER_HISTORY);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, HardDrive, Check } from "lucide-react";
+import { ArrowLeft, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { FolderDialogHeader } from "../components/FolderDialogHeader";
 import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import { ROOT_FOLDER_KEY } from "../../utils/storageKeys";
 import { captureError } from "../../utils/errorLog";
@@ -288,40 +289,12 @@ export function FolderSelectionScreen({
         className="bg-white dark:bg-[#121212] w-full max-w-3xl h-[75vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
       >
         {/* Header */}
-        <div className="px-6 py-5 flex items-center justify-between shrink-0">
-          <div>
-            <h1
-              id="folder-selection-title"
-              className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3"
-            >
-              <HardDrive className="text-brand-text w-6 h-6" />
-              {title || t("folder_selection.select_root")}
-            </h1>
-            <p className="text-xs text-gray-500 mt-1">
-              {subtitle || t("folder_selection.select_music_folder")}
-            </p>
-          </div>
-          {onCancel && (
-            <button
-              onClick={onCancel}
-              className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M6 18L18 6M6 6l12 12"
-                ></path>
-              </svg>
-            </button>
-          )}
-        </div>
+        <FolderDialogHeader
+          titleId="folder-selection-title"
+          title={title || t("folder_selection.select_root")}
+          subtitle={subtitle || t("folder_selection.select_music_folder")}
+          onCancel={onCancel}
+        />
 
         {/* Toolbar / Breadcrumb / Search */}
         <div className="px-6 py-3 flex items-center gap-2 shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">

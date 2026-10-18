@@ -1,20 +1,23 @@
 import { db, type DriveFile } from "./db";
 import Dexie from "dexie";
 import { captureError } from "../utils/errorLog";
-import { ROOT_FOLDER_ID } from "../utils/driveConstants";
 
 // Log source label for this module's fire-and-forget error reports.
 const FILE_ROWS_MODULE = "db/fileRows";
 
 /**
- * Canonical parent rule: a file's parentId ALWAYS comes from the `parents`
- * array of the Drive API response of the very request that returned the file
- * (parents[0]) — never from "the folder currently being browsed" at call
- * time. A missing or empty parents array falls back to the My Drive root
- * sentinel.
+ * Canonical parent rule: a file's parentId comes ONLY from a source that
+ * proves the parent — the row's own non-empty `parents[0]` (Drive response of
+ * the very request that returned the file), or `knownParents[0]` supplied by a
+ * writer whose request/operation proves it (see upsertFileRows). There is NO
+ * root fallback: a row with neither source cannot be located truthfully, so it
+ * is not persisted instead of being planted under My Drive root.
  */
-export function canonicalParent(parents?: readonly string[]): string {
-  return parents?.[0] ?? ROOT_FOLDER_ID;
+export function canonicalParent(
+  parents?: readonly string[],
+): string | undefined {
+  const parent = parents?.[0];
+  return parent !== undefined && parent.trim() !== "" ? parent : undefined;
 }
 
 /** Raw row shape straight from a Drive API response: identical to DriveFile
@@ -38,13 +41,16 @@ type OwnedDriveFile = DriveFile & { userEmail: string };
  *
  * `knownParents` is the fallback parent source for responses that do NOT echo
  * a `parents[]` back (e.g. resumable-upload completions narrowed by
- * asDriveFileItem): the caller passes the parents ITSELF sent in the very
+ * asDriveFileItem, or an on-demand folder listing whose query already proves
+ * direct membership): the caller passes the parents ITSELF sent in the very
  * request that produced the row (e.g. the upload request's target folder).
- * A row's own `parents` always wins; when neither exists the parent roots.
+ * A row's own non-empty `parents` always wins; a row with neither source is
+ * SKIPPED (never written under a sentinel parent) and the whole call reports
+ * ONE summary warning with the skipped/total counts.
  *
- * Error contract: NOTHING is caught here. Dexie failures (quota, aborted
- * transaction, invalid key) propagate to the caller — each writer owns its
- * own error path (worker SYNC_ERROR vs UI error surface).
+ * Error contract: only parentless rows are dropped (non-fatal). Dexie failures
+ * (quota, aborted transaction, invalid key) propagate to the caller — each
+ * writer owns its own error path (worker SYNC_ERROR vs UI error surface).
  */
 export async function upsertFileRows(
   rows: readonly UpsertableFileRow[],
@@ -57,18 +63,40 @@ export async function upsertFileRows(
     );
   }
 
-  const ownedRows: OwnedDriveFile[] = rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    mimeType: row.mimeType,
-    parentId: canonicalParent(row.parents ?? knownParents),
-    size: row.size,
-    modifiedTime: row.modifiedTime,
-    trashed: row.trashed,
-    isFolder: row.isFolder,
-    metadata: row.metadata,
-    userEmail: ownerEmail,
-  }));
+  const ownedRows: OwnedDriveFile[] = [];
+  let skippedCount = 0;
+  for (const row of rows) {
+    const parentId =
+      canonicalParent(row.parents) ?? canonicalParent(knownParents);
+    if (parentId === undefined) {
+      skippedCount += 1;
+      continue;
+    }
+    ownedRows.push({
+      id: row.id,
+      name: row.name,
+      mimeType: row.mimeType,
+      parentId,
+      size: row.size,
+      modifiedTime: row.modifiedTime,
+      trashed: row.trashed,
+      isFolder: row.isFolder,
+      metadata: row.metadata,
+      userEmail: ownerEmail,
+    });
+  }
+
+  // Storage invariant: no verified parent -> no row. Dropping is not an error
+  // (the whole-library query can surface shared items whose parents Drive
+  // omits), but it must never be silent — one summary line per call, no ids.
+  if (skippedCount > 0) {
+    void captureError({
+      level: "warn",
+      source: FILE_ROWS_MODULE,
+      message: `parentless-rows-skipped: skippedCount=${String(skippedCount)} total=${String(rows.length)}`,
+    });
+  }
+  if (ownedRows.length === 0) return;
 
   // Metadata is app-local state (e.g. the streamUnplayable flag the metadata
   // fetch pipeline persists via db.files.update — see fetchPipeline.ts): it

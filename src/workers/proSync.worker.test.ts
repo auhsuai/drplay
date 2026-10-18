@@ -811,7 +811,12 @@ describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
             changes: [
               {
                 fileId: "dx1",
-                file: { id: "dx1", name: "dx1.mp3", mimeType: "audio/mpeg" },
+                file: {
+                  id: "dx1",
+                  name: "dx1.mp3",
+                  mimeType: "audio/mpeg",
+                  parents: ["root"],
+                },
               },
             ],
             newStartPageToken: "start-new",
@@ -835,6 +840,101 @@ describe("full-sync retries the same page after a mid-sync 401 refresh", () => {
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
       expect.objectContaining({ value: "start-new" }),
     );
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+});
+
+describe("sync storage invariant (no root fallback for unverified parents)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("does not persist a buildOwnerRow row whose Drive response omits parents", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-inv" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: "no-parent",
+                name: "no-parent.mp3",
+                mimeType: "audio/mpeg",
+              },
+              audioFileRow("with-parent"),
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-inv", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    // The whole-library query can return shared items without a usable parent;
+    // the invariant skips them instead of planting them under "root".
+    expect(await db.files.get([FIXTURE_EMAIL, "no-parent"])).toBeUndefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "with-parent"])).toBeDefined();
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+
+  it("does not persist a delta change whose file omits parents", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-delta-inv",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          changes: [
+            {
+              fileId: "delta-no-parent",
+              file: {
+                id: "delta-no-parent",
+                name: "x.mp3",
+                mimeType: "audio/mpeg",
+              },
+            },
+            {
+              fileId: "delta-with-parent",
+              file: {
+                id: "delta-with-parent",
+                name: "y.mp3",
+                mimeType: "audio/mpeg",
+                parents: ["root"],
+              },
+            },
+          ],
+          newStartPageToken: "start-delta-next",
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-delta-inv", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(
+      await db.files.get([FIXTURE_EMAIL, "delta-no-parent"]),
+    ).toBeUndefined();
+    expect(
+      await db.files.get([FIXTURE_EMAIL, "delta-with-parent"]),
+    ).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
   });
 });
@@ -1433,7 +1533,12 @@ describe("sync stamps every row with the userEmail from the wire frame", () => {
           changes: [
             {
               fileId: "dx9",
-              file: { id: "dx9", name: "dx9.mp3", mimeType: "audio/mpeg" },
+              file: {
+                id: "dx9",
+                name: "dx9.mp3",
+                mimeType: "audio/mpeg",
+                parents: ["root"],
+              },
             },
             { fileId: "del-me", removed: true },
           ],

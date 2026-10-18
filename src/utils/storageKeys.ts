@@ -7,6 +7,10 @@ export const LANGUAGE_KEY = "drplay_language";
 export const ROOT_FOLDER_KEY = "drplay_root_folder";
 // JSON RootFolder[] ordered, primary = index 0.
 export const ROOT_FOLDERS_KEY = "drplay_root_folders";
+// Epoch-ms of the last LOCAL commit of ROOT_FOLDERS_KEY. Init compares it with
+// the remote config's updatedAt so a commit whose cloud save is still in flight
+// (or failed) is not overwritten by an older remote list on the next boot.
+export const ROOT_FOLDERS_UPDATED_KEY = "drplay_root_folders_updated_at";
 export const CURRENT_FOLDER_ID_KEY = "drplay_current_folder_id";
 export const CURRENT_FOLDER_NAME_KEY = "drplay_current_folder_name";
 export const FOLDER_HISTORY_KEY = "drplay_folder_history";

@@ -9,6 +9,11 @@ import {
   type UpsertableFileRow,
 } from "./fileRows";
 import { ROOT_FOLDER_ID } from "../utils/driveConstants";
+import { captureError } from "../utils/errorLog";
+
+vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
+
+const mockedCaptureError = vi.mocked(captureError);
 
 function makeRow(
   overrides: Partial<UpsertableFileRow> & Pick<UpsertableFileRow, "id">,
@@ -28,12 +33,24 @@ describe("canonicalParent", () => {
     expect(canonicalParent(["folder-Y", "other"])).toBe("folder-Y");
   });
 
-  it("falls back to ROOT_FOLDER_ID when parents is undefined", () => {
-    expect(canonicalParent(undefined)).toBe(ROOT_FOLDER_ID);
+  it("returns undefined when parents is undefined (no root fallback)", () => {
+    expect(canonicalParent(undefined)).toBeUndefined();
   });
 
-  it("falls back to ROOT_FOLDER_ID when parents is an empty array", () => {
-    expect(canonicalParent([])).toBe(ROOT_FOLDER_ID);
+  it("returns undefined when parents is an empty array (no root fallback)", () => {
+    expect(canonicalParent([])).toBeUndefined();
+  });
+
+  it("returns a non-empty parent unchanged", () => {
+    expect(canonicalParent(["abc"])).toBe("abc");
+  });
+
+  it("returns undefined when parents[0] is an empty string", () => {
+    expect(canonicalParent([""])).toBeUndefined();
+  });
+
+  it("returns undefined when parents[0] is whitespace only", () => {
+    expect(canonicalParent(["   "])).toBeUndefined();
   });
 });
 
@@ -94,7 +111,10 @@ describe("upsertFileRows", () => {
       return realBulkPut(rows);
     });
 
-    await upsertFileRows([makeRow({ id: "atomic" })], "user@example.com");
+    await upsertFileRows(
+      [makeRow({ id: "atomic", parents: ["folder-A"] })],
+      "user@example.com",
+    );
 
     // Both halves must run inside the SAME explicit transaction. As two
     // auto-committing table calls they were separate transactions, so a
@@ -106,21 +126,27 @@ describe("upsertFileRows", () => {
   });
 
   it("throws a named TypeError on empty/whitespace ownerEmail BEFORE writing anything", async () => {
-    await upsertFileRows([makeRow({ id: "keep" })], "ok@example.com");
+    await upsertFileRows(
+      [makeRow({ id: "keep", parents: ["folder-K"] })],
+      "ok@example.com",
+    );
 
     await expect(upsertFileRows([], "")).rejects.toThrow(TypeError);
     await expect(upsertFileRows([], "   ")).rejects.toThrow(/ownerEmail/);
 
     // Fail fast: the invalid call must not have touched existing rows.
-    await expect(upsertFileRows([makeRow({ id: "nope" })], "")).rejects.toThrow(
-      TypeError,
-    );
+    await expect(
+      upsertFileRows([makeRow({ id: "nope", parents: ["folder-K"] })], ""),
+    ).rejects.toThrow(TypeError);
     expect(await db.files.get(["ok@example.com", "nope"])).toBeUndefined();
     expect(await db.files.get(["ok@example.com", "keep"])).toBeDefined();
   });
 
-  it("persists rows missing optional fields (undefined passthrough) and roots their parent", async () => {
-    await upsertFileRows([makeRow({ id: "bare" })], "user@example.com");
+  it("persists rows missing optional fields (undefined passthrough) under their verified parent", async () => {
+    await upsertFileRows(
+      [makeRow({ id: "bare", parents: ["folder-X"] })],
+      "user@example.com",
+    );
 
     const row = await db.files.get(["user@example.com", "bare"]);
     expect(row?.size).toBeUndefined();
@@ -128,7 +154,76 @@ describe("upsertFileRows", () => {
     expect(row?.metadata).toBeUndefined();
     expect(row?.trashed).toBe(false);
     expect(row?.isFolder).toBe(false);
-    expect(row?.parentId).toBe(ROOT_FOLDER_ID);
+    expect(row?.parentId).toBe("folder-X");
+  });
+
+  it("skips parentless rows entirely and reports ONE summary warning per call", async () => {
+    mockedCaptureError.mockClear();
+
+    await upsertFileRows(
+      [
+        makeRow({ id: "orphan-1" }),
+        makeRow({ id: "orphan-2", parents: [] }),
+        makeRow({ id: "kept", parents: ["folder-X"] }),
+      ],
+      "user@example.com",
+    );
+
+    // No sentinel/"root" row is written for a row whose parent cannot be
+    // verified — the old `?? ROOT_FOLDER_ID` fallback poisoned the root bucket.
+    expect(
+      await db.files.get(["user@example.com", "orphan-1"]),
+    ).toBeUndefined();
+    expect(
+      await db.files.get(["user@example.com", "orphan-2"]),
+    ).toBeUndefined();
+    expect(await db.files.get(["user@example.com", "kept"])).toBeDefined();
+
+    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "db/fileRows",
+        message: expect.stringContaining("skippedCount=2") as unknown as string,
+      }),
+    );
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("total=3") as unknown as string,
+      }),
+    );
+  });
+
+  it("skips rows whose only parent source is blank and counts them in the ONE summary warning", async () => {
+    mockedCaptureError.mockClear();
+
+    await upsertFileRows(
+      [
+        makeRow({ id: "blank-parent", parents: [""] }),
+        makeRow({ id: "space-parent", parents: ["   "] }),
+        makeRow({ id: "kept", parents: ["folder-X"] }),
+      ],
+      "user@example.com",
+    );
+
+    // Blank ids are not usable parents: neither "" nor "   " may become a
+    // stored parentId.
+    expect(
+      await db.files.get(["user@example.com", "blank-parent"]),
+    ).toBeUndefined();
+    expect(
+      await db.files.get(["user@example.com", "space-parent"]),
+    ).toBeUndefined();
+    expect(await db.files.get(["user@example.com", "kept"])).toBeDefined();
+
+    expect(mockedCaptureError).toHaveBeenCalledTimes(1);
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "db/fileRows",
+        message: expect.stringContaining("skippedCount=2") as unknown as string,
+      }),
+    );
   });
 
   // Metadata is app-local state (e.g. the streamUnplayable flag persisted by
@@ -142,7 +237,13 @@ describe("upsertFileRows", () => {
 
     it("preserves existing metadata when the incoming row has none", async () => {
       await upsertFileRows(
-        [makeRow({ id: "flagged", metadata: PLAYABLE_FLAG })],
+        [
+          makeRow({
+            id: "flagged",
+            parents: ["folder-A"],
+            metadata: PLAYABLE_FLAG,
+          }),
+        ],
         "user@example.com",
       );
 
@@ -158,12 +259,24 @@ describe("upsertFileRows", () => {
 
     it("lets an incoming row WITH metadata replace the stored one", async () => {
       await upsertFileRows(
-        [makeRow({ id: "replaced", metadata: PLAYABLE_FLAG })],
+        [
+          makeRow({
+            id: "replaced",
+            parents: ["folder-A"],
+            metadata: PLAYABLE_FLAG,
+          }),
+        ],
         "user@example.com",
       );
 
       await upsertFileRows(
-        [makeRow({ id: "replaced", metadata: { format: "mp3" } })],
+        [
+          makeRow({
+            id: "replaced",
+            parents: ["folder-A"],
+            metadata: { format: "mp3" },
+          }),
+        ],
         "user@example.com",
       );
 
@@ -173,7 +286,10 @@ describe("upsertFileRows", () => {
     });
 
     it("leaves a brand-new row's metadata undefined (no empty object)", async () => {
-      await upsertFileRows([makeRow({ id: "fresh" })], "user@example.com");
+      await upsertFileRows(
+        [makeRow({ id: "fresh", parents: ["folder-A"] })],
+        "user@example.com",
+      );
 
       const row = await db.files.get(["user@example.com", "fresh"]);
       expect(row).toBeDefined();
@@ -198,9 +314,13 @@ describe("upsertFileRows", () => {
 
       await upsertFileRows(
         [
-          makeRow({ id: "keep-me" }), // incoming w/o metadata -> preserved
-          makeRow({ id: "overwrite-me", metadata: { format: "new" } }), // incoming wins
-          makeRow({ id: "brand-new" }), // no existing -> undefined
+          makeRow({ id: "keep-me", parents: ["folder-A"] }), // incoming w/o metadata -> preserved
+          makeRow({
+            id: "overwrite-me",
+            parents: ["folder-A"],
+            metadata: { format: "new" },
+          }), // incoming wins
+          makeRow({ id: "brand-new", parents: ["folder-A"] }), // no existing -> undefined
         ],
         "user@example.com",
       );
@@ -243,12 +363,22 @@ describe("upsertFileRows", () => {
       );
     });
 
-    it("still roots the parent when neither the row nor the caller knows it", async () => {
+    it("uses knownParents when the row's own parents array is empty", async () => {
+      await upsertFileRows(
+        [makeRow({ id: "up-empty", parents: [] })],
+        "user@example.com",
+        ["folder-known"],
+      );
+
+      expect(
+        (await db.files.get(["user@example.com", "up-empty"]))?.parentId,
+      ).toBe("folder-known");
+    });
+
+    it("skips the row when neither the row nor the caller knows the parent", async () => {
       await upsertFileRows([makeRow({ id: "up3" })], "user@example.com");
 
-      expect((await db.files.get(["user@example.com", "up3"]))?.parentId).toBe(
-        ROOT_FOLDER_ID,
-      );
+      expect(await db.files.get(["user@example.com", "up3"])).toBeUndefined();
     });
   });
 });
@@ -311,7 +441,7 @@ describe("wipeFileRowsForUser", () => {
   });
 
   it("throws a named TypeError on empty/whitespace ownerEmail BEFORE touching any row", async () => {
-    await upsertFileRows([ownedRow("keep", "ok@x")], "ok@x");
+    await upsertFileRows([ownedRow("keep", "ok@x")], "ok@x", [ROOT_FOLDER_ID]);
 
     await expect(wipeFileRowsForUser("")).rejects.toThrow(TypeError);
     await expect(wipeFileRowsForUser("   ")).rejects.toThrow(/ownerEmail/);
@@ -324,7 +454,9 @@ describe("wipeFileRowsForUser", () => {
   });
 
   it("NEVER rejects when Dexie fails: logs a warn and resolves instead", async () => {
-    await upsertFileRows([ownedRow("survivor", "a@x")], "a@x");
+    await upsertFileRows([ownedRow("survivor", "a@x")], "a@x", [
+      ROOT_FOLDER_ID,
+    ]);
     vi.spyOn(db.files, "where").mockImplementation(() => {
       throw new Error("simulated IDB failure");
     });

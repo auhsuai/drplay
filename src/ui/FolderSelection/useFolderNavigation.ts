@@ -8,6 +8,7 @@ import { listFolderChildren } from "../../utils/drivePagination";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { getCurrentUserEmail } from "../../utils/storageKeys";
+import { pruneStaleRootRows } from "../../db/pruneRootRows";
 import { isAbortError } from "../../hooks/player/utils";
 import {
   FOLDER_MODULE,
@@ -67,13 +68,18 @@ export function useFolderNavigation({
     setFolders([]);
     try {
       // Per-user scoping (schema v10): only the signed-in account's folders.
+      const ownerEmail = getCurrentUserEmail();
       const dbFolders = await db.files
         .where("[userEmail+parentId]")
-        .equals([getCurrentUserEmail(), folderId])
+        .equals([ownerEmail, folderId])
         .filter((f) => f.isFolder)
         .toArray();
       if (isAborted(controller)) return;
-      if (dbFolders.length > 0) {
+      // My Drive root is ALWAYS resolved from Drive: the cached root bucket
+      // may be poisoned (rows historically persisted without a verified
+      // parent), so it is never treated as authoritative. Non-root folders
+      // keep the cache-first behavior unchanged.
+      if (folderId !== ROOT_FOLDER_ID && dbFolders.length > 0) {
         setFolders(dbFolders.map((c) => ({ id: c.id, name: c.name })));
       } else {
         const freshToken = (await getValidToken()) || token;
@@ -85,6 +91,15 @@ export function useFolderNavigation({
         );
         if (isAborted(controller)) return;
         setFolders(files.map((f) => ({ id: f.id, name: f.name })));
+        if (folderId === ROOT_FOLDER_ID && !isAborted(controller)) {
+          // Fire-and-forget: the authoritative list is already displayed, and
+          // a failed reconcile must never blank or block the picker.
+          void pruneStaleRootRows(
+            ownerEmail,
+            new Set(files.map((file) => file.id)),
+            { foldersOnly: true },
+          );
+        }
       }
     } catch (e) {
       if (isAbortError(e)) return;
