@@ -19,8 +19,10 @@
 //!   so NO vertical flip is applied. The visual offset is the rect origin
 //!   scaled to DIP:
 //!
-//!       offset_dip = (x / scale, y / scale)
-//!       displayed rect = [x/s, x/s + w/s] x [y/s, y/s + h/s]
+//!   ```text
+//!   offset_dip = (x / scale, y / scale)
+//!   displayed rect = [x/s, x/s + w/s] x [y/s, y/s + h/s]
+//!   ```
 //!
 //!   A 640x360 video at rect (100,50) with scale 1.0 therefore has the visual
 //!   offset (100, 50) — the top of the rect — and displays upright.

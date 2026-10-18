@@ -160,7 +160,7 @@ impl RenderSurface {
         self.shared.presented.load(Ordering::SeqCst)
     }
 
-    /// Re-arm the one-shot [`FIRST_FRAME_EVENT`]: the next successful present
+    /// Re-arm the one-shot `FIRST_FRAME_EVENT`: the next successful present
     /// signals the frontend again. Called by `engine.rs` for every `loadfile`,
     /// i.e. per media item, so the frontend's "a frame of THIS item is on screen"
     /// state can never be satisfied by a frame of the previous one.

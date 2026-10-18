@@ -58,7 +58,7 @@ pub(super) struct SharedState {
     pub(super) frames: AtomicU64,
     /// Frames handed to DirectComposition (GPU-presented count).
     pub(super) presented: AtomicU64,
-    /// Whether the one-shot [`FIRST_FRAME_EVENT`] has already been emitted for
+    /// Whether the one-shot `FIRST_FRAME_EVENT` has already been emitted for
     /// the current media load. Armed (false) at construction — i.e. per surface
     /// (re)creation — and re-armed by `rearm_first_frame` on every `loadfile`.
     pub(super) first_frame_emitted: AtomicBool,
@@ -93,7 +93,7 @@ impl SharedState {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Consume the one-shot [`FIRST_FRAME_EVENT`] signal. `true` exactly once
+    /// Consume the one-shot `FIRST_FRAME_EVENT` signal. `true` exactly once
     /// per armed period — i.e. on the first successful present after a
     /// (re)creation or a `rearm_first_frame`. The `swap` is the whole guard: the
     /// render thread is the only caller, so a frame can never be signalled
