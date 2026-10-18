@@ -12,8 +12,10 @@ use std::path::{Path, PathBuf};
 
 use super::engine::EngineError;
 
-/// Client API version the adopted DLL reports (MPV_MAKE_VERSION(2, 5)).
-pub(crate) const API_VERSION_EXPECTED: c_ulong = (2 << 16) | 5;
+/// Client API version the adopted DLL reports (MPV_MAKE_VERSION(2, 6)) —
+/// the pinned 2026-10-18 build fetched by scripts/fetch-mpv.mjs. Loading only
+/// requires API_VERSION_MIN, so a newer DLL stays usable.
+pub(crate) const API_VERSION_EXPECTED: c_ulong = (2 << 16) | 6;
 /// Oldest client API this engine accepts (MPV_MAKE_VERSION(2, 1)).
 pub(crate) const API_VERSION_MIN: c_ulong = (2 << 16) | 1;
 

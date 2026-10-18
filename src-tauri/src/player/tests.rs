@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::engine::Engine;
 use super::ffi;
-use super::{ensure_spawned, EngineSlot};
+use super::{ensure_spawned, preferred_engine_from, startup_engine, ActiveEngine, EngineSlot};
 use crate::mpv::IpcMessage;
 
 type Collected = Arc<Mutex<Vec<(IpcMessage, u64, u64)>>>;
@@ -282,8 +282,8 @@ pub(crate) fn write_test_wav(path: &Path) {
 
 // --- ENGINE-001 -------------------------------------------------------------
 
-/// The adopted DLL loads, resolves every symbol and reports client API 2.5
-/// (131077); the minimum accepted is 2.1 (131073).
+/// The adopted DLL loads, resolves every symbol and reports client API 2.6
+/// (131078); the minimum accepted is 2.1 (131073).
 #[test]
 fn engine_001_dll_loads_and_reports_the_expected_api_version() {
     let _serial = serial();
@@ -298,7 +298,7 @@ fn engine_001_dll_loads_and_reports_the_expected_api_version() {
         "ENGINE-001: libmpv client API version = {version} (expected {})",
         ffi::API_VERSION_EXPECTED
     );
-    assert_eq!(version, ffi::API_VERSION_EXPECTED, "the committed DLL reports client API 2.5");
+    assert_eq!(version, ffi::API_VERSION_EXPECTED, "the fetched DLL reports client API 2.6");
     assert!(version >= ffi::API_VERSION_MIN);
 }
 
@@ -696,6 +696,32 @@ async fn command_vocabulary_set_and_get_property_parity() {
 fn first_frame_pull_is_false_without_a_render_surface() {
     let _serial = serial();
     assert!(!super::video_surface_first_frame_presented());
+}
+
+// --- Engine preference / startup decision (pure, env-free) ------------------
+
+/// libmpv is the default; only the explicit legacy aliases (trimmed,
+/// case-insensitive) opt into the sidecar.
+#[test]
+fn preferred_engine_defaults_to_libmpv_and_only_legacy_aliases_opt_out() {
+    assert_eq!(preferred_engine_from(None), ActiveEngine::Libmpv);
+    assert_eq!(preferred_engine_from(Some("libmpv")), ActiveEngine::Libmpv);
+    assert_eq!(preferred_engine_from(Some("anything-else")), ActiveEngine::Libmpv);
+    assert_eq!(preferred_engine_from(Some("")), ActiveEngine::Libmpv);
+    assert_eq!(preferred_engine_from(Some("legacy")), ActiveEngine::Legacy);
+    assert_eq!(preferred_engine_from(Some(" LEGACY ")), ActiveEngine::Legacy);
+    assert_eq!(preferred_engine_from(Some("sidecar")), ActiveEngine::Legacy);
+    assert_eq!(preferred_engine_from(Some(" SIDECAR ")), ActiveEngine::Legacy);
+}
+
+/// A legacy preference always stays legacy; a libmpv preference survives only
+/// when the DLL probe succeeded.
+#[test]
+fn startup_engine_demotes_to_legacy_only_when_libmpv_probe_fails() {
+    assert_eq!(startup_engine(ActiveEngine::Libmpv, true), ActiveEngine::Libmpv);
+    assert_eq!(startup_engine(ActiveEngine::Libmpv, false), ActiveEngine::Legacy);
+    assert_eq!(startup_engine(ActiveEngine::Legacy, true), ActiveEngine::Legacy);
+    assert_eq!(startup_engine(ActiveEngine::Legacy, false), ActiveEngine::Legacy);
 }
 
 

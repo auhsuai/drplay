@@ -1,8 +1,8 @@
 //! Player engine dispatcher: routes the four `mpv_*` commands to the
-//! legacy mpv.exe sidecar by default; `DRPLAY_PLAYER_ENGINE=libmpv`
-//! selects the in-process libmpv engine (any other value, including an
-//! absent env var, keeps mpv/mod.rs on the legacy sidecar).
-//! The command/event wire contract
+//! in-process libmpv engine by default; the legacy mpv.exe sidecar is used
+//! when `DRPLAY_PLAYER_ENGINE=legacy|sidecar` asks for it, when the startup
+//! probe cannot find `libmpv-2.dll`, or when libmpv fails to spawn (silent
+//! fallback, logged only). The command/event wire contract
 //! is frozen in VIDEO-LIBMPV-MIGRATION-PLAN.md ("FROZEN INTERFACE CONTRACT")
 //! and is shared with the sidecar through the same `EventSink`/`IpcMessage`
 //! types, so both engines emit byte-identical payloads.
@@ -15,6 +15,7 @@ mod render;
 #[cfg(test)]
 mod tests;
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use serde_json::{json, Value};
@@ -23,18 +24,112 @@ use tokio::sync::Mutex;
 use crate::mpv::EventSink;
 
 const ENGINE_MODE_ENV: &str = "DRPLAY_PLAYER_ENGINE";
-const ENGINE_MODE_LIBMPV: &str = "libmpv";
+const ENGINE_MODE_LEGACY: &str = "legacy";
+const ENGINE_MODE_SIDECAR: &str = "sidecar";
+
+/// Active engine the dispatcher routes to. `Libmpv` is the default; `Legacy`
+/// (the mpv.exe sidecar) is opt-in or the silent fallback.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ActiveEngine {
+    Libmpv,
+    Legacy,
+}
+
+/// Stored decision: 0 = not decided yet (the preference still governs),
+/// 1 = libmpv, 2 = legacy. Written by the startup probe and by the
+/// `mpv_spawn` fallback; read by every video_host/mpv call site.
+const ENGINE_UNDECIDED: u8 = 0;
+const ENGINE_ACTIVE_LIBMPV: u8 = 1;
+const ENGINE_ACTIVE_LEGACY: u8 = 2;
+
+static ACTIVE_ENGINE: AtomicU8 = AtomicU8::new(ENGINE_UNDECIDED);
 
 /// Same rejection string the legacy dispatcher uses when no sidecar exists
 /// (mpv/handle.rs:95): the frontend reacts to the failure, and identical text
 /// keeps app logs comparable between engines.
 const NOT_RUNNING_ERROR: &str = "mpv is not running (call mpv_spawn first)";
 
-/// Engine selection is read per call (never cached), so dev runs and tests can
-/// toggle it dynamically. Absent env var means legacy (the default engine);
-/// only the exact value `libmpv` selects the in-process engine.
-pub(crate) fn is_libmpv_mode() -> bool {
-    std::env::var(ENGINE_MODE_ENV).map(|value| value == ENGINE_MODE_LIBMPV).unwrap_or(false)
+/// Pure preference mapping (never reads the environment, so it is testable
+/// without process-wide races): only the explicit aliases `legacy`/`sidecar`
+/// select the sidecar; absent, `libmpv`, empty or anything else select the
+/// in-process engine.
+pub(crate) fn preferred_engine_from(raw: Option<&str>) -> ActiveEngine {
+    match raw.map(str::trim) {
+        Some(value)
+            if value.eq_ignore_ascii_case(ENGINE_MODE_LEGACY)
+                || value.eq_ignore_ascii_case(ENGINE_MODE_SIDECAR) =>
+        {
+            ActiveEngine::Legacy
+        }
+        _ => ActiveEngine::Libmpv,
+    }
+}
+
+/// Environment wrapper around the pure mapping.
+pub(crate) fn preferred_engine() -> ActiveEngine {
+    let raw = std::env::var(ENGINE_MODE_ENV).ok();
+    preferred_engine_from(raw.as_deref())
+}
+
+/// Pure startup decision: the preference wins unless libmpv was preferred but
+/// its DLL probe failed, in which case the sidecar takes over.
+fn startup_engine(preference: ActiveEngine, libmpv_ready: bool) -> ActiveEngine {
+    match (preference, libmpv_ready) {
+        (ActiveEngine::Legacy, _) => ActiveEngine::Legacy,
+        (ActiveEngine::Libmpv, true) => ActiveEngine::Libmpv,
+        (ActiveEngine::Libmpv, false) => ActiveEngine::Legacy,
+    }
+}
+
+/// Engine that is actually running (or will run): the decided value, else the
+/// current preference. Before the probe, this preserves the old env-only
+/// behavior for callers such as `video_host_acquire`.
+pub(crate) fn active_engine() -> ActiveEngine {
+    match ACTIVE_ENGINE.load(Ordering::Relaxed) {
+        ENGINE_ACTIVE_LIBMPV => ActiveEngine::Libmpv,
+        ENGINE_ACTIVE_LEGACY => ActiveEngine::Legacy,
+        _ => preferred_engine(),
+    }
+}
+
+pub(crate) fn set_active_engine(engine: ActiveEngine) {
+    ACTIVE_ENGINE.store(
+        match engine {
+            ActiveEngine::Libmpv => ENGINE_ACTIVE_LIBMPV,
+            ActiveEngine::Legacy => ENGINE_ACTIVE_LEGACY,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+/// Should the dispatcher route to the in-process libmpv engine?
+pub(crate) fn is_libmpv_active() -> bool {
+    active_engine() == ActiveEngine::Libmpv
+}
+
+/// Startup probe (called from `run`'s setup, before any frontend command):
+/// resolve the DLL path only — loading and engine creation stay lazy in
+/// `spawn`. Deciding here keeps `video_host_acquire` (which the frontend calls
+/// BEFORE spawning) on the same branch as `mpv_spawn`; a missing DLL demotes
+/// to the sidecar with a single warning, invisible to the user.
+pub(crate) fn initialize_engine_state() {
+    let preference = preferred_engine();
+    let libmpv_ready = if preference == ActiveEngine::Libmpv {
+        match ffi::resolve_libmpv_dll() {
+            Ok(dll_path) => {
+                log::info!("[player] engine: in-process libmpv ({})", dll_path.display());
+                true
+            }
+            Err(probe_error) => {
+                log::warn!("[player] engine: libmpv unavailable, using the legacy sidecar: {probe_error}");
+                false
+            }
+        }
+    } else {
+        log::info!("[player] engine: legacy sidecar (selected by {ENGINE_MODE_ENV})");
+        false
+    };
+    set_active_engine(startup_engine(preference, libmpv_ready));
 }
 
 /// Shared slot holding the running engine (`None` = not spawned).
@@ -76,6 +171,45 @@ fn lock_surface_requests() -> std::sync::MutexGuard<'static, SurfaceRequests> {
 
 fn lock_active_surface() -> std::sync::MutexGuard<'static, Option<Arc<render::RenderSurface>>> {
     ACTIVE_SURFACE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// After a libmpv spawn failure the legacy sidecar takes over, but the native
+/// host window it paints into was never created — the frontend had acquired
+/// the libmpv composition surface instead. Replay the recorded acquire/rect/
+/// visible on the MAIN thread (child window creation needs the message pump)
+/// before the sidecar spawns. A session with no recorded request (audio-only)
+/// needs no window and is left alone.
+pub(crate) async fn replay_surface_after_fallback(app: &tauri::AppHandle) {
+    let request = *lock_surface_requests();
+    if request.rect.is_none() && !request.visible {
+        return;
+    }
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    let app_for_main = app.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        let hwnd = crate::video_host::video_host_acquire(app_for_main.clone());
+        if hwnd == 0 {
+            log::error!("[player] fallback: legacy video host could not be acquired");
+        } else {
+            if let Some((x, y, w, h)) = request.rect {
+                crate::video_host::video_host_set_rect(x as i64, y as i64, w as i64, h as i64);
+            }
+            if request.visible {
+                crate::video_host::video_host_set_visible(app_for_main, true);
+            }
+        }
+        let _ = done_tx.send(());
+    });
+    match dispatched {
+        Ok(()) => {
+            if done_rx.await.is_err() {
+                log::error!("[player] fallback: legacy surface replay did not complete");
+            }
+        }
+        Err(dispatch_error) => {
+            log::error!("[player] fallback: cannot dispatch the legacy surface replay: {dispatch_error}");
+        }
+    }
 }
 
 /// `video_host_acquire` in libmpv mode: there is no native host HWND, the

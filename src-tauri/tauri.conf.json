@@ -34,7 +34,9 @@
         "path": "./Microsoft.WebView2.FixedVersionRuntime.154.0.4258.62.x64/"
       }
     },
-    "resources": [],
+    "resources": {
+      "bin/libmpv-2.dll": "libmpv-2.dll"
+    },
     "externalBin": ["bin/mpv"],
     "icon": [
       "icons/32x32.png",

@@ -114,7 +114,7 @@ const WEBVIEW_CLASS_NAME: &str = "Chrome_RenderWidgetHostHWND";
 /// not created yet. A failure costs only the context menu.
 #[tauri::command]
 pub fn video_host_acquire(app: tauri::AppHandle) -> i64 {
-    if crate::player::is_libmpv_mode() {
+    if crate::player::is_libmpv_active() {
         // S3: libmpv mode owns the video surface through DirectComposition on
         // the main window; no native host window may ever be created or shown.
         // The DComp target is created with the engine (render thread owns it),
@@ -166,7 +166,7 @@ pub fn video_host_acquire(app: tauri::AppHandle) -> i64 {
 /// it keeps painting above the WebView2 child window.
 #[tauri::command]
 pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
-    if crate::player::is_libmpv_mode() {
+    if crate::player::is_libmpv_active() {
         // S3: forward to the DirectComposition visual rect (physical px,
         // client area). Clamping happens inside the player path.
         crate::player::video_surface_set_rect(x, y, w, h);
@@ -196,7 +196,7 @@ pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
 /// on the WebView.
 #[tauri::command]
 pub fn video_host_set_visible(app: tauri::AppHandle, visible: bool) {
-    if crate::player::is_libmpv_mode() {
+    if crate::player::is_libmpv_active() {
         // S3: forward to the DirectComposition visual (SetContent surface/null
         // on the render thread). Nothing is created or shown natively here.
         crate::player::video_surface_set_visible(visible);
@@ -263,7 +263,7 @@ pub fn video_host_set_visible(app: tauri::AppHandle, visible: bool) {
 /// engine never emits the event either.
 #[tauri::command]
 pub fn video_host_first_frame_presented() -> bool {
-    if crate::player::is_libmpv_mode() {
+    if crate::player::is_libmpv_active() {
         return crate::player::video_surface_first_frame_presented();
     }
     false

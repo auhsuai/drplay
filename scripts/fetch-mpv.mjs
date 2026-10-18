@@ -1,10 +1,14 @@
 // Downloads the PINNED mpv Windows build (x86_64) from zhongfly/mpv-winbuild
-// into src-tauri/bin/mpv-x86_64-pc-windows-msvc.exe — the exact path Tauri
-// expects for `bundle.externalBin: ["bin/mpv"]` (tauri-build strips the
-// target-triple suffix and stages the exe next to the app binary).
+// into src-tauri/bin/: the sidecar exe at mpv-x86_64-pc-windows-msvc.exe — the
+// exact path Tauri expects for `bundle.externalBin: ["bin/mpv"]` (tauri-build
+// strips the target-triple suffix and stages the exe next to the app binary) —
+// plus libmpv-2.dll, the in-process engine that production uses by default
+// (bundled as a resource; the sidecar stays as its fallback).
 //
-// The release tag and the archive SHA-256 are pinned together, so the same
-// commit bundles the same engine on every machine (no floating `latest`).
+// The release tag and the sidecar archive SHA-256 are pinned together, so the
+// same commit bundles the same engine on every machine (no floating `latest`).
+// The -dev archive (libmpv-2.dll) is not pinned by hash but must match the
+// GitHub-provided asset digest of the same release.
 // zhongfly prunes old releases, so when the pinned tag is gone the script
 // falls back to `latest` with a loud warning instead of failing the build.
 //
@@ -39,9 +43,14 @@ const MPV_ASSET_SHA256 =
   "d33039db49bc32c46e5e66b857c39483d87160713ec0cd1e5ee9c4f8862de9d1";
 const SEVENZIP_URL = "https://www.7-zip.org/a/7zr.exe";
 // zhongfly ships several variants per release; we want the plain x86_64 build
-// (no -v3 / -debug / -dev / -lgpl / -aarch64).
+// (no -v3 / -debug / -dev / -lgpl / -aarch64) for the sidecar exe, and the
+// matching -dev archive for libmpv-2.dll (the plain one carries no DLL).
 const MPV_ASSET_PATTERN = /^mpv-x86_64-\d{8}-git-[0-9a-f]+\.7z$/;
+const LIBMPV_ASSET_PATTERN = /^mpv-dev-x86_64-\d{8}-git-[0-9a-f]+\.7z$/;
 const MIN_MPV_EXE_BYTES = 100 * 1024 * 1024; // real exe is ~114MB
+// The shipped libmpv-2.dll is ~115MB. 80MB is high enough to reject a
+// truncated/placeholder file and low enough to tolerate build-size variance.
+const MIN_LIBMPV_DLL_BYTES = 80 * 1024 * 1024;
 const DOWNLOAD_MAX_TIME_SECS = 1800; // 31MB on a slow link
 const CURL_RETRIES = 5;
 const HTTP_TIMEOUT_SECS = 60;
@@ -50,10 +59,12 @@ const SIDECAR_RELPATH = join(
   "bin",
   "mpv-x86_64-pc-windows-msvc.exe",
 );
+const LIBMPV_DLL_RELPATH = join("src-tauri", "bin", "libmpv-2.dll");
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const sidecarPath = join(repoRoot, SIDECAR_RELPATH);
+const libmpvDllPath = join(repoRoot, LIBMPV_DLL_RELPATH);
 const workDir = join(tmpdir(), "drplay-mpv-fetch");
 
 function fail(stage, error) {
@@ -92,6 +103,30 @@ function curl(url, outFile, timeoutSecs, useAuth = false) {
   if (result.error) fail("download", `${url}: ${result.error.message}`);
   if (result.status !== 0)
     fail("download", `${url}: curl exited ${result.status}: ${result.stderr}`);
+}
+
+// Downloads one release asset, enforces the metadata size and (when GitHub
+// provides it) its SHA-256 digest, and returns the archive path and hash.
+function downloadVerified(asset) {
+  const archivePath = join(workDir, asset.name);
+  curl(asset.browser_download_url, archivePath, DOWNLOAD_MAX_TIME_SECS);
+  const bytes = statSync(archivePath).size;
+  if (bytes !== asset.size) {
+    fail(
+      "download",
+      `size mismatch for ${asset.name}: got ${bytes} bytes, expected ${asset.size}`,
+    );
+  }
+  const sha = createHash("sha256")
+    .update(readFileSync(archivePath))
+    .digest("hex");
+  if (asset.digest && asset.digest !== `sha256:${sha}`) {
+    fail(
+      "download",
+      `GitHub asset digest ${asset.digest} does not match ${asset.name} (sha256:${sha})`,
+    );
+  }
+  return { archivePath, sha };
 }
 
 function fetchRelease(url) {
@@ -148,9 +183,9 @@ if (process.platform !== "win32") {
 }
 
 try {
-  if (existsSync(sidecarPath) && !force) {
+  if (existsSync(sidecarPath) && existsSync(libmpvDllPath) && !force) {
     console.log(
-      `[fetch-mpv] already present: ${sidecarPath} (use --force to re-download)`,
+      `[fetch-mpv] already present: ${sidecarPath} + ${libmpvDllPath} (use --force to re-download)`,
     );
     process.exit(0);
   }
@@ -206,28 +241,13 @@ try {
   const sevenZipPath = join(workDir, "7zr.exe");
   curl(SEVENZIP_URL, sevenZipPath, HTTP_TIMEOUT_SECS);
 
-  // 3. Archive: exact-size check against the release metadata, then SHA-256.
-  // The pinned release must match MPV_ASSET_SHA256. A fallback/override
-  // release cannot be checked against the pin, so its GitHub asset digest
-  // must be present and match — never accept an unverifiable archive.
-  const archivePath = join(workDir, asset.name);
-  curl(asset.browser_download_url, archivePath, DOWNLOAD_MAX_TIME_SECS);
-  const downloadedBytes = statSync(archivePath).size;
-  if (downloadedBytes !== asset.size) {
-    fail(
-      "download",
-      `size mismatch: got ${downloadedBytes} bytes, expected ${asset.size}`,
-    );
-  }
-  const actualSha = createHash("sha256")
-    .update(readFileSync(archivePath))
-    .digest("hex");
-  if (asset.digest && asset.digest !== `sha256:${actualSha}`) {
-    fail(
-      "download",
-      `GitHub asset digest ${asset.digest} does not match the downloaded file (sha256:${actualSha})`,
-    );
-  }
+  // 3. Archives: zhongfly ships the engine (mpv.exe) and the libmpv SDK
+  // (libmpv-2.dll) as SEPARATE assets of the same release; both are downloaded
+  // so the sidecar and the in-process engine are the same build. Each download
+  // is size-checked against the release metadata, then SHA-256 checked. The
+  // pinned plain archive must match MPV_ASSET_SHA256; the -dev archive is
+  // anchored to the GitHub-provided digest (there is no second pin constant).
+  const { archivePath, sha: actualSha } = downloadVerified(asset);
   if (usingPinnedRelease) {
     if (actualSha !== MPV_ASSET_SHA256) {
       fail(
@@ -243,7 +263,28 @@ try {
   }
   console.log(`[fetch-mpv] sha256 verified: ${actualSha}`);
 
-  // 4. Extract only mpv.exe
+  const libmpvAsset = release.assets.find((candidate) =>
+    LIBMPV_ASSET_PATTERN.test(candidate.name),
+  );
+  if (!libmpvAsset) {
+    fail(
+      "release lookup",
+      `no ${LIBMPV_ASSET_PATTERN} asset in release ${release.tag_name} — libmpv-2.dll ships only in the -dev archive`,
+    );
+  }
+  if (!libmpvAsset.digest) {
+    fail(
+      "download",
+      `release ${release.tag_name} has no asset digest for ${libmpvAsset.name}; refusing an unverified libmpv archive`,
+    );
+  }
+  const { archivePath: libmpvArchivePath, sha: libmpvSha } =
+    downloadVerified(libmpvAsset);
+  console.log(
+    `[fetch-mpv] libmpv archive verified: ${libmpvAsset.name} (${Math.round(libmpvAsset.size / 1048576)}MB, sha256 ${libmpvSha})`,
+  );
+
+  // 4. Extract mpv.exe from the plain archive
   const extractDir = join(workDir, "out");
   rmSync(extractDir, { recursive: true, force: true });
   const extract = spawnSync(
@@ -255,7 +296,10 @@ try {
   );
   if (extract.error) fail("extract", `7zr.exe: ${extract.error.message}`);
   if (extract.status !== 0)
-    fail("extract", `7zr.exe exited ${extract.status}: ${extract.stderr}`);
+    fail(
+      "extract",
+      `7zr.exe exited ${extract.status} extracting mpv.exe: ${extract.stderr}`,
+    );
 
   // 5. Place the sidecar where tauri-build looks for it
   const extractedPath = join(extractDir, "mpv.exe");
@@ -268,8 +312,43 @@ try {
   mkdirSync(dirname(sidecarPath), { recursive: true });
   copyFileSync(extractedPath, sidecarPath);
   console.log(
-    `[fetch-mpv] done: ${sidecarPath} (${Math.round(statSync(sidecarPath).size / 1048576)}MB)`,
+    `[fetch-mpv] sidecar: ${sidecarPath} (${Math.round(statSync(sidecarPath).size / 1048576)}MB)`,
   );
+
+  // 6. Extract libmpv-2.dll from the -dev archive and place it next to the
+  // sidecar (tauri.conf.json bundles it as a resource next to the exe).
+  const extractDll = spawnSync(
+    sevenZipPath,
+    ["e", libmpvArchivePath, "-o" + extractDir, "libmpv-2.dll", "-y"],
+    {
+      timeout: 10 * 60 * 1000,
+    },
+  );
+  if (extractDll.error)
+    fail("extract", `7zr.exe (libmpv archive): ${extractDll.error.message}`);
+  if (extractDll.status !== 0)
+    fail(
+      "extract",
+      `7zr.exe exited ${extractDll.status} extracting libmpv-2.dll: ${extractDll.stderr}`,
+    );
+  const extractedDllPath = join(extractDir, "libmpv-2.dll");
+  if (!existsSync(extractedDllPath))
+    fail(
+      "extract",
+      "libmpv-2.dll missing from the -dev archive — production libmpv needs it, refusing to continue",
+    );
+  const extractedDllBytes = statSync(extractedDllPath).size;
+  if (extractedDllBytes < MIN_LIBMPV_DLL_BYTES) {
+    fail(
+      "extract",
+      `libmpv-2.dll suspiciously small (${extractedDllBytes} bytes, expected at least ${MIN_LIBMPV_DLL_BYTES})`,
+    );
+  }
+  copyFileSync(extractedDllPath, libmpvDllPath);
+  console.log(
+    `[fetch-mpv] libmpv DLL: ${libmpvDllPath} (${Math.round(statSync(libmpvDllPath).size / 1048576)}MB)`,
+  );
+  console.log("[fetch-mpv] done");
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }

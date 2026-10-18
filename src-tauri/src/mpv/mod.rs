@@ -85,10 +85,20 @@ pub(crate) fn event_sink(app: tauri::AppHandle) -> EventSink {
 /// by — including the no-op path, which answers with the running handle's id.
 #[tauri::command]
 pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
-    // Engine selection is a runtime switch (S1 migration): libmpv mode routes
-    // to the in-process engine, anything else keeps the legacy sidecar.
-    if crate::player::is_libmpv_mode() {
-        return crate::player::spawn(&app).await;
+    // Engine selection is a runtime decision (startup probe + spawn fallback):
+    // libmpv is the default; a failed spawn silently hands over to the legacy
+    // sidecar after reconstructing the native video host it needs.
+    if crate::player::is_libmpv_active() {
+        match crate::player::spawn(&app).await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                log::error!(
+                    "[mpv] libmpv engine failed to start, falling back to the legacy sidecar: {error}"
+                );
+                crate::player::set_active_engine(crate::player::ActiveEngine::Legacy);
+                crate::player::replay_surface_after_fallback(&app).await;
+            }
+        }
     }
     let state = mpv_state(&app);
     let mut slot = state.lock().await;
@@ -179,7 +189,7 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
 /// by the time this resolves.
 #[tauri::command]
 pub async fn mpv_command(cmd: Vec<String>) -> Result<Value, String> {
-    if crate::player::is_libmpv_mode() {
+    if crate::player::is_libmpv_active() {
         return crate::player::command(cmd).await;
     }
     let args: Vec<Value> = cmd.into_iter().map(Value::String).collect();
@@ -191,7 +201,7 @@ pub async fn mpv_command(cmd: Vec<String>) -> Result<Value, String> {
 /// Read one mpv property, e.g. `time-pos`. Returns the property value.
 #[tauri::command]
 pub async fn mpv_get_property(prop: String) -> Result<Value, String> {
-    if crate::player::is_libmpv_mode() {
+    if crate::player::is_libmpv_active() {
         return crate::player::get_property(prop).await;
     }
     let ipc = running_ipc().await?;
@@ -201,7 +211,7 @@ pub async fn mpv_get_property(prop: String) -> Result<Value, String> {
 /// Stop the sidecar. Safe to call when nothing is running.
 #[tauri::command]
 pub async fn mpv_shutdown() -> Result<(), String> {
-    if crate::player::is_libmpv_mode() {
+    if crate::player::is_libmpv_active() {
         return crate::player::shutdown().await;
     }
     let app = app_handle()?;

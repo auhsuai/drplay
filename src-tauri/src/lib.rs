@@ -14,8 +14,9 @@ mod token_store;
 mod seed;
 #[cfg(windows)]
 mod mpv;
-// In-process libmpv engine (S1 migration slice): selected at runtime by
-// DRPLAY_PLAYER_ENGINE=libmpv through the mpv_* dispatcher.
+// In-process libmpv engine (S1 migration slice): the default engine; the
+// legacy sidecar is opt-in (DRPLAY_PLAYER_ENGINE=legacy) or the silent
+// fallback when libmpv cannot start.
 #[cfg(windows)]
 mod player;
 #[cfg(windows)]
@@ -103,6 +104,12 @@ pub fn run() {
         )
         .setup(|app| {
             APP_HANDLE.set(app.handle().clone()).ok();
+
+            // One engine decision for the whole session, BEFORE the frontend
+            // acquires the video surface: libmpv by default, sidecar when the
+            // DLL probe fails (or the env var asks for it). No user-visible UI.
+            #[cfg(windows)]
+            crate::player::initialize_engine_state();
 
             if let Ok(cache_dir) = app.path().app_cache_dir() {
                 // S3: on-disk cover cache root + background GC thread (runs
