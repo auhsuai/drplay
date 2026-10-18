@@ -49,7 +49,19 @@
     "search_error": "Không thể tìm kiếm thư mục. Vui lòng thử lại.",
     "folders_error": "Không thể tải thư mục. Vui lòng thử lại.",
     "back_error": "Không thể quay lại. Vui lòng thử lại.",
-    "bulk_move_title": "Chọn thư mục đích"
+    "bulk_move_title": "Chọn thư mục đích",
+    "multi_root_question": "Bạn có muốn dùng nhiều thư mục gốc không?",
+    "multi_root_no": "Không, chỉ dùng một thư mục gốc",
+    "multi_root_yes": "Có, dùng nhiều thư mục gốc",
+    "additional_roots": "Số thư mục gốc bổ sung",
+    "folder_slot": "Thư mục {{index}}",
+    "roots_duplicate": "Cùng một thư mục được chọn nhiều lần. Hãy chọn các thư mục khác nhau.",
+    "use_single_root": "Chỉ dùng một thư mục gốc",
+    "confirm_roots_title": "Dùng các thư mục này làm thư mục gốc?",
+    "confirm_roots_body": "Bạn đã chọn {{totalCount}} thư mục. Các thư mục này sẽ trở thành vị trí gốc trong DrPlay.",
+    "confirm": "Xác nhận",
+    "continue": "Tiếp tục",
+    "roots_commit_failed": "Không thể lưu thư mục gốc. Vui lòng thử lại."
   },
   "home": {
     "good_morning": "Chào buổi sáng",
@@ -63,6 +75,7 @@
   },
   "drive": {
     "my_drive": "Kho của tôi",
+    "root_folders": "Thư mục gốc",
     "no_folders": "Không có thư mục nào ở đây.",
     "no_audio": "Không có tệp âm thanh nào ở đây.",
     "no_search_results": "Không tìm thấy bài hát phù hợp.",

@@ -1,5 +1,5 @@
-import { FolderSelectionScreen } from "./FolderSelection/FolderSelectionScreen";
-import { ROOT_FOLDER_ID } from "../utils/driveConstants";
+import { RootFolderSetupFlow } from "./FolderSelection/RootFolderSetupFlow";
+import type { RootFolder } from "../utils/rootFolders";
 
 interface FolderSelectionGateProps {
   isLoggedIn: boolean;
@@ -7,7 +7,9 @@ interface FolderSelectionGateProps {
   appRootFolder: string | null;
   showFolderSelection: boolean;
   token: string | null;
-  onSelectFolder: (folderId: string) => void;
+  rootFolders: RootFolder[];
+  onCommitRoots: (roots: RootFolder[]) => Promise<boolean>;
+  onDone: () => void;
   onCancel: (() => void) | undefined;
 }
 
@@ -17,7 +19,9 @@ export function FolderSelectionGate({
   appRootFolder,
   showFolderSelection,
   token,
-  onSelectFolder,
+  rootFolders,
+  onCommitRoots,
+  onDone,
   onCancel,
 }: FolderSelectionGateProps) {
   // P2-04-8: appRootFolder=null doubles as the store's initial placeholder
@@ -28,13 +32,12 @@ export function FolderSelectionGate({
   if (isLoggedIn && !isHydrated && !showFolderSelection) return null;
   if (!(isLoggedIn && (!appRootFolder || showFolderSelection))) return null;
   return (
-    <FolderSelectionScreen
+    <RootFolderSetupFlow
       token={token ?? ""}
-      onSelectFolder={onSelectFolder}
-      onCancel={onCancel}
-      initialFolderId={ROOT_FOLDER_ID}
-      initialFolderHistory={[]}
-      allowEscapeRoot={true}
+      currentRoots={rootFolders}
+      onCommit={onCommitRoots}
+      onDone={onDone}
+      onCancel={appRootFolder ? onCancel : undefined}
     />
   );
 }

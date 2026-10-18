@@ -2,7 +2,7 @@ import React from "react";
 import { ArrowLeft, X, Search, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortDropdown } from "../../components/SortDropdown";
-import { MY_DRIVE_TAB } from "../../../utils/driveConstants";
+import { MY_DRIVE_TAB, VIRTUAL_ROOT_NAME } from "../../../utils/driveConstants";
 import { useHorizontalScroll } from "../../../hooks/useHorizontalScroll";
 
 interface TopNavigationBarProps {
@@ -20,6 +20,8 @@ interface TopNavigationBarProps {
   onSortChange?: ((option: string) => void) | undefined;
   token: string | null;
   onNewFolderClick: () => void;
+  // false hides the New Folder action (virtual root: no real parent folder).
+  showNewFolderButton?: boolean;
   isInitialMount: React.RefObject<boolean>;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -39,6 +41,7 @@ export function TopNavigationBar({
   onSortChange,
   token,
   onNewFolderClick,
+  showNewFolderButton = true,
   isInitialMount,
   searchInputRef,
 }: TopNavigationBarProps) {
@@ -52,8 +55,11 @@ export function TopNavigationBar({
   // Why: the breadcrumb stores the raw root-folder label (MY_DRIVE_TAB) from
   // the Drive state; translate it for display so the breadcrumb matches the
   // sidebar's localized "My Drive" entry. Non-root folder names are untouched.
-  const displayFolderName = (name: string): string =>
-    name === MY_DRIVE_TAB ? t("drive.my_drive") : name;
+  const displayFolderName = (name: string): string => {
+    if (name === MY_DRIVE_TAB) return t("drive.my_drive");
+    if (name === VIRTUAL_ROOT_NAME) return t("drive.root_folders");
+    return name;
+  };
 
   const sortOptions = [
     { id: "name", label: t("sort.name") },
@@ -160,7 +166,7 @@ export function TopNavigationBar({
             />
           )}
 
-          {token && (
+          {token && showNewFolderButton && (
             <button
               onClick={onNewFolderClick}
               className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-lg transition-colors shadow-sm active:scale-95"

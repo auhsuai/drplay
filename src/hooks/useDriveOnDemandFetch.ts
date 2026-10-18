@@ -7,7 +7,10 @@ import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { getFolderMediaQuery } from "../utils/audioQuery";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
-import { DRIVE_FILES_CHANGED_EVENT } from "../utils/driveConstants";
+import {
+  DRIVE_FILES_CHANGED_EVENT,
+  VIRTUAL_ROOT_ID,
+} from "../utils/driveConstants";
 import { getCurrentUserEmail } from "../utils/storageKeys";
 import { rememberTotalSizesInServiceWorker } from "../utils/swPrefetch";
 
@@ -24,6 +27,12 @@ export function useDriveOnDemandFetch({
 
   // On-Demand Fetching: Kéo nóng 1 trang từ Drive nếu thư mục chưa có trong Dexie
   useEffect(() => {
+    // Virtual root is synthetic (no Drive folder, no Dexie parent) — it must
+    // never issue a fetch. Clear the skeleton so the root list paints at once.
+    if (currentFolderId === VIRTUAL_ROOT_ID) {
+      setIsLoadingTracks(false);
+      return;
+    }
     if (!token || !currentFolderId || currentFolderId === "") return;
 
     // Nếu có dữ liệu rồi thì fetch ngầm (không hiện spinner)

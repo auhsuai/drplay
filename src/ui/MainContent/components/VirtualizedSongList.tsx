@@ -39,6 +39,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode,
   onBulkMoveClick,
   onBulkDeleteClick,
+  hideRowMenus = false,
   ref,
 }: {
   items: DriveItem[];
@@ -60,6 +61,9 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
   onBulkMoveClick: () => void;
   onBulkDeleteClick: () => void;
+  // Hides each row's MoreMenu + context menu (virtual root: root rows are
+  // navigation targets, never delete/move targets).
+  hideRowMenus?: boolean;
   ref?: React.Ref<VirtualizedSongListHandle>;
 }) {
   const { t } = useTranslation();
@@ -318,6 +322,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
                 onEnableSelectionMode={handleEnableSelectionMode}
                 onBulkMoveClick={onBulkMoveClick}
                 onBulkDeleteClick={onBulkDeleteClick}
+                hideMenu={hideRowMenus}
               />
             </div>
           </div>

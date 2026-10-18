@@ -49,7 +49,19 @@
     "search_error": "Couldn't search folders. Try again.",
     "folders_error": "Couldn't load folders. Try again.",
     "back_error": "Couldn't go back. Try again.",
-    "bulk_move_title": "Choose destination folder"
+    "bulk_move_title": "Choose destination folder",
+    "multi_root_question": "Would you like to use multiple root folders?",
+    "multi_root_no": "No, use one root folder",
+    "multi_root_yes": "Yes, use multiple root folders",
+    "additional_roots": "Additional root folders",
+    "folder_slot": "Folder {{index}}",
+    "roots_duplicate": "The same folder is selected more than once. Choose different folders.",
+    "use_single_root": "Use only one root folder",
+    "confirm_roots_title": "Use these folders as your root folders?",
+    "confirm_roots_body": "You have selected {{totalCount}} folders. These folders will become your root locations in DrPlay.",
+    "confirm": "Confirm",
+    "continue": "Continue",
+    "roots_commit_failed": "Couldn't save your root folders. Try again."
   },
   "home": {
     "good_morning": "Good morning",
@@ -63,6 +75,7 @@
   },
   "drive": {
     "my_drive": "My Drive",
+    "root_folders": "Root Folders",
     "no_folders": "No folders here.",
     "no_audio": "No audio files here.",
     "no_search_results": "No matching songs found.",

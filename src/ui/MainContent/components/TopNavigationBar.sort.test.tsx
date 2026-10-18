@@ -4,6 +4,10 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type React from "react";
 import { TopNavigationBar } from "./TopNavigationBar";
 import en from "../../../locales/en/translation.json";
+import {
+  VIRTUAL_ROOT_ID,
+  VIRTUAL_ROOT_NAME,
+} from "../../../utils/driveConstants";
 
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so we stub useTranslation to return
@@ -45,6 +49,7 @@ interface TopNavProps {
   onSortChange: (option: string) => void;
   token: string | null;
   onNewFolderClick: () => void;
+  showNewFolderButton?: boolean;
   isInitialMount: React.RefObject<boolean>;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -270,5 +275,42 @@ describe("TopNavigationBar sort dropdown APG (P2-13a-8)", () => {
     expect(document.activeElement).toBe(
       screen.getByRole("button", { name: "Sort options" }),
     );
+  });
+});
+
+describe("TopNavigationBar virtual root (multi-root)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("translates the virtual root name in breadcrumb and current title", () => {
+    render(
+      <TopNavigationBar
+        {...makeProps({
+          hasHistory: true,
+          folderHistory: [{ id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME }],
+          currentFolderName: VIRTUAL_ROOT_NAME,
+        })}
+      />,
+    );
+
+    // en.drive.root_folders -> "Root Folders" for both breadcrumb and title.
+    expect(screen.getAllByText("Root Folders")).toHaveLength(2);
+    // The ids are identifiers only; neither the sentinel id nor the raw
+    // translation key may leak into rendered text.
+    expect(screen.queryByText(VIRTUAL_ROOT_ID)).toBeNull();
+    expect(screen.queryByText("drive.root_folders")).toBeNull();
+  });
+
+  it("hides the New Folder button when showNewFolderButton is false", () => {
+    render(<TopNavigationBar {...makeProps({ showNewFolderButton: false })} />);
+
+    expect(screen.queryByText("New Folder")).toBeNull();
+  });
+
+  it("shows the New Folder button by default", () => {
+    render(<TopNavigationBar {...makeProps()} />);
+
+    expect(screen.getByText("New Folder")).toBeTruthy();
   });
 });

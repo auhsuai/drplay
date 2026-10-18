@@ -3,6 +3,7 @@ import { useDriveListing } from "./useDriveListing";
 import { useDriveOnDemandFetch } from "./useDriveOnDemandFetch";
 import { useDriveSearch } from "./useDriveSearch";
 import { useDriveBulkOps } from "./useDriveBulkOps";
+import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
 
 export const ITEMS_PER_PAGE = 50;
 
@@ -36,6 +37,17 @@ export function useDriveExplorer(
 
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // The virtual root lists configured roots only: selection (and the bulk
+  // operations it drives) has no valid target there. Enforce it at the state
+  // source as well as in the UI; a stale TRUE from a previous folder must not
+  // survive into the virtual view (render-time adjustment, same React 19
+  // pattern as the reset block below — no effect loop).
+  const isVirtualRoot = currentFolderId === VIRTUAL_ROOT_ID;
+  if (isVirtualRoot && (isSelectionMode || selectedIds.size > 0)) {
+    setIsSelectionMode(false);
+    setSelectedIds(new Set());
+  }
 
   const { searchQuery, setSearchQuery, globalSearchItems } = useDriveSearch();
   const { items } = useDriveListing({
@@ -117,6 +129,7 @@ export function useDriveExplorer(
   );
 
   return {
+    isVirtualRoot,
     searchQuery,
     setSearchQuery,
     currentPage,

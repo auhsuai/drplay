@@ -5,7 +5,13 @@ import { FolderSelectionGate } from "./ui/FolderSelectionGate";
 import { TrashGate } from "./ui/TrashGate";
 import { NowPlayingOverlay } from "./ui/NowPlayingOverlay";
 import { captureError } from "./utils/errorLog";
-import { ROOT_FOLDER_ID, MY_DRIVE_TAB, TABS } from "./utils/driveConstants";
+import {
+  ROOT_FOLDER_ID,
+  MY_DRIVE_TAB,
+  TABS,
+  VIRTUAL_ROOT_ID,
+  VIRTUAL_ROOT_NAME,
+} from "./utils/driveConstants";
 import { useShallow } from "zustand/react/shallow";
 import { TabContentRouter } from "./ui/layouts/TabContentRouter";
 import { AppShell, isShellLocked } from "./ui/layouts/AppShell";
@@ -58,7 +64,7 @@ import {
   loadMinimizeToTrayState,
   saveMinimizeToTrayState,
 } from "./appUiState";
-import { safeLocalStorageRemove } from "./utils/storageKeys";
+import { ROOT_FOLDERS_KEY, safeLocalStorageRemove } from "./utils/storageKeys";
 
 export { loadMinimizeToTrayState };
 
@@ -86,6 +92,7 @@ function App() {
     // (SecurityError) on one key must not skip the cleanup of the other three
     // (partial cleanup would leak the previous account's folder state).
     safeLocalStorageRemove(LS_ROOT_FOLDER, "logout-cleanup", "App");
+    safeLocalStorageRemove(ROOT_FOLDERS_KEY, "logout-cleanup", "App");
     safeLocalStorageRemove(LS_CURRENT_FOLDER_ID, "logout-cleanup", "App");
     safeLocalStorageRemove(LS_CURRENT_FOLDER_NAME, "logout-cleanup", "App");
     safeLocalStorageRemove(LS_FOLDER_HISTORY, "logout-cleanup", "App");
@@ -99,6 +106,7 @@ function App() {
     );
     clearSessionState();
     setAppRootFolderRef.current(null);
+    useDriveStore.getState().setRootFolders([]);
   });
 
   // Initialize service worker; pass the access token so the SW learns it on
@@ -115,6 +123,7 @@ function App() {
 
   const {
     appRootFolder,
+    rootFolders,
     isHydrated,
     setAppRootFolder,
     currentFolderId,
@@ -128,7 +137,7 @@ function App() {
     handleOpenFolder,
     handleBack,
     handleBreadcrumbClick,
-    handleSelectRootFolder,
+    commitRootFolders,
   } = useDrive(isLoggedIn, accessToken);
 
   const { setIsLoadingTracks, isLoadingTracks } = useDriveStore(
@@ -469,9 +478,15 @@ function App() {
 
   const handleTabChange = useCallback(
     (tab: TabKey) => {
+      // Re-clicking the active My Drive tab lands on the configured root view
+      // (multi-root -> virtual list; single-root -> app root, legacy). A tab
+      // SWITCH keeps the currently open folder, like before.
       if (activeTab === tab && tab === TABS.myDrive) {
-        setCurrentFolderId(appRootFolder || ROOT_FOLDER_ID);
-        setCurrentFolderName(MY_DRIVE_TAB);
+        const isMultiRoot = rootFolders.length > 1;
+        setCurrentFolderId(
+          isMultiRoot ? VIRTUAL_ROOT_ID : appRootFolder || ROOT_FOLDER_ID,
+        );
+        setCurrentFolderName(isMultiRoot ? VIRTUAL_ROOT_NAME : MY_DRIVE_TAB);
         setFolderHistory([]);
       }
       setActiveTab(tab);
@@ -479,6 +494,7 @@ function App() {
     [
       activeTab,
       appRootFolder,
+      rootFolders,
       setCurrentFolderId,
       setCurrentFolderName,
       setFolderHistory,
@@ -509,10 +525,9 @@ function App() {
         appRootFolder={appRootFolder}
         showFolderSelection={showFolderSelection}
         token={accessToken}
-        onSelectFolder={(folderId) => {
-          // Fire-and-forget: useDrive's handleSelectRootFolder handles its
-          // own errors (each step is try/caught inside).
-          void handleSelectRootFolder(folderId);
+        rootFolders={rootFolders}
+        onCommitRoots={commitRootFolders}
+        onDone={() => {
           setShowFolderSelection(false);
         }}
         onCancel={

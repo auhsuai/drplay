@@ -15,6 +15,7 @@ import { createSemaphore } from "../utils/asyncLimit";
 import { t } from "i18next";
 import { captureError } from "../utils/errorLog";
 import { getCurrentUserEmail } from "../utils/storageKeys";
+import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
 
 // Bulk Drive ops are I/O-bound (~200-400ms per item) and driveFetch already
 // retries 429/5xx with backoff — 5 in-flight requests per batch keeps large
@@ -64,6 +65,16 @@ export function useDriveBulkOps({
     folderName: string,
     onComplete: () => void,
   ) => {
+    // Defensive guard (UI already hides the button): the virtual root is a
+    // synthetic node — never send its sentinel id to Drive/Dexie.
+    if (currentFolderId === VIRTUAL_ROOT_ID) {
+      void captureError({
+        level: "warn",
+        source: "useDriveBulkOps",
+        message: "bulk-op-on-virtual-root:create-folder",
+      });
+      return;
+    }
     if (!token) return;
     setIsCreatingFolder(true);
     try {
@@ -114,6 +125,14 @@ export function useDriveBulkOps({
   };
 
   const handleBulkDelete = async (onComplete: () => void) => {
+    if (currentFolderId === VIRTUAL_ROOT_ID) {
+      void captureError({
+        level: "warn",
+        source: "useDriveBulkOps",
+        message: "bulk-op-on-virtual-root:bulk-delete",
+      });
+      return;
+    }
     if (!token || selectedIds.size === 0) return;
 
     const itemsToDelete = prepareBulkSelection(selectedIds);
@@ -201,6 +220,14 @@ export function useDriveBulkOps({
     destinationFolderId: string,
     onComplete: () => void,
   ) => {
+    if (currentFolderId === VIRTUAL_ROOT_ID) {
+      void captureError({
+        level: "warn",
+        source: "useDriveBulkOps",
+        message: "bulk-op-on-virtual-root:bulk-move",
+      });
+      return;
+    }
     if (!token || selectedIds.size === 0) return;
 
     const itemsToMove = prepareBulkSelection(selectedIds);

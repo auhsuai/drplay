@@ -5,11 +5,14 @@ import { classifyDriveError } from "../utils/driveApi";
 import {
   ROOT_FOLDER_ID,
   MY_DRIVE_TAB,
+  VIRTUAL_ROOT_ID,
+  VIRTUAL_ROOT_NAME,
   type TabKey,
 } from "../utils/driveConstants";
 import { captureError } from "../utils/errorLog";
 import { getFileName, getFileParents } from "../utils/driveFiles";
 import { getCurrentUserEmail, ROOT_FOLDER_KEY } from "../utils/storageKeys";
+import { useDriveStore } from "../store/driveStore";
 
 const HISTORY_LIMIT = 20;
 const HIGHLIGHT_DURATION_MS = 5000;
@@ -83,6 +86,17 @@ export function useLocateFile(
       const rebuildHistory = async (
         targetFolderId: string,
       ): Promise<{ id: string; name: string }[]> => {
+        const { rootFolders } = useDriveStore.getState();
+        const isMultiRoot = rootFolders.length > 1;
+        const targetRoot = rootFolders.find(
+          (root) => root.id === targetFolderId,
+        );
+        if (targetRoot) {
+          return isMultiRoot
+            ? [{ id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME }]
+            : [];
+        }
+
         const rootRaw = readStoredRootFolder();
         const rootId = rootRaw || ROOT_FOLDER_ID;
 
@@ -119,6 +133,21 @@ export function useLocateFile(
             if (!pId) break;
           } else {
             pId = folderInfo.parentId;
+          }
+
+          if (isMultiRoot) {
+            // Any configured root ends the walk with its REAL name; the
+            // virtual node sits above it. Checked before the legacy primary
+            // boundary so the primary is not mislabelled "My Drive".
+            const parentRoot = rootFolders.find((root) => root.id === pId);
+            if (parentRoot) {
+              newHistory.unshift({ id: parentRoot.id, name: parentRoot.name });
+              newHistory.unshift({
+                id: VIRTUAL_ROOT_ID,
+                name: VIRTUAL_ROOT_NAME,
+              });
+              break;
+            }
           }
 
           if (pId === rootId || pId === ROOT_FOLDER_ID) {
@@ -203,8 +232,18 @@ export function useLocateFile(
 
         const rootRaw = readStoredRootFolder();
         const rootId = rootRaw || ROOT_FOLDER_ID;
+        // Multi-root: a file sitting directly in a configured root shows that
+        // root's real name (not the legacy "My Drive" label). Single-root and
+        // out-of-root files keep the legacy boundary behavior.
+        const { rootFolders } = useDriveStore.getState();
+        const isMultiRoot = rootFolders.length > 1;
+        const parentRoot = isMultiRoot
+          ? rootFolders.find((root) => root.id === parentId)
+          : undefined;
 
-        if (parentId === rootId || parentId === ROOT_FOLDER_ID) {
+        if (parentRoot) {
+          folderName = parentRoot.name;
+        } else if (parentId === rootId || parentId === ROOT_FOLDER_ID) {
           folderName = MY_DRIVE_TAB;
         } else {
           const parentInfo = await db.files.get([

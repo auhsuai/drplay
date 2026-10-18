@@ -1,7 +1,12 @@
 import { useCallback, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { recordFolderVisit } from "../utils/history";
-import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "../utils/driveConstants";
+import {
+  ROOT_FOLDER_ID,
+  MY_DRIVE_TAB,
+  VIRTUAL_ROOT_ID,
+  VIRTUAL_ROOT_NAME,
+} from "../utils/driveConstants";
 import { useDriveStore } from "../store/driveStore";
 import { db } from "../db/db";
 import { captureError } from "../utils/errorLog";
@@ -25,6 +30,19 @@ const HISTORY_WALK_LIMIT = 20;
 async function buildTrueHistory(
   targetFolderId: string,
 ): Promise<BreadcrumbItem[]> {
+  // Multi-root navigation is root-aware: every configured root is a boundary
+  // (not just the primary), and the trail starts at the synthetic virtual
+  // node. Read fresh from the store — the cross-branch rebuild awaits Dexie,
+  // and a root-list commit may land while it is in flight.
+  const { rootFolders } = useDriveStore.getState();
+  const isMultiRoot = rootFolders.length > 1;
+  const targetRoot = rootFolders.find((root) => root.id === targetFolderId);
+  if (targetRoot) {
+    return isMultiRoot
+      ? [{ id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME }]
+      : [];
+  }
+
   const rootId =
     safeLocalStorageGet(
       ROOT_FOLDER_KEY,
@@ -40,6 +58,17 @@ async function buildTrueHistory(
     const realParentId = row?.parentId;
     if (!realParentId) {
       throw new Error(`history-walk-missing-parent (folderId=${current})`);
+    }
+    if (isMultiRoot) {
+      // ANY configured root ends the walk with its REAL name; the virtual
+      // node sits above it. Checked before the legacy primary boundary so
+      // the primary is not mislabelled as "My Drive" in a multi-root trail.
+      const parentRoot = rootFolders.find((root) => root.id === realParentId);
+      if (parentRoot) {
+        newHistory.unshift({ id: parentRoot.id, name: parentRoot.name });
+        newHistory.unshift({ id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME });
+        break;
+      }
     }
     if (realParentId === rootId || realParentId === ROOT_FOLDER_ID) {
       newHistory.unshift({ id: realParentId, name: MY_DRIVE_TAB });

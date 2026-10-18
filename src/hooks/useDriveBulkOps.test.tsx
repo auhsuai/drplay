@@ -45,17 +45,22 @@ vi.mock("../store/queueOps", () => ({
 vi.mock("i18next", () => ({ t: (key: string) => key }));
 
 import { useDriveBulkOps } from "./useDriveBulkOps";
+import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
 
 const flushMicrotasks = async (): Promise<void> => {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
 };
 
-function renderBulkOps(ids: string[], onRemoveItem?: (id: string) => void) {
+function renderBulkOps(
+  ids: string[],
+  onRemoveItem?: (id: string) => void,
+  currentFolderId = "folder-1",
+) {
   const removeItem = onRemoveItem ?? vi.fn();
   const { result } = renderHook(() =>
     useDriveBulkOps({
       token: "tok",
-      currentFolderId: "folder-1",
+      currentFolderId,
       selectedIds: new Set(ids),
       onRemoveItem: removeItem,
       onRefresh: vi.fn(),
@@ -287,5 +292,42 @@ describe("useDriveBulkOps queue eviction (F7-8)", () => {
     });
 
     expect(removeTracksByDriveIdsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDriveBulkOps virtual root guard (defensive)", () => {
+  it("create/delete/move on the virtual root are no-ops that log a warning", async () => {
+    const { result, onRemoveItem } = renderBulkOps(
+      ["root-A"],
+      undefined,
+      VIRTUAL_ROOT_ID,
+    );
+
+    await act(async () => {
+      await result.current.handleCreateFolder("New Folder", vi.fn());
+    });
+    await act(async () => {
+      await result.current.handleBulkDelete(vi.fn());
+    });
+    await act(async () => {
+      await result.current.handleBulkMove("dest-1", vi.fn());
+    });
+
+    expect(createFolderMock).not.toHaveBeenCalled();
+    expect(deleteFileMock).not.toHaveBeenCalled();
+    expect(moveFileMock).not.toHaveBeenCalled();
+    expect(onRemoveItem).not.toHaveBeenCalled();
+    expect(showErrorToastMock).not.toHaveBeenCalled();
+
+    expect(captureErrorMock).toHaveBeenCalledTimes(3);
+    for (const op of ["create-folder", "bulk-delete", "bulk-move"]) {
+      expect(captureErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          source: "useDriveBulkOps",
+          message: `bulk-op-on-virtual-root:${op}`,
+        }),
+      );
+    }
   });
 });

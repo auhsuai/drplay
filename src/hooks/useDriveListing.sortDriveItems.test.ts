@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
 import type { DriveItem } from "../types";
-import { sortDriveItems } from "./useDriveListing";
+import { sortDriveItems, useDriveListing } from "./useDriveListing";
+import { db } from "../db/db";
+import { useDriveStore } from "../store/driveStore";
+import { VIRTUAL_ROOT_ID, VIRTUAL_ROOT_NAME } from "../utils/driveConstants";
 
 // Contract for the extracted pure sort (useDriveListing.ts). Behavior is
 // frozen from the pre-extraction switch: cachedTitle (metadata title) wins
@@ -147,5 +151,135 @@ describe("sortDriveItems", () => {
     const snapshot = [...items];
     sortDriveItems(items, "name", COLLATOR, noCache);
     expect(items).toEqual(snapshot);
+  });
+});
+
+describe("useDriveListing virtual root (multi-root)", () => {
+  afterEach(async () => {
+    await db.files.clear();
+    useDriveStore.setState({ rootFolders: [] });
+  });
+
+  it("synthesizes one folder item per configured root and never reads sentinel-parent rows", async () => {
+    useDriveStore.setState({
+      rootFolders: [
+        { id: "root-Z", name: "Zeta" },
+        { id: "root-A", name: "Alpha" },
+      ],
+    });
+    // A row whose parent is the virtual sentinel is proof the querier must
+    // not run: querying parentId=VIRTUAL_ROOT_ID would surface it.
+    await db.files.put({
+      id: "leak-row",
+      name: "must-not-appear.mp3",
+      mimeType: "audio/mpeg",
+      parentId: VIRTUAL_ROOT_ID,
+      trashed: false,
+      isFolder: false,
+      userEmail: "default",
+    });
+
+    const { result } = renderHook(() =>
+      useDriveListing({
+        currentFolderId: VIRTUAL_ROOT_ID,
+        currentFolderName: VIRTUAL_ROOT_NAME,
+        sortOption: "name",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.dbFiles).toEqual([]);
+    });
+    // Same sortDriveItems ordering as a normal listing: Alpha before Zeta.
+    expect(result.current.items).toEqual([
+      expect.objectContaining({
+        id: "root-A",
+        title: "Alpha",
+        isFolder: true,
+        parentId: VIRTUAL_ROOT_ID,
+      }),
+      expect.objectContaining({
+        id: "root-Z",
+        title: "Zeta",
+        isFolder: true,
+        parentId: VIRTUAL_ROOT_ID,
+      }),
+    ]);
+    expect(result.current.items.every((item) => !item.trackInfo)).toBe(true);
+    expect(result.current.items.some((item) => item.id === "leak-row")).toBe(
+      false,
+    );
+  });
+
+  it("applies the selected sort option to the root list", async () => {
+    useDriveStore.setState({
+      rootFolders: [
+        { id: "root-Z", name: "Zeta" },
+        { id: "root-A", name: "Alpha" },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useDriveListing({
+        currentFolderId: VIRTUAL_ROOT_ID,
+        currentFolderName: VIRTUAL_ROOT_NAME,
+        sortOption: "name desc",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.items).toHaveLength(2);
+    });
+    expect(result.current.items.map((item) => item.id)).toEqual([
+      "root-Z",
+      "root-A",
+    ]);
+  });
+
+  it("keeps the plain Dexie listing for a real folder when one root is configured", async () => {
+    useDriveStore.setState({
+      rootFolders: [{ id: "root-A", name: "Root A" }],
+    });
+    await db.files.bulkPut([
+      {
+        id: "child-1",
+        name: "child.mp3",
+        mimeType: "audio/mpeg",
+        parentId: "folder-child",
+        trashed: false,
+        isFolder: false,
+        size: 10,
+        userEmail: "default",
+      },
+      {
+        id: "root-row",
+        name: "root.mp3",
+        mimeType: "audio/mpeg",
+        parentId: "root-A",
+        trashed: false,
+        isFolder: false,
+        size: 10,
+        userEmail: "default",
+      },
+    ]);
+
+    const { result } = renderHook(() =>
+      useDriveListing({
+        currentFolderId: "folder-child",
+        currentFolderName: "Child",
+        sortOption: "name",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.items).toHaveLength(1);
+    });
+    expect(result.current.items[0]).toEqual(
+      expect.objectContaining({
+        id: "child-1",
+        title: "child",
+        parentId: "folder-child",
+      }),
+    );
   });
 });

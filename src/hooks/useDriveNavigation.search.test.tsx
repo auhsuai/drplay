@@ -5,7 +5,13 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { db } from "../db/db";
 import { useDriveStore } from "../store/driveStore";
 import { useDriveNavigation } from "./useDriveNavigation";
-import { MY_DRIVE_TAB, ROOT_FOLDER_ID } from "../utils/driveConstants";
+import {
+  MY_DRIVE_TAB,
+  ROOT_FOLDER_ID,
+  VIRTUAL_ROOT_ID,
+  VIRTUAL_ROOT_NAME,
+} from "../utils/driveConstants";
+import { ROOT_FOLDER_KEY } from "../utils/storageKeys";
 
 vi.mock("../utils/history", () => ({
   recordFolderVisit: vi.fn(),
@@ -311,5 +317,297 @@ describe("useDriveNavigation cross-branch folder open from search", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+const ROOT_A = "multi-root-A";
+const ROOT_B = "multi-root-B";
+const NAV_B = "nav-B";
+const NAV_C = "nav-C";
+const NAV_SUB_B = "nav-sub-B";
+const NAV_DEEP_B = "nav-deep-B";
+
+function seedMultiRootHierarchy() {
+  return db.files.bulkPut([
+    {
+      id: NAV_B,
+      name: "B",
+      mimeType: "application/vnd.google-apps.folder",
+      parentId: ROOT_A,
+      trashed: false,
+      isFolder: true,
+      userEmail: "default",
+    },
+    {
+      id: NAV_C,
+      name: "C",
+      mimeType: "application/vnd.google-apps.folder",
+      parentId: NAV_B,
+      trashed: false,
+      isFolder: true,
+      userEmail: "default",
+    },
+    {
+      id: NAV_SUB_B,
+      name: "Sub B",
+      mimeType: "application/vnd.google-apps.folder",
+      parentId: ROOT_B,
+      trashed: false,
+      isFolder: true,
+      userEmail: "default",
+    },
+    {
+      id: NAV_DEEP_B,
+      name: "Deep B",
+      mimeType: "application/vnd.google-apps.folder",
+      parentId: NAV_SUB_B,
+      trashed: false,
+      isFolder: true,
+      userEmail: "default",
+    },
+  ]);
+}
+
+describe("useDriveNavigation virtual root (multi-root)", () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    await db.files.clear();
+    await seedMultiRootHierarchy();
+    mockedRecordFolderVisit.mockClear();
+    act(() => {
+      useDriveStore.setState({
+        rootFolders: [
+          { id: ROOT_A, name: "Root A" },
+          { id: ROOT_B, name: "Root B" },
+        ],
+        currentFolderId: VIRTUAL_ROOT_ID,
+        currentFolderName: VIRTUAL_ROOT_NAME,
+        folderHistory: [],
+      });
+    });
+  });
+
+  afterEach(async () => {
+    await db.files.clear();
+    act(() => {
+      useDriveStore.setState({
+        rootFolders: [],
+        currentFolderId: ROOT_FOLDER_ID,
+        currentFolderName: MY_DRIVE_TAB,
+        folderHistory: [],
+      });
+    });
+  });
+
+  it("opening a root from the virtual root pushes the virtual root and Back returns to it", () => {
+    const { result } = renderHook(() => useDriveNavigation());
+
+    act(() => {
+      result.current.handleOpenFolder(ROOT_A, "Root A", VIRTUAL_ROOT_ID);
+    });
+
+    expect(useDriveStore.getState().currentFolderId).toBe(ROOT_A);
+    expect(useDriveStore.getState().currentFolderName).toBe("Root A");
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+    ]);
+
+    act(() => {
+      result.current.handleBack();
+    });
+
+    expect(useDriveStore.getState().currentFolderId).toBe(VIRTUAL_ROOT_ID);
+    expect(useDriveStore.getState().currentFolderName).toBe(VIRTUAL_ROOT_NAME);
+    expect(useDriveStore.getState().folderHistory).toEqual([]);
+  });
+
+  it("A/B/C navigation: Back walks A/B, A, virtual; breadcrumb click on virtual clears the trail", async () => {
+    const { result } = renderHook(() => useDriveNavigation());
+
+    act(() => {
+      result.current.handleOpenFolder(ROOT_A, "Root A", VIRTUAL_ROOT_ID);
+    });
+    act(() => {
+      result.current.handleOpenFolder(NAV_C, "C", NAV_B);
+    });
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(NAV_C);
+    });
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+      { id: ROOT_A, name: "Root A" },
+      { id: NAV_B, name: "B" },
+    ]);
+
+    act(() => {
+      result.current.handleBack();
+    });
+    expect(useDriveStore.getState().currentFolderId).toBe(NAV_B);
+    expect(useDriveStore.getState().currentFolderName).toBe("B");
+
+    act(() => {
+      result.current.handleBack();
+    });
+    expect(useDriveStore.getState().currentFolderId).toBe(ROOT_A);
+    expect(useDriveStore.getState().currentFolderName).toBe("Root A");
+
+    act(() => {
+      result.current.handleBack();
+    });
+    expect(useDriveStore.getState().currentFolderId).toBe(VIRTUAL_ROOT_ID);
+    expect(useDriveStore.getState().currentFolderName).toBe(VIRTUAL_ROOT_NAME);
+
+    // Rebuild the trail, then jump to the virtual breadcrumb item.
+    act(() => {
+      result.current.handleOpenFolder(ROOT_A, "Root A", VIRTUAL_ROOT_ID);
+    });
+    act(() => {
+      result.current.handleOpenFolder(NAV_C, "C", NAV_B);
+    });
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(NAV_C);
+    });
+
+    act(() => {
+      result.current.handleBreadcrumbClick(
+        VIRTUAL_ROOT_ID,
+        VIRTUAL_ROOT_NAME,
+        0,
+      );
+    });
+    expect(useDriveStore.getState().currentFolderId).toBe(VIRTUAL_ROOT_ID);
+    expect(useDriveStore.getState().currentFolderName).toBe(VIRTUAL_ROOT_NAME);
+    expect(useDriveStore.getState().folderHistory).toEqual([]);
+  });
+
+  it("opens a second root from the virtual root and switches roots without a fake breadcrumb", async () => {
+    const { result } = renderHook(() => useDriveNavigation());
+
+    act(() => {
+      result.current.handleOpenFolder(ROOT_B, "Root B", VIRTUAL_ROOT_ID);
+    });
+    expect(useDriveStore.getState().currentFolderId).toBe(ROOT_B);
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+    ]);
+
+    act(() => {
+      result.current.handleBack();
+    });
+    expect(useDriveStore.getState().currentFolderId).toBe(VIRTUAL_ROOT_ID);
+
+    // Search hit on another configured root (its real Drive parent is the
+    // sentinel root, not the virtual node).
+    act(() => {
+      result.current.handleOpenFolder(ROOT_A, "Root A", ROOT_FOLDER_ID);
+    });
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(ROOT_A);
+    });
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+    ]);
+    expect(
+      useDriveStore
+        .getState()
+        .folderHistory.some((entry) => entry.id === ROOT_B),
+    ).toBe(false);
+  });
+
+  it("search jump into root B rebuilds [virtual, Root B, ...ancestors]", async () => {
+    const { result } = renderHook(() => useDriveNavigation());
+
+    act(() => {
+      result.current.handleOpenFolder(ROOT_A, "Root A", VIRTUAL_ROOT_ID);
+    });
+
+    act(() => {
+      result.current.handleOpenFolder(NAV_DEEP_B, "Deep B", NAV_SUB_B);
+    });
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(NAV_DEEP_B);
+    });
+    expect(useDriveStore.getState().currentFolderName).toBe("Deep B");
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+      { id: ROOT_B, name: "Root B" },
+      { id: NAV_SUB_B, name: "Sub B" },
+    ]);
+    expect(mockedRecordFolderVisit).toHaveBeenCalledWith(NAV_DEEP_B, "Deep B");
+  });
+
+  it("search hit that IS a configured root rebuilds only [virtual]", async () => {
+    const { result } = renderHook(() => useDriveNavigation());
+
+    act(() => {
+      result.current.handleOpenFolder(ROOT_A, "Root A", VIRTUAL_ROOT_ID);
+    });
+
+    act(() => {
+      result.current.handleOpenFolder(ROOT_B, "Root B", ROOT_FOLDER_ID);
+    });
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe(ROOT_B);
+    });
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+    ]);
+  });
+});
+
+describe("useDriveNavigation single-root boundary (legacy behavior)", () => {
+  const ROOT_S = "single-root-S";
+
+  beforeEach(async () => {
+    localStorage.clear();
+    localStorage.setItem(ROOT_FOLDER_KEY, ROOT_S);
+    await db.files.clear();
+    await db.files.put({
+      id: "single-target",
+      name: "Single Target",
+      mimeType: "application/vnd.google-apps.folder",
+      parentId: ROOT_S,
+      trashed: false,
+      isFolder: true,
+      userEmail: "default",
+    });
+    act(() => {
+      useDriveStore.setState({
+        rootFolders: [{ id: ROOT_S, name: "Single Root" }],
+        currentFolderId: VIRTUAL_ROOT_ID,
+        currentFolderName: VIRTUAL_ROOT_NAME,
+        folderHistory: [],
+      });
+    });
+  });
+
+  afterEach(async () => {
+    await db.files.clear();
+    act(() => {
+      useDriveStore.setState({
+        rootFolders: [],
+        currentFolderId: ROOT_FOLDER_ID,
+        currentFolderName: MY_DRIVE_TAB,
+        folderHistory: [],
+      });
+    });
+  });
+
+  it("keeps the MY_DRIVE_TAB boundary name for the single configured root", async () => {
+    const { result } = renderHook(() => useDriveNavigation());
+
+    act(() => {
+      result.current.handleOpenFolder("single-target", "Single Target", ROOT_S);
+    });
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().currentFolderId).toBe("single-target");
+    });
+    expect(useDriveStore.getState().folderHistory).toEqual([
+      { id: ROOT_S, name: MY_DRIVE_TAB },
+    ]);
   });
 });

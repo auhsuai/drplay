@@ -12,6 +12,8 @@ import { Profiler, useState } from "react";
 import { FolderSelectionScreen } from "./FolderSelectionScreen";
 import en from "../../locales/en/translation.json";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
+import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
+import { ROOT_FOLDER_KEY } from "../../utils/storageKeys";
 
 vi.mock("react-i18next", () => {
   // Resolve keys against the real en resources so assertions read the
@@ -1236,5 +1238,173 @@ describe("FolderSelectionScreen parent-walk token/abort parity (P2-10-6)", () =>
       "parentX",
       expect.anything(),
     );
+  });
+});
+
+describe("FolderSelectionScreen startAtDriveRoot (root selection)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.driveApi.getFileParents.mockResolvedValue(null);
+    mocks.driveApi.getFileName.mockResolvedValue(null);
+    mocks.getValidToken.mockResolvedValue("test-token");
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  function renderRootPicker(startAtDriveRoot: boolean) {
+    return render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={vi.fn()}
+        initialFolderId={ROOT_FOLDER_ID}
+        initialFolderName="Old Root"
+        initialFolderHistory={[]}
+        startAtDriveRoot={startAtDriveRoot}
+      />,
+    );
+  }
+
+  async function openChild() {
+    await act(async () => {
+      deferredCallAt(0).resolve([{ id: "child", name: "Child" }]);
+      await Promise.resolve();
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /Child/ }));
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(2);
+    });
+  }
+
+  it("starts at the real Drive root and labels it My Drive instead of the stored app root", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "old-root");
+
+    renderRootPicker(true);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    expect(mocks.driveApi.listFolderChildren).toHaveBeenCalledWith(
+      "test-token",
+      ROOT_FOLDER_ID,
+      expect.anything(),
+    );
+    expect(screen.getByText(en.drive.my_drive)).not.toBeNull();
+    expect(screen.queryByText("Old Root")).toBeNull();
+  });
+
+  it("without the flag still redirects to the stored app root (bulk-move scope preserved)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "old-root");
+
+    renderRootPicker(false);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+
+    expect(mocks.driveApi.listFolderChildren).toHaveBeenCalledWith(
+      "test-token",
+      "old-root",
+      expect.anything(),
+    );
+  });
+
+  it("Back from a child folder returns to the Drive root, not the stored app root", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "old-root");
+
+    renderRootPicker(true);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await openChild();
+
+    fireEvent.click(backButton());
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(3);
+    });
+
+    expect(mocks.driveApi.listFolderChildren).toHaveBeenLastCalledWith(
+      "test-token",
+      ROOT_FOLDER_ID,
+      expect.anything(),
+    );
+  });
+
+  it("the breadcrumb root stays on the Drive root (history never points at the old root)", async () => {
+    localStorage.setItem(ROOT_FOLDER_KEY, "old-root");
+
+    renderRootPicker(true);
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(1);
+    });
+    await openChild();
+
+    expect(screen.queryByText("Old Root")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: en.drive.my_drive }));
+
+    await waitFor(() => {
+      expect(deferredCalls).toHaveLength(3);
+    });
+    expect(mocks.driveApi.listFolderChildren).toHaveBeenLastCalledWith(
+      "test-token",
+      ROOT_FOLDER_ID,
+      expect.anything(),
+    );
+  });
+});
+
+describe("FolderSelectionScreen onSelectFolderWithName (Slice C)", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installListFolderChildrenMock();
+    mocks.driveApi.searchFolders.mockResolvedValue([]);
+    mocks.getValidToken.mockResolvedValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("prefers onSelectFolderWithName and passes the current id and real name", () => {
+    const onSelectFolder = vi.fn();
+    const onSelectFolderWithName = vi.fn();
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={onSelectFolder}
+        onSelectFolderWithName={onSelectFolderWithName}
+        initialFolderId="folderB"
+        initialFolderName="Folder B"
+        initialFolderHistory={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(en.folder_selection.choose_folder));
+
+    expect(onSelectFolderWithName).toHaveBeenCalledWith("folderB", "Folder B");
+    expect(onSelectFolder).not.toHaveBeenCalled();
+  });
+
+  it("falls back to onSelectFolder(id) when onSelectFolderWithName is absent", () => {
+    const onSelectFolder = vi.fn();
+    render(
+      <FolderSelectionScreen
+        token="test-token"
+        onSelectFolder={onSelectFolder}
+        initialFolderId="folderB"
+        initialFolderName="Folder B"
+        initialFolderHistory={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(en.folder_selection.choose_folder));
+
+    expect(onSelectFolder).toHaveBeenCalledWith("folderB");
   });
 });

@@ -6,6 +6,8 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { metadataCache } from "../utils/metadata";
 import { stripAudioExtension } from "../utils/pathUtils";
 import { getCurrentUserEmail } from "../utils/storageKeys";
+import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
+import { useDriveStore } from "../store/driveStore";
 
 // Module-level so the items useMemo sort (re-run on every dbFiles change)
 // never re-initializes the collator — locale data load has real cost and
@@ -87,8 +89,16 @@ export function useDriveListing({
   const stripExt = (name: string, isFolder: boolean) =>
     isFolder ? name : stripAudioExtension(name);
 
+  // The virtual root is a synthetic list of the configured roots — not a
+  // Drive folder, so it must never reach Dexie (the sentinel is not a real
+  // file id). The store's live root list is the single source of that data.
+  const rootFolders = useDriveStore((state) => state.rootFolders);
+  const isVirtualRoot = currentFolderId === VIRTUAL_ROOT_ID;
+
   const dbFiles = useLiveQuery(() => {
-    if (!currentFolderId) return Promise.resolve<DriveFile[]>([]);
+    if (!currentFolderId || currentFolderId === VIRTUAL_ROOT_ID) {
+      return Promise.resolve<DriveFile[]>([]);
+    }
     // Per-user scoping (schema v10): only the signed-in account's rows.
     return db.files
       .where("[userEmail+parentId]")
@@ -99,6 +109,19 @@ export function useDriveListing({
   // Items memo: maps rows to DriveItems; the O(n log n) sort runs below on
   // the same memo so a dbFiles change re-maps + re-sorts once.
   const items = useMemo(() => {
+    if (isVirtualRoot) {
+      // One folder row per configured root, in the SAME sort order as a real
+      // listing (folders-first, then the active sort option). parentId is the
+      // virtual sentinel so opening a root pushes the virtual node into the
+      // breadcrumb trail (useDriveNavigation).
+      const rootItems: DriveItem[] = rootFolders.map((root) => ({
+        id: root.id,
+        title: root.name,
+        isFolder: true,
+        parentId: VIRTUAL_ROOT_ID,
+      }));
+      return sortDriveItems(rootItems, sortOption, SORT_COLLATOR, cachedTitle);
+    }
     if (!dbFiles) return [];
     const _items: DriveItem[] = dbFiles.map((file) => {
       const title = stripExt(file.name, file.isFolder);
@@ -127,7 +150,7 @@ export function useDriveListing({
     });
 
     return sortDriveItems(_items, sortOption, SORT_COLLATOR, cachedTitle);
-  }, [dbFiles, currentFolderName, sortOption]);
+  }, [dbFiles, currentFolderName, sortOption, isVirtualRoot, rootFolders]);
 
   return { items, dbFiles };
 }

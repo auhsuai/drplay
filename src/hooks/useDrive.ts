@@ -9,6 +9,7 @@ import { useDriveRootSelector } from "./useDriveRootSelector";
 export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   const {
     appRootFolder,
+    rootFolders,
     isHydrated,
     setAppRootFolder,
     currentFolderId,
@@ -22,6 +23,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   } = useDriveStore(
     useShallow((state) => ({
       appRootFolder: state.appRootFolder,
+      rootFolders: state.rootFolders,
       isHydrated: state.isHydrated,
       setAppRootFolder: state.setAppRootFolder,
       currentFolderId: state.currentFolderId,
@@ -47,10 +49,11 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   useNavStatePersistence({ hydratedRef, isLoggedIn });
   const { handleOpenFolder, handleBack, handleBreadcrumbClick } =
     useDriveNavigation();
-  const { handleSelectRootFolder } = useDriveRootSelector();
+  const { commitRootFolders, handleSelectRootFolder } = useDriveRootSelector();
 
   return {
     appRootFolder,
+    rootFolders,
     isHydrated,
     setAppRootFolder,
     currentFolderId,
@@ -64,6 +67,7 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     handleOpenFolder,
     handleBack,
     handleBreadcrumbClick,
+    commitRootFolders,
     handleSelectRootFolder,
   };
 };

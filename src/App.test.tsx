@@ -2,7 +2,11 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { loadMinimizeToTrayState } from "./App";
-import { TABS } from "./utils/driveConstants";
+import {
+  TABS,
+  VIRTUAL_ROOT_ID,
+  VIRTUAL_ROOT_NAME,
+} from "./utils/driveConstants";
 import { DEBUG_EVENTS } from "./ui/debug/debugEvents";
 import {
   LS_CURRENT_FOLDER_ID,
@@ -19,7 +23,12 @@ const mocks = vi.hoisted(() => {
   // Mutable drive values so the gate-hydration tests can flip them between
   // renders (defaults keep every pre-existing test on the old happy path).
   const driveState = {
-    value: { appRootFolder: "root" as string | null, isHydrated: true },
+    value: {
+      appRootFolder: "root" as string | null,
+      isHydrated: true,
+      rootFolders: [] as { id: string; name: string }[],
+      currentFolderId: "root",
+    },
   };
   // Handlers live in a mutable holder so a test can swap them between
   // renders and prove the App-level ref-delegate wrappers reach the
@@ -33,6 +42,9 @@ const mocks = vi.hoisted(() => {
     },
   };
   const lastLogoutExt = { value: null as null | (() => void) };
+  // Stable store action so logout-cleanup assertions can target the one
+  // instance the getState() shim exposes.
+  const setRootFolders = vi.fn();
   return {
     authState,
     driveState,
@@ -47,6 +59,7 @@ const mocks = vi.hoisted(() => {
     sidebarProps: {
       value: null as null | { onTabChange: (tab: unknown) => void },
     },
+    setRootFolders,
     invoke: vi.fn(() => Promise.resolve(undefined)),
     useAuth: vi.fn((onLogoutExt?: () => void) => {
       lastLogoutExt.value = onLogoutExt ?? null;
@@ -66,9 +79,10 @@ const mocks = vi.hoisted(() => {
     }),
     useDrive: vi.fn(() => ({
       appRootFolder: driveState.value.appRootFolder,
+      rootFolders: driveState.value.rootFolders,
       isHydrated: driveState.value.isHydrated,
       setAppRootFolder: vi.fn(),
-      currentFolderId: "root",
+      currentFolderId: driveState.value.currentFolderId,
       setCurrentFolderId: vi.fn(),
       currentFolderName: "My Drive",
       setCurrentFolderName: vi.fn(),
@@ -79,6 +93,7 @@ const mocks = vi.hoisted(() => {
       handleOpenFolder: vi.fn(),
       handleBack: vi.fn(),
       handleBreadcrumbClick: vi.fn(),
+      commitRootFolders: vi.fn(() => Promise.resolve(true)),
       handleSelectRootFolder: vi.fn(),
     })),
     usePlayer: vi.fn(() => ({
@@ -97,10 +112,15 @@ const mocks = vi.hoisted(() => {
     useServiceWorker: vi.fn(),
     useAppGlobalEvents: vi.fn(),
     useLocateFile: vi.fn(() => ({ highlightedFileId: null })),
-    useDriveStore: vi.fn(() => ({
-      setIsLoadingTracks: vi.fn(),
-      isLoadingTracks: false,
-    })),
+    useDriveStore: Object.assign(
+      vi.fn(() => ({
+        setIsLoadingTracks: vi.fn(),
+        isLoadingTracks: false,
+      })),
+      {
+        getState: () => ({ setRootFolders }),
+      },
+    ),
   };
 });
 
@@ -149,6 +169,9 @@ vi.mock("./ui/PlayerBar/PlayerBar", () => ({ PlayerBar: () => null }));
 vi.mock("./ui/PlayerBar/QueuePanel", () => ({ QueuePanel: () => null }));
 vi.mock("./ui/FolderSelection/FolderSelectionScreen", () => ({
   FolderSelectionScreen: () => <div data-testid="folder-picker-stub" />,
+}));
+vi.mock("./ui/FolderSelection/RootFolderSetupFlow", () => ({
+  RootFolderSetupFlow: () => <div data-testid="root-setup-flow-stub" />,
 }));
 vi.mock("./ui/Settings/TrashScreen", () => ({ TrashScreen: () => null }));
 vi.mock("./ui/Login/LoginScreen", () => ({
@@ -450,12 +473,12 @@ describe("Gate hydration wiring (P2-04-8/P2-04-9)", () => {
     mocks.authState.isLoggedIn = true;
   });
 
-  it("P2-04-8: folder picker stays hidden while drive is hydrating, appears once it settles with no root", async () => {
+  it("P2-04-8: setup flow stays hidden while drive is hydrating, appears once it settles with no root", async () => {
     mocks.driveState.value.appRootFolder = null;
     mocks.driveState.value.isHydrated = false;
     const { rerender } = render(<App />);
 
-    expect(screen.queryByTestId("folder-picker-stub")).toBeNull();
+    expect(screen.queryByTestId("root-setup-flow-stub")).toBeNull();
 
     mocks.driveState.value.isHydrated = true;
     await act(async () => {
@@ -463,7 +486,7 @@ describe("Gate hydration wiring (P2-04-8/P2-04-9)", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("folder-picker-stub")).toBeTruthy();
+    expect(screen.getByTestId("root-setup-flow-stub")).toBeTruthy();
   });
 
   it("P2-04-9: login overlay stays hidden until auth hydration settles", async () => {
@@ -480,5 +503,102 @@ describe("Gate hydration wiring (P2-04-8/P2-04-9)", () => {
     });
 
     expect(screen.getByTestId("login-screen-stub")).toBeTruthy();
+  });
+});
+
+describe("handleTabChange My Drive landing", () => {
+  afterEach(() => {
+    cleanup();
+    mocks.driveState.value.rootFolders = [];
+    mocks.driveState.value.currentFolderId = "root";
+  });
+
+  function lastDriveSetters() {
+    const results = mocks.useDrive.mock.results;
+    const drive = results[results.length - 1]?.value as
+      | {
+          setCurrentFolderId: ReturnType<typeof vi.fn>;
+          setCurrentFolderName: ReturnType<typeof vi.fn>;
+          setFolderHistory: ReturnType<typeof vi.fn>;
+        }
+      | undefined;
+    if (drive === undefined) throw new Error("expected useDrive call");
+    return drive;
+  }
+
+  async function clickMyDrive() {
+    await act(async () => {
+      mocks.sidebarProps.value?.onTabChange(TABS.myDrive);
+      await Promise.resolve();
+    });
+  }
+
+  it("(a) single-root tab SWITCH keeps the open folder and history untouched", async () => {
+    mocks.driveState.value.rootFolders = [{ id: "root-A", name: "Root A" }];
+    mocks.driveState.value.currentFolderId = "folder-X";
+    render(<App />);
+    const setters = lastDriveSetters();
+
+    await clickMyDrive();
+
+    // Home -> My Drive is a tab switch, not a re-click: no landing reset.
+    expect(setters.setCurrentFolderId).not.toHaveBeenCalled();
+    expect(setters.setCurrentFolderName).not.toHaveBeenCalled();
+    expect(setters.setFolderHistory).not.toHaveBeenCalled();
+    expect(mocks.driveState.value.currentFolderId).toBe("folder-X");
+  });
+
+  it("(b) single-root re-click on the active My Drive tab resets to appRootFolder", async () => {
+    mocks.driveState.value.rootFolders = [{ id: "root-A", name: "Root A" }];
+    mocks.driveState.value.currentFolderId = "folder-X";
+    render(<App />);
+
+    // First click: Home -> My Drive (just makes My Drive active).
+    await clickMyDrive();
+    const setters = lastDriveSetters();
+
+    // Second click: active My Drive tab -> legacy landing reset.
+    await clickMyDrive();
+
+    expect(setters.setCurrentFolderId).toHaveBeenCalledWith("root");
+    expect(setters.setCurrentFolderName).toHaveBeenCalledWith("My Drive");
+    expect(setters.setFolderHistory).toHaveBeenCalledWith([]);
+  });
+
+  it("(c) multi-root re-click on the active My Drive tab lands on the virtual root", async () => {
+    mocks.driveState.value.rootFolders = [
+      { id: "root-A", name: "Root A" },
+      { id: "root-B", name: "Root B" },
+    ];
+    mocks.driveState.value.currentFolderId = "root-A";
+    render(<App />);
+
+    await clickMyDrive();
+    const setters = lastDriveSetters();
+
+    await clickMyDrive();
+
+    expect(setters.setCurrentFolderId).toHaveBeenCalledWith(VIRTUAL_ROOT_ID);
+    expect(setters.setCurrentFolderName).toHaveBeenCalledWith(
+      VIRTUAL_ROOT_NAME,
+    );
+    expect(setters.setFolderHistory).toHaveBeenCalledWith([]);
+  });
+
+  it("(d) multi-root tab SWITCH keeps the current folder (no virtual landing)", async () => {
+    mocks.driveState.value.rootFolders = [
+      { id: "root-A", name: "Root A" },
+      { id: "root-B", name: "Root B" },
+    ];
+    mocks.driveState.value.currentFolderId = "root-A";
+    render(<App />);
+    const setters = lastDriveSetters();
+
+    await clickMyDrive();
+
+    expect(setters.setCurrentFolderId).not.toHaveBeenCalled();
+    expect(setters.setCurrentFolderName).not.toHaveBeenCalled();
+    expect(setters.setFolderHistory).not.toHaveBeenCalled();
+    expect(mocks.driveState.value.currentFolderId).toBe("root-A");
   });
 });

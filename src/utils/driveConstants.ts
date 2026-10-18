@@ -33,3 +33,11 @@ export const PAGINATION_PAGE_SIZE = 1000;
 // feature module) because non-upload writers dispatch it and must not
 // depend on another feature stack.
 export const DRIVE_FILES_CHANGED_EVENT = "drive-files-changed";
+
+// Sentinel id for the synthetic "Root Folders" node shown above the configured
+// roots. NOT a Google Drive file id — never send it to Drive or store it in
+// Dexie; it only exists to make the virtual node navigable in the UI.
+export const VIRTUAL_ROOT_ID = "__drplay_virtual_root__";
+
+// Default display name of the virtual root node. UI translates it by id.
+export const VIRTUAL_ROOT_NAME = "Root Folders";

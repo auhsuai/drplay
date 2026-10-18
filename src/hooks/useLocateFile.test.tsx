@@ -12,6 +12,9 @@ import { act, renderHook } from "@testing-library/react";
 import { useLocateFile } from "./useLocateFile";
 import { captureError } from "../utils/errorLog";
 import type { DriveFile } from "../db/db";
+import { useDriveStore } from "../store/driveStore";
+import { VIRTUAL_ROOT_ID, VIRTUAL_ROOT_NAME } from "../utils/driveConstants";
+import { ROOT_FOLDER_KEY } from "../utils/storageKeys";
 
 const fetchWithAuthMock = vi.hoisted(() => vi.fn());
 const filesGetMock = vi.hoisted(() => vi.fn());
@@ -491,5 +494,93 @@ describe("useLocateFile — F4/F5 regressions", () => {
     expect(signal?.aborted).toBe(true);
     expect(captureErrorLevels()).not.toContain("error");
     expect(setters.setCurrentFolderId).not.toHaveBeenCalled();
+  });
+});
+
+describe("useLocateFile multi-root (virtual root)", () => {
+  const ROOT_A = "locate-root-A";
+  const ROOT_B = "locate-root-B";
+
+  beforeEach(() => {
+    localStorage.setItem(ROOT_FOLDER_KEY, ROOT_A);
+    useDriveStore.setState({
+      rootFolders: [
+        { id: ROOT_A, name: "Root A" },
+        { id: ROOT_B, name: "Root B" },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    useDriveStore.setState({ rootFolders: [] });
+  });
+
+  it("locates a file inside root B and rebuilds [virtual, Root B]", async () => {
+    seedDb({
+      "locate-file-b": {
+        id: "locate-file-b",
+        name: "File B",
+        parentId: "locate-folder-b1",
+      },
+      "locate-folder-b1": {
+        id: "locate-folder-b1",
+        name: "Folder B1",
+        parentId: ROOT_B,
+      },
+    });
+    mockedFetch.mockResolvedValue(apiResp({ parents: ["locate-folder-b1"] }));
+    mountLocate(TOKEN, "elsewhere");
+
+    await locateAndWait({ fileId: "locate-file-b" });
+
+    expect(setters.setCurrentFolderId).toHaveBeenCalledWith("locate-folder-b1");
+    expect(setters.setCurrentFolderName).toHaveBeenCalledWith("Folder B1");
+    expect(setters.setFolderHistory).toHaveBeenCalledWith([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+      { id: ROOT_B, name: "Root B" },
+    ]);
+  });
+
+  it("locates a file directly inside a configured root: [virtual] + the real root name", async () => {
+    seedDb({
+      "locate-file-root": {
+        id: "locate-file-root",
+        name: "File Root",
+        parentId: ROOT_B,
+      },
+    });
+    mockedFetch.mockResolvedValue(apiResp({ parents: [ROOT_B] }));
+    mountLocate(TOKEN, "elsewhere");
+
+    await locateAndWait({ fileId: "locate-file-root" });
+
+    expect(setters.setCurrentFolderId).toHaveBeenCalledWith(ROOT_B);
+    expect(setters.setCurrentFolderName).toHaveBeenCalledWith("Root B");
+    expect(setters.setFolderHistory).toHaveBeenCalledWith([
+      { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME },
+    ]);
+  });
+
+  it("single-root locate keeps the legacy MY_DRIVE_TAB boundary", async () => {
+    const ROOT_S = "locate-root-S";
+    localStorage.setItem(ROOT_FOLDER_KEY, ROOT_S);
+    useDriveStore.setState({
+      rootFolders: [{ id: ROOT_S, name: "Single Root" }],
+    });
+    seedDb({
+      "locate-file-s": {
+        id: "locate-file-s",
+        name: "File S",
+        parentId: ROOT_S,
+      },
+    });
+    mockedFetch.mockResolvedValue(apiResp({ parents: [ROOT_S] }));
+    mountLocate(TOKEN, "elsewhere");
+
+    await locateAndWait({ fileId: "locate-file-s" });
+
+    expect(setters.setCurrentFolderId).toHaveBeenCalledWith(ROOT_S);
+    expect(setters.setCurrentFolderName).toHaveBeenCalledWith("My Drive");
+    expect(setters.setFolderHistory).toHaveBeenCalledWith([]);
   });
 });

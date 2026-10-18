@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ROOT_FOLDER_ID, MY_DRIVE_TAB } from "../utils/driveConstants";
+import type { RootFolder } from "../utils/rootFolders";
 
 interface FolderHistoryItem {
   id: string;
@@ -9,6 +10,11 @@ interface FolderHistoryItem {
 interface DriveState {
   /** The folder the app was told to treat as its root (null = plain My Drive). */
   appRootFolder: string | null;
+  /**
+   * Ordered root folders configured for this user. Index 0 is the primary
+   * root; empty means not configured yet (legacy single-root installs).
+   */
+  rootFolders: RootFolder[];
   /**
    * True once useDriveInit's run for the CURRENT login session has settled.
    * False while that run is still verifying (appRootFolder=null is then just
@@ -31,6 +37,8 @@ interface DriveState {
    * @param folderId Drive folder id, or null to reset to plain My Drive.
    */
   setAppRootFolder: (folderId: string | null) => void;
+  /** Replace the ordered root folder list (index 0 = primary). */
+  setRootFolders: (roots: RootFolder[]) => void;
   /** Mark the current session's drive init as settled (or restarted). */
   setIsHydrated: (isHydrated: boolean) => void;
   /** Open a different folder in the explorer. */
@@ -64,6 +72,7 @@ interface DriveState {
  */
 export const useDriveStore = create<DriveState>((set) => ({
   appRootFolder: null,
+  rootFolders: [],
   // Initial FALSE: until useDriveInit settles, appRootFolder=null is a
   // placeholder, so the folder gate must not treat it as "not configured".
   isHydrated: false,
@@ -78,6 +87,9 @@ export const useDriveStore = create<DriveState>((set) => ({
 
   setAppRootFolder: (appRootFolder) => {
     set({ appRootFolder });
+  },
+  setRootFolders: (rootFolders) => {
+    set({ rootFolders });
   },
   setIsHydrated: (isHydrated) => {
     set({ isHydrated });

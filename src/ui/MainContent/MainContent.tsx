@@ -98,6 +98,7 @@ export const MainContent = React.memo(function MainContent({
     onRemoveItem,
     sortOption,
   );
+  const isVirtualRoot = explorer.isVirtualRoot;
 
   useEffect(() => {
     isInitialMount.current = false;
@@ -240,6 +241,7 @@ export const MainContent = React.memo(function MainContent({
           onNewFolderClick={() => {
             setShowNewFolderModal(true);
           }}
+          showNewFolderButton={!isVirtualRoot}
           isInitialMount={isInitialMount}
           searchInputRef={searchInputRef}
         />
@@ -307,6 +309,7 @@ export const MainContent = React.memo(function MainContent({
               setIsSelectionMode={explorer.setIsSelectionMode}
               onBulkMoveClick={handleBulkMoveClick}
               onBulkDeleteClick={handleBulkDeleteClick}
+              hideRowMenus={isVirtualRoot}
             />
 
             <div

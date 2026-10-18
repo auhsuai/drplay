@@ -13,6 +13,7 @@ import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 interface FolderSelectionScreenProps {
   token: string;
   onSelectFolder: (folderId: string) => void;
+  onSelectFolderWithName?: (folderId: string, folderName: string) => void;
   onCancel?: (() => void) | undefined; // Optional cancel for when called from Settings
   initialFolderId?: string;
   initialFolderName?: string | undefined;
@@ -21,6 +22,10 @@ interface FolderSelectionScreenProps {
   subtitle?: string;
   appRootFolder?: string | null;
   allowEscapeRoot?: boolean;
+  // Root selection (first run / Settings / per-slot) must start at the REAL
+  // Drive root: the saved app root belongs to the previous configuration and
+  // would silently redirect the picker into it, mislabeling it "My Drive".
+  startAtDriveRoot?: boolean;
 }
 
 // Body attribute flag marking that a move picker is mounted. The picker's
@@ -35,6 +40,7 @@ export const MOVE_PICKER_OPEN_ATTR = "data-move-picker-open";
 export function FolderSelectionScreen({
   token,
   onSelectFolder,
+  onSelectFolderWithName,
   onCancel,
   initialFolderId = ROOT_FOLDER_ID,
   initialFolderName,
@@ -43,6 +49,7 @@ export function FolderSelectionScreen({
   subtitle,
   appRootFolder,
   allowEscapeRoot = false,
+  startAtDriveRoot = false,
 }: FolderSelectionScreenProps) {
   const { t } = useTranslation();
 
@@ -77,18 +84,23 @@ export function FolderSelectionScreen({
   // Resolve appRootFolder from props or localStorage.
   // localStorage access can throw SecurityError (storage blocked by policy —
   // see MDN Window.localStorage), so the read is guarded and falls back to
-  // null (same as a missing key).
+  // null (same as a missing key). Root selection skips the read entirely:
+  // the stored root is the folder being replaced, never a valid start point.
   let storedAppRoot: string | null = null;
-  try {
-    storedAppRoot = localStorage.getItem(ROOT_FOLDER_KEY);
-  } catch (err) {
-    void captureError({
-      level: "warn",
-      source: "FolderSelectionScreen",
-      message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
-    });
+  if (!startAtDriveRoot) {
+    try {
+      storedAppRoot = localStorage.getItem(ROOT_FOLDER_KEY);
+    } catch (err) {
+      void captureError({
+        level: "warn",
+        source: "FolderSelectionScreen",
+        message: `root-folder-read-failed:${err instanceof Error || err instanceof DOMException ? err.name : "unknown"}`,
+      });
+    }
   }
-  const resolvedAppRoot = appRootFolder || storedAppRoot;
+  const resolvedAppRoot = startAtDriveRoot
+    ? null
+    : appRootFolder || storedAppRoot;
 
   const {
     isLoading,
@@ -107,7 +119,12 @@ export function FolderSelectionScreen({
   } = useFolderPicker({
     token,
     initialFolderId,
-    initialFolderName,
+    // Root selection forces the Drive-root label: the hook derives both the
+    // initial and breadcrumb-root names from this value, so id and label
+    // describe the same folder even when the caller passes a stale name.
+    initialFolderName: startAtDriveRoot
+      ? t("drive.my_drive")
+      : initialFolderName,
     initialFolderHistory,
     allowEscapeRoot,
     resolvedAppRoot,
@@ -359,6 +376,10 @@ export function FolderSelectionScreen({
           )}
           <button
             onClick={() => {
+              if (onSelectFolderWithName) {
+                onSelectFolderWithName(currentFolderId, currentFolderName);
+                return;
+              }
               onSelectFolder(currentFolderId);
             }}
             className="flex items-center gap-2 bg-brand-primary hover:bg-brand-hover text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all transform active:scale-[0.98] shadow-sm"

@@ -357,3 +357,33 @@ describe("VirtualizedSongList focus ring theo modality (Slice B)", () => {
     expect(rowAt(0).className).toContain("ring-2");
   });
 });
+
+describe("VirtualizedSongList hideRowMenus (virtual root)", () => {
+  it("renders the row MoreMenu trigger by default", () => {
+    renderList();
+
+    expect(
+      within(rowAt(0)).getByRole("button", {
+        name: en.common.more_actions,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("omits every row MoreMenu trigger and context menu when hideRowMenus is true", () => {
+    renderList({
+      hideRowMenus: true,
+      items: [makeItem(0, { isFolder: true })],
+    });
+
+    expect(
+      within(rowAt(0)).queryByRole("button", {
+        name: en.common.more_actions,
+      }),
+    ).toBeNull();
+
+    const card = within(rowAt(0)).getAllByRole("button")[0];
+    if (!card) throw new Error("expected the card button");
+    fireEvent.contextMenu(card);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+});

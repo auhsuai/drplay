@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { db } from "../db/db";
 import { useDriveExplorer } from "./useDriveExplorer";
 import { useDriveStore } from "../store/driveStore";
 import { USER_EMAIL_KEY } from "../utils/storageKeys";
+import { VIRTUAL_ROOT_ID, VIRTUAL_ROOT_NAME } from "../utils/driveConstants";
 
 // Mock network layer only; keep real Dexie (fake-indexeddb) to assert DB writes.
 vi.mock("../utils/apiClient", () => ({
@@ -389,5 +390,56 @@ describe("useDriveExplorer fetchOnDemand (incremental DB writes)", () => {
     await waitFor(() => {
       expect(useDriveStore.getState().isLoadingTracks).toBe(false);
     });
+  });
+});
+
+describe("useDriveExplorer virtual root (multi-root)", () => {
+  beforeEach(async () => {
+    await db.files.clear();
+    localStorage.clear();
+    useDriveStore.setState({
+      isLoadingTracks: false,
+      rootFolders: [
+        { id: "root-A", name: "Root A" },
+        { id: "root-B", name: "Root B" },
+      ],
+    });
+    mockedFetch.mockReset();
+  });
+
+  afterEach(async () => {
+    await db.files.clear();
+    useDriveStore.setState({ rootFolders: [] });
+  });
+
+  it("returns isVirtualRoot and forces selection mode off with an empty selection", async () => {
+    const { result } = renderHook(() =>
+      useDriveExplorer(VIRTUAL_ROOT_ID, VIRTUAL_ROOT_NAME, null, () => {}),
+    );
+
+    await waitFor(() => {
+      expect(result.current.currentItems).toHaveLength(2);
+    });
+    expect(result.current.isVirtualRoot).toBe(true);
+    expect(result.current.isSelectionMode).toBe(false);
+    expect(result.current.selectedIds.size).toBe(0);
+
+    act(() => {
+      result.current.setIsSelectionMode(true);
+      result.current.setSelectedIds(new Set(["root-A"]));
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSelectionMode).toBe(false);
+    });
+    expect(result.current.selectedIds.size).toBe(0);
+  });
+
+  it("reports isVirtualRoot=false for a normal folder", () => {
+    const { result } = renderHook(() =>
+      useDriveExplorer("folder-1", "Folder", null, () => {}),
+    );
+
+    expect(result.current.isVirtualRoot).toBe(false);
   });
 });
