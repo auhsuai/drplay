@@ -96,14 +96,15 @@ export function VideoPlayerBar({
   // could never be relied on (measured live: hidden fullscreen still computed
   // opacity: 1).
   //
-  // Fullscreen: out of flow (nothing to reserve) + a scrim so the controls stay
-  // legible over bright footage. `pointer-events-none` while hidden means the
-  // bar never swallows a click on the picture behind it — and there is no
-  // invisible click-blocker, because the element itself stops receiving
-  // events. Opacity (not visibility/display) is what allows a smooth fade back
-  // with zero geometry change.
+  // Fullscreen: out of flow (nothing to reserve), painted with the SAME palette
+  // as the windowed bar on purpose (one control bar, one colour) — so it stays
+  // exactly ONE background and ONE border utility, like every other mode.
+  // `pointer-events-none` while hidden means the bar never swallows a click on
+  // the picture behind it — and there is no invisible click-blocker, because
+  // the element itself stops receiving events. Opacity (not visibility/display)
+  // is what allows a smooth fade back with zero geometry change.
   const barClass = isFullscreen
-    ? `w-full flex flex-nowrap items-center gap-2 px-3 py-2 absolute inset-x-0 bottom-0 z-30 border-t border-white/10 bg-black/60 backdrop-blur-sm transition-opacity duration-200 ${
+    ? `w-full flex flex-nowrap items-center gap-2 px-3 py-2 absolute inset-x-0 bottom-0 z-30 border-t border-gray-200 dark:border-[#2A2A2A] bg-white dark:bg-[#202124] transition-opacity duration-200 ${
         chromeVisible ? "opacity-100" : "opacity-0 pointer-events-none"
       }`
     : "w-full flex flex-nowrap items-center gap-2 px-3 py-2 shrink-0 z-20 bg-white dark:bg-[#202124] border-t border-gray-200 dark:border-[#2A2A2A] opacity-100";

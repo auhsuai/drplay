@@ -172,7 +172,7 @@ export function MediaInfoDialog({ open, onClose }: MediaInfoDialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 px-4"
       role="presentation"
       data-testid="media-info-backdrop"
       onClick={(e) => {

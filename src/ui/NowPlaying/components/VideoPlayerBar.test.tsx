@@ -269,10 +269,18 @@ describe("VideoPlayerBar fullscreen floating", () => {
     expect(el.className).toContain("bottom-0");
     // Out of flow: nothing the bar can do changes the video's box.
     expect(el.className).not.toContain("shrink-0");
-    // The fullscreen scrim REPLACES the windowed surface paint: both on the
-    // same element would leave the winner to stylesheet source order.
-    expect(el.className).not.toContain("bg-white");
-    expect(el.className).not.toContain("dark:bg-[#202124]");
+    // Fullscreen deliberately SHARES the windowed palette — do not "fix" this
+    // back into a separate scrim. The collision this guards against is the old
+    // scrim utilities returning alongside these, not the palette being shared.
+    expect(el.className).toContain("bg-white");
+    expect(el.className).toContain("dark:bg-[#202124]");
+    expect(el.className).toContain("border-gray-200");
+    expect(el.className).toContain("dark:border-[#2A2A2A]");
+    // Exactly ONE background and ONE border colour utility: two competing ones
+    // on the same element leave the winner to stylesheet source order (the trap
+    // that shipped the broken VideoMenu flyout).
+    expect(el.className).not.toContain("bg-[#121212]");
+    expect(el.className).not.toContain("border-white/10");
   });
 
   it("hidden fullscreen = opacity + pointer-events-none, never display:none", () => {
