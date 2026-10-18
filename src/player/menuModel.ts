@@ -44,6 +44,8 @@ import {
 } from "../lib/mpvControl";
 import { describeError } from "../lib/mpvProtocol";
 import { captureError } from "../utils/errorLog";
+import { episodeNumberFromName } from "../utils/episodeNumber";
+import { MEDIA_KIND_VIDEO, classifyMediaKind } from "../utils/mediaKind";
 import { showSuccessToast } from "../utils/simpleToast";
 import { usePlayerStore } from "../store/playerStore";
 import type { NativeMenuEntry } from "../lib/nativeMenu";
@@ -327,6 +329,8 @@ interface MenuItemFields {
   enabled?: boolean;
   checked?: boolean;
   children?: NativeMenuEntry[];
+  /** DrPlay-only right-aligned hint; see NativeMenuItem.detail. */
+  detail?: string | undefined;
 }
 
 /** One place that turns optional fields into an exactOptionalPropertyTypes-safe item. */
@@ -339,6 +343,7 @@ function menuItem(fields: MenuItemFields): NativeMenuEntry {
     ...(fields.enabled !== undefined ? { enabled: fields.enabled } : {}),
     ...(fields.checked !== undefined ? { checked: fields.checked } : {}),
     ...(fields.children !== undefined ? { children: fields.children } : {}),
+    ...(fields.detail !== undefined ? { detail: fields.detail } : {}),
   };
 }
 
@@ -596,7 +601,6 @@ function videoSubmenuChildren(s: VideoMenuSnapshot): NativeMenuEntry[] {
         }),
       ),
     }),
-    commandEntry(PLAYER_COMMAND_IDS.PLAYER_SNAPSHOT),
   ];
 }
 
@@ -733,6 +737,22 @@ function playbackSubmenuChildren(s: VideoMenuSnapshot): NativeMenuEntry[] {
   ];
 }
 
+/**
+ * The right-aligned episode badge of a queue row, or undefined when the name
+ * holds no confident episode number.
+ *
+ * Only VIDEO files get one: an mp3's bare "10" (`Album - 10 Tracks`) is a track
+ * count, not an episode, and a name alone cannot tell the two apart — the
+ * extension can. `originalName` is the raw Drive filename, which is what the
+ * release patterns are written against; `title` is the fallback.
+ */
+function queueRowDetail(track: Track): string | undefined {
+  const name = track.originalName ?? track.title;
+  if (name === "") return undefined;
+  if (classifyMediaKind(name) !== MEDIA_KIND_VIDEO) return undefined;
+  return episodeNumberFromName(name) ?? undefined;
+}
+
 function playlistSubmenuChildren(s: VideoMenuSnapshot): NativeMenuEntry[] {
   const slice = queueMenuSlice(s.queue, s.currentTrackId);
   const queueItems = slice.items.map((track, index) =>
@@ -742,6 +762,7 @@ function playlistSubmenuChildren(s: VideoMenuSnapshot): NativeMenuEntry[] {
         `${String(slice.start + index + 1)}. ${track.title}`,
       ),
       checked: track.id === s.currentTrackId,
+      detail: queueRowDetail(track),
     }),
   );
 
@@ -819,7 +840,6 @@ export function buildContextMenuModel(
           children: playlistSubmenuChildren(s),
         }),
         SEPARATOR_ENTRY,
-        commandEntry(PLAYER_COMMAND_IDS.PLAYER_SNAPSHOT),
         commandEntry(PLAYER_COMMAND_IDS.PLAYER_MEDIA_INFO),
       ];
     case "audio":

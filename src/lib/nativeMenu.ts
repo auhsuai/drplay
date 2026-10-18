@@ -20,6 +20,14 @@ export interface NativeMenuItem {
   enabled?: boolean;
   checked?: boolean;
   children?: NativeMenuEntry[];
+  /**
+   * Short right-aligned hint for the DrPlay renderer only — the episode number
+   * of a queue row, whose name is otherwise identical across a series. The
+   * Win32 popup has no such column and simply ignores this field (its
+   * serde struct does not use `deny_unknown_fields`), so the IPC contract is
+   * unchanged.
+   */
+  detail?: string | undefined;
 }
 
 export type NativeMenuEntry = NativeMenuSeparator | NativeMenuItem;

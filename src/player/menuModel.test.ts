@@ -273,7 +273,6 @@ describe("buildContextMenuModel — full menu skeleton", () => {
       MENU_IDS.fullPlayback,
       MENU_IDS.fullPlaylist,
       "---",
-      PLAYER_COMMAND_IDS.PLAYER_SNAPSHOT,
       PLAYER_COMMAND_IDS.PLAYER_MEDIA_INFO,
     ]);
   });
@@ -310,14 +309,29 @@ describe("buildContextMenuModel — full menu skeleton", () => {
     expect(windowed.shortcut).toBe("F");
   });
 
-  it("snapshot + media info carry their command shortcuts", () => {
+  it("media info keeps its command shortcut", () => {
     const entries = buildContextMenuModel("full", snapshot());
-    expect(item(entries, PLAYER_COMMAND_IDS.PLAYER_SNAPSHOT).shortcut).toBe(
-      "Ctrl+S",
-    );
     expect(item(entries, PLAYER_COMMAND_IDS.PLAYER_MEDIA_INFO).shortcut).toBe(
       "I",
     );
+  });
+
+  it("carries no screenshot entry anywhere in the full menu (root nor submenus)", () => {
+    // Take screenshot was removed from the menu; the Ctrl+S command stays
+    // registered in commands.ts, only the menu row is gone.
+    for (const section of [
+      "full",
+      "audio",
+      "video",
+      "subtitle",
+      "playback",
+      "playlist",
+    ] as const) {
+      const ids = flatten(buildContextMenuModel(section, snapshot())).map(
+        (entry) => entry.id,
+      );
+      expect(ids).not.toContain(PLAYER_COMMAND_IDS.PLAYER_SNAPSHOT);
+    }
   });
 });
 
@@ -520,7 +534,7 @@ describe("buildContextMenuModel — video section", () => {
     expect(item(entries, MENU_IDS.deinterlace).shortcut).toBe("D");
   });
 
-  it("fullscreen / fit / snapshot live inside the video section too", () => {
+  it("fullscreen / fit live inside the video section too, and no snapshot row remains", () => {
     const entries = buildContextMenuModel(
       "video",
       snapshot({ isFullscreen: true }),
@@ -531,8 +545,8 @@ describe("buildContextMenuModel — video section", () => {
     expect(item(entries, PLAYER_COMMAND_IDS.PLAYER_FIT_WINDOW).shortcut).toBe(
       "Ctrl+0",
     );
-    expect(item(entries, PLAYER_COMMAND_IDS.PLAYER_SNAPSHOT).shortcut).toBe(
-      "Ctrl+S",
+    expect(flatten(entries).map((entry) => entry.id)).not.toContain(
+      PLAYER_COMMAND_IDS.PLAYER_SNAPSHOT,
     );
   });
 });
@@ -674,6 +688,56 @@ describe("buildContextMenuModel — playlist section", () => {
 
     expect(label.length).toBeLessThanOrEqual(60);
     expect(label.endsWith("…")).toBe(true);
+  });
+
+  it("each queue row carries its episode number as a right-aligned detail", () => {
+    // A queue of one series is unusable without it: every label is the same
+    // truncated "[AEQG][1080p] Dragon B…".
+    const queue = [
+      { ...track("a", "[AEQG][1080p] Dragon Ball Z - 038 [1080P].mkv") },
+      { ...track("b", "[AEQG][1080p] Dragon Ball Z - 039v2 [1080P].mkv") },
+      { ...track("c", "[AEQG][1080p] Movie [1080P].mkv") },
+    ];
+    const entries = buildContextMenuModel("playlist", snapshot({ queue }));
+
+    expect(item(entries, `${MENU_PREFIXES.queue}a`).detail).toBe("038");
+    expect(item(entries, `${MENU_PREFIXES.queue}b`).detail).toBe("039");
+    // No number in the name -> no badge, not a guessed one.
+    expect(item(entries, `${MENU_PREFIXES.queue}c`).detail).toBeUndefined();
+  });
+
+  it("reads the episode from originalName when the title was rewritten", () => {
+    const entries = buildContextMenuModel(
+      "playlist",
+      snapshot({
+        queue: [
+          {
+            ...track("a", "Episode 12"),
+            originalName: "[SubsPlease] Show Name - 12 [1080p].mkv",
+          },
+        ],
+      }),
+    );
+
+    expect(item(entries, `${MENU_PREFIXES.queue}a`).detail).toBe("12");
+  });
+
+  it("never badges an audio file — a bare number there is a track count", () => {
+    const entries = buildContextMenuModel(
+      "playlist",
+      snapshot({ queue: [track("a", "Album - 10 Tracks.mp3")] }),
+    );
+
+    expect(item(entries, `${MENU_PREFIXES.queue}a`).detail).toBeUndefined();
+  });
+
+  it("leaves detail off every entry that is not a queue row", () => {
+    const entries = buildContextMenuModel("full", snapshot());
+
+    for (const entry of flatten(entries)) {
+      if (entry.id.startsWith(MENU_PREFIXES.queue)) continue;
+      expect(entry.detail).toBeUndefined();
+    }
   });
 
   it("repeat children check the active play mode", () => {
