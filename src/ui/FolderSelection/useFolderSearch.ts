@@ -1,0 +1,189 @@
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { matchesNormalized } from "../../search/searchEngine";
+import { getValidToken } from "../../utils/apiClient";
+import { FOLDER_MIME } from "../../utils/driveApi";
+import { searchFolders } from "../../utils/drivePagination";
+import { showErrorToast } from "../../utils/simpleToast";
+import { captureError } from "../../utils/errorLog";
+import { isAbortError } from "../../hooks/player/utils";
+import {
+  FOLDER_MODULE,
+  SEARCH_DEBOUNCE_MS,
+  classifyFolderError,
+  isAborted,
+} from "./folderSelectionHelpers";
+import type { FolderItem } from "./folderSelectionHelpers";
+
+export function useFolderSearch({
+  token,
+  folders,
+  currentFolderId,
+}: {
+  token: string;
+  folders: FolderItem[];
+  currentFolderId: string;
+}) {
+  const { t } = useTranslation();
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [apiSearchResults, setApiSearchResults] = useState<FolderItem[]>([]);
+  const [isSearchingApi, setIsSearchingApi] = useState(false);
+  const apiSearchAbortRef = useRef<AbortController | null>(null);
+
+  const filteredFolders = useMemo(() => {
+    if (!searchQuery.trim()) return folders;
+    // matchesNormalized = same diacritics-insensitive, multi-token AND
+    // semantics as global search (query "doi" finds folder "Đổi mới").
+    return folders.filter((f) => matchesNormalized(f.name, searchQuery));
+  }, [folders, searchQuery]);
+
+  // B-K1: the deeper Drive search spans sublevels, so its hits can repeat a
+  // direct child that already matched locally — rendering the same id in
+  // both sections duplicated the card and tripped React's duplicate-key
+  // warning (FolderGrid keys both sections by folder.id). The visible API
+  // section drops every id the local listing already shows (plus the current
+  // folder itself); deriving at render keeps the filter immune to stale
+  // snapshots even when the folder list lands after the search resolved.
+  const visibleApiResults = useMemo(() => {
+    if (apiSearchResults.length === 0) return apiSearchResults;
+    const localIds = new Set(folders.map((f) => f.id));
+    return apiSearchResults.filter(
+      (f) => f.id !== currentFolderId && !localIds.has(f.id),
+    );
+  }, [apiSearchResults, folders, currentFolderId]);
+
+  // React "adjusting state during render" pattern: instead of resetting the
+  // search in an effect (react-hooks/set-state-in-effect), reset it right
+  // here when the active folder changes — state is adjusted synchronously
+  // during render, before the browser paints the new folder.
+  const [lastFetchedFolderId, setLastFetchedFolderId] =
+    useState(currentFolderId);
+  if (lastFetchedFolderId !== currentFolderId) {
+    setLastFetchedFolderId(currentFolderId);
+    setSearchQuery("");
+    setApiSearchResults([]);
+  }
+
+  // API search results render whenever the query is non-empty (local and
+  // deeper results coexist). When the query empties, stale results and the
+  // in-flight flag must be cleared — done here during render, not inside the
+  // debounce effect (the effect never sees an empty query).
+  const apiSearchActive = Boolean(searchQuery.trim());
+  const [lastApiSearchActive, setLastApiSearchActive] =
+    useState(apiSearchActive);
+  if (lastApiSearchActive !== apiSearchActive) {
+    setLastApiSearchActive(apiSearchActive);
+    if (!apiSearchActive) {
+      setApiSearchResults([]);
+      setIsSearchingApi(false);
+    }
+  }
+
+  // Stale-guard: a query change must drop the previous query's API results
+  // synchronously during render — otherwise the debounce window keeps
+  // painting folders that matched the old query under the new one.
+  const [lastSearchQuery, setLastSearchQuery] = useState(searchQuery);
+  if (lastSearchQuery !== searchQuery) {
+    setLastSearchQuery(searchQuery);
+    setApiSearchResults([]);
+  }
+
+  const searchSubfolders = useCallback(
+    async (query: string) => {
+      apiSearchAbortRef.current?.abort();
+      if (query.trim().length < 2) {
+        setApiSearchResults([]);
+        return;
+      }
+      const controller = new AbortController();
+      apiSearchAbortRef.current = controller;
+      setIsSearchingApi(true);
+      try {
+        const safeQuery = query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const q = `name contains '${safeQuery}' and mimeType='${FOLDER_MIME}' and trashed=false`;
+        // Same fresh-token source as fetchFolders: the raw prop token can be
+        // expired while getValidToken() refreshes (falling back to the prop
+        // when no token is available). Rejection is caught below like any
+        // other search failure.
+        const freshToken = (await getValidToken()) || token;
+        // The abort can land while this call was parked on the token refresh
+        // (controller.signal does not stop an await) — bail out before hitting
+        // Drive and before any state write, mirroring fetchFolders.
+        if (isAborted(controller)) return;
+        const files = await searchFolders(freshToken, q, controller.signal);
+        // Overlap filtering lives in visibleApiResults (single source of
+        // truth, recomputed against the current local listing at render).
+        setApiSearchResults(files);
+      } catch (e: unknown) {
+        if (!isAbortError(e)) {
+          setApiSearchResults([]);
+          void captureError({
+            level: "warn",
+            source: FOLDER_MODULE,
+            message: `api-search-failed: ${classifyFolderError(e)}`,
+          });
+          showErrorToast(t("folder_selection.search_error"));
+        }
+      } finally {
+        // Identity guard (same as fetchFolders): a superseded call must not
+        // clear the spinner of the newer search still in flight — that flashed
+        // the empty state mid-search while the debounce raced the token wait.
+        if (apiSearchAbortRef.current === controller) {
+          setIsSearchingApi(false);
+        }
+      }
+    },
+    // currentFolderId left the deps when overlap filtering moved to the
+    // visibleApiResults derivation; a folder change resets the query during
+    // render anyway, which re-runs the debounce effect below.
+    [token, t],
+  );
+
+  useEffect(() => {
+    // Deeper search fires for EVERY non-empty query regardless of local
+    // matches — the old filteredFolders.length gate silently skipped the
+    // Drive API search whenever a local folder matched, so folders outside
+    // the current directory were unreachable ("can't search folder" bug).
+    // Min-length 2 lives inside searchSubfolders; abort/unmount cleanup
+    // below is unchanged.
+    if (!searchQuery.trim()) return;
+    const timer = setTimeout(() => {
+      void searchSubfolders(searchQuery.trim());
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      apiSearchAbortRef.current?.abort();
+    };
+  }, [searchQuery, searchSubfolders]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        if (document.activeElement === searchInputRef.current) {
+          searchInputRef.current?.blur();
+          setSearchQuery("");
+        } else {
+          searchInputRef.current?.focus();
+        }
+      }
+      // Escape lives in FolderSelectionScreen (single owner; QP-3 cluster) —
+      // the old branch here double-handled the same press.
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  return {
+    searchQuery,
+    setSearchQuery,
+    filteredFolders,
+    apiSearchResults: visibleApiResults,
+    isSearchingApi,
+    searchInputRef,
+  };
+}
