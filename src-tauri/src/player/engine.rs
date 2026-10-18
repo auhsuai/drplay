@@ -2,28 +2,30 @@
 //! wire-state bookkeeping (epoch/conn/shutdown), mirroring mpv/ipc.rs
 //! semantics exactly (ipc/tests.rs is the reference for the wire cases).
 
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CString};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use serde_json::Value;
 
-use super::events;
-use super::ffi::{self, MpvEvent, MpvNode};
+use super::events as wire_events;
+use super::ffi::{self, MpvNode};
 use super::options;
 use super::render::{
     RenderHost, RenderSurface, RENDER_INITIAL_HEIGHT, RENDER_INITIAL_WIDTH, RENDER_READY_TIMEOUT,
 };
 use crate::mpv::{EventSink, IpcMessage};
 
+use self::events::{event_loop, join_with_timeout, mpv_error_message};
+
 /// How long `mpv_wait_event` blocks before the loop re-checks the stop flag.
 /// `mpv_wakeup()` interrupts it immediately on destroy, so this only bounds
 /// the idle wakeup cadence.
-const EVENT_WAIT_TIMEOUT_SECS: f64 = 1.0;
+pub(super) const EVENT_WAIT_TIMEOUT_SECS: f64 = 1.0;
 /// Bound for the event thread to observe the stop flag and exit. The wakeup
 /// runs first, so this is a pathological-case guard, not a wait.
 const EVENT_THREAD_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -221,7 +223,7 @@ impl WireState {
 /// while calling FFI, teardown holds the write guard, and the event thread is
 /// joined before `mpv_destroy` — so no call can race destruction.
 #[derive(Clone, Copy)]
-struct SendHandle(*mut ffi::MpvHandle);
+pub(super) struct SendHandle(*mut ffi::MpvHandle);
 
 unsafe impl Send for SendHandle {}
 unsafe impl Sync for SendHandle {}
@@ -578,7 +580,7 @@ log::info!("[player] libmpv engine created (conn {})", engine.conn());
                 message: mpv_error_message(&self.api, code),
             });
         }
-        let value = events::node_to_json(&node);
+        let value = wire_events::node_to_json(&node);
         // SAFETY: mpv filled the node on success; free its contents on both
         // paths (conversion failure included).
         unsafe { (self.api.free_node_contents)(&mut node) };
@@ -613,7 +615,7 @@ log::info!("[player] libmpv engine created (conn {})", engine.conn());
                 message: mpv_error_message(&self.api, code),
             });
         }
-        let data = events::node_to_json(&result);
+        let data = wire_events::node_to_json(&result);
         // SAFETY: mpv filled the node on success; its contents are ours to
         // free. Freed on BOTH paths (conversion failure included).
         unsafe { (self.api.free_node_contents)(&mut result) };
@@ -687,160 +689,6 @@ log::info!("[player] libmpv engine created (conn {})", engine.conn());
     }
 }
 
-/// The engine's single event consumer. Owns `mpv_wait_event` for the whole
-/// handle lifetime (client.h: only one thread may call it per handle), maps
-/// every event to the frozen wire shapes and stops on the flag or on a core
-/// shutdown.
-fn event_loop(api: Arc<ffi::Api>, handle: SendHandle, core: Arc<WireState>, stop: Arc<AtomicBool>) {
-    loop {
-        if stop.load(Ordering::SeqCst) {
-            return;
-        }
-        // SAFETY: this thread is the only mpv_wait_event caller on the handle.
-        // The returned event is valid until the next wait_event call, so every
-        // branch below copies out what it needs before looping.
-        let event = unsafe { (api.wait_event)(handle.0, EVENT_WAIT_TIMEOUT_SECS) };
-        if event.is_null() {
-            // client.h promises this never happens; treat it as engine loss.
-            log::error!("[player] mpv_wait_event returned NULL; treating as engine loss");
-            core.emit_close_once();
-            return;
-        }
-        let event = unsafe { &*event };
-        match event.event_id {
-            ffi::MPV_EVENT_NONE => {} // timeout or wakeup: re-check the stop flag
-            ffi::MPV_EVENT_SHUTDOWN => {
-                // The core quit on its own (e.g. a `quit` command): surface the
-                // loss exactly like the sidecar pipe close (silent when the
-                // teardown was commanded), and stop accepting commands so the
-                // next `mpv_spawn` replaces this engine instead of reusing a
-                // dead one (the sidecar's dead-process reap, mirrored).
-                stop.store(true, Ordering::SeqCst);
-                core.emit_close_once();
-                return;
-            }
-            ffi::MPV_EVENT_LOG_MESSAGE => dispatch_log(event),
-            ffi::MPV_EVENT_PROPERTY_CHANGE => dispatch_property(event, &core),
-            ffi::MPV_EVENT_END_FILE => dispatch_end_file(&api, event, &core),
-            ffi::MPV_EVENT_FILE_LOADED => {
-                core.emit(IpcMessage::MpvEvent {
-                    event: event_name(&api, event.event_id),
-                    reason: None,
-                    error: None,
-                });
-            }
-            _ => {
-                // Other events (seek, playback-restart, ...) are not part of
-                // the frozen wire contract; the frontend ignores them.
-            }
-        }
-    }
-}
-
-/// Warn/error log messages reach the app log; everything below warn was
-/// filtered by `mpv_request_log_messages` already (belt and braces).
-fn dispatch_log(event: &MpvEvent) {
-    // SAFETY: LOG_MESSAGE events always carry an mpv_event_log_message*
-    // (client.h mpv_event.data contract).
-    let message = unsafe { &*(event.data as *const ffi::MpvEventLogMessage) };
-    if message.text.is_null() {
-        return;
-    }
-    let text = unsafe { CStr::from_ptr(message.text) }.to_string_lossy();
-    let prefix = if message.prefix.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(message.prefix) }.to_string_lossy().into_owned()
-    };
-    let text = text.trim_end();
-    match message.log_level {
-        ffi::MPV_LOG_LEVEL_FATAL | ffi::MPV_LOG_LEVEL_ERROR => {
-            log::error!("[mpv] {prefix}: {text}")
-        }
-        ffi::MPV_LOG_LEVEL_WARN => log::warn!("[mpv] {prefix}: {text}"),
-        _ => {}
-    }
-}
-
-fn dispatch_property(event: &MpvEvent, core: &WireState) {
-    // SAFETY: PROPERTY_CHANGE events always carry an mpv_event_property*.
-    let property = unsafe { &*(event.data as *const ffi::MpvEventProperty) };
-    if property.name.is_null() {
-        return; // cannot name the property: nothing the wire could carry
-    }
-    let name = unsafe { CStr::from_ptr(property.name) }.to_string_lossy().into_owned();
-    let data = if property.format == ffi::MPV_FORMAT_NODE && !property.data.is_null() {
-        // SAFETY: NODE format means data points to an mpv_node valid until the
-        // next wait_event; it is converted (copied) before returning.
-        let node = unsafe { &*(property.data as *const MpvNode) };
-        match events::node_to_json(node) {
-            Ok(value) => value,
-            Err(convert_error) => {
-                // Never kill the event stream over one bad value; the wire
-                // still gets a null, like mpv's own writer would produce.
-                log::warn!("[player] property {name} node conversion failed: {convert_error}");
-                Value::Null
-            }
-        }
-    } else {
-        // MPV_FORMAT_NONE = unavailable; the legacy IPC node omits `data`,
-        // which the wire parser turns into null (mpv/ipc/wire.rs:35).
-        Value::Null
-    };
-    core.emit(IpcMessage::PropertyChange { name, data });
-}
-
-fn dispatch_end_file(api: &ffi::Api, event: &MpvEvent, core: &WireState) {
-    // SAFETY: END_FILE events always carry an mpv_event_end_file*.
-    let end_file = unsafe { &*(event.data as *const ffi::MpvEventEndFile) };
-    let (reason, error) =
-        events::end_file_payload(end_file.reason, end_file.error, |code| mpv_error_message(api, code));
-    core.emit(IpcMessage::MpvEvent {
-        event: event_name(api, event.event_id),
-        reason: Some(reason),
-        error,
-    });
-}
-
-/// Wire event name from mpv itself (e.g. `end-file`, `file-loaded`), exactly
-/// the strings the IPC layer would have emitted.
-fn event_name(api: &ffi::Api, event_id: ffi::MpvEventId) -> String {
-    // SAFETY: plain extern getter; the returned string is static.
-    let pointer = unsafe { (api.event_name)(event_id) };
-    if pointer.is_null() {
-        return format!("unknown-{event_id}");
-    }
-    unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
-}
-
-fn mpv_error_message(api: &ffi::Api, code: c_int) -> String {
-    // SAFETY: plain extern getter; the returned string is static.
-    let pointer = unsafe { (api.error_string)(code) };
-    if pointer.is_null() {
-        return format!("unknown error {code}");
-    }
-    unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
-}
-
-fn join_with_timeout(
-    thread: JoinHandle<()>,
-    timeout: Duration,
-    thread_name: &str,
-) -> Result<(), EngineError> {
-    let deadline = Instant::now() + timeout;
-    while !thread.is_finished() {
-        if Instant::now() >= deadline {
-            return Err(EngineError::EventThread {
-                message: format!("{thread_name} did not stop within {timeout:?} after wakeup"),
-            });
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    thread.join().map_err(|_panic| EngineError::EventThread {
-        message: format!("{thread_name} panicked during teardown"),
-    })
-}
-
 /// Reply of `mpv_command`: the command's data plus the load epoch current at
 /// reply time (the contract's `{data, load_epoch}`).
 #[derive(Debug)]
@@ -848,6 +696,8 @@ pub(crate) struct CommandReply {
     pub(crate) data: Value,
     pub(crate) load_epoch: u64,
 }
+
+mod events;
 
 #[cfg(test)]
 mod tests;
