@@ -1,54 +1,17 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { Track } from "../../types";
-import {
-  Music,
-  Play,
-  Camera,
-  SquareCheckBig,
-  GripVertical,
-} from "lucide-react";
-import type { Playlist } from "../../utils/playlists";
-import {
-  getPlaylistById,
-  removeTrackFromPlaylist,
-  removeTracksFromPlaylist,
-  updatePlaylist,
-} from "../../utils/playlists";
+import { Music, Play, Camera, SquareCheckBig } from "lucide-react";
+import { updatePlaylist } from "../../utils/playlists";
 import { ImageCropperModal } from "../components/ImageCropperModal";
-import { MoreMenu } from "../components/MoreMenu";
-import { QueueRowCheckbox } from "../PlayerBar/QueueRow";
 import { QueueSelectionToolbar } from "../PlayerBar/QueueSelectionToolbar";
 import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { showErrorToast } from "../../utils/simpleToast";
-import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
-import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
-import { applyArrangeDrop, resolveArrangeDrop } from "./arrangeReorder";
-
-const PLAYLIST_VIEW_MODULE = "PlaylistView";
-
-// Same threshold convention as useHorizontalScroll: a gesture only becomes a
-// drag after this much movement, so the pointerup still fires the row's click.
-const ARRANGE_DRAG_THRESHOLD_PX = 5;
-
-// Pointer-drag session for Arrange mode. The tracks/selection snapshots are
-// taken at gesture start: the drop must resolve against exactly the list the
-// user saw when the drag began (persist happens once, on drop, §21/§22).
-interface ArrangeDragState {
-  pointerId: number;
-  startY: number;
-  isDragging: boolean;
-  insertionIndex: number | null;
-  captureEl: HTMLElement;
-  tracksSnapshot: Track[];
-  selectedSnapshot: Set<string>;
-}
-
-interface ArrangeDragPreview {
-  active: boolean;
-  indicatorY: number | null;
-}
+import { PLAYLIST_VIEW_MODULE, usePlaylistData } from "./usePlaylistData";
+import { usePlaylistSelection } from "./usePlaylistSelection";
+import { usePlaylistArrange } from "./usePlaylistArrange";
+import { PlaylistTrackList } from "./PlaylistTrackList";
 
 interface PlaylistViewProps {
   playlistId: string;
@@ -62,118 +25,57 @@ export function PlaylistView({
   currentTrack,
 }: PlaylistViewProps) {
   const { t } = useTranslation();
-  const [playlist, setPlaylist] = useState<Playlist | null>(null);
-  const [isLoadSettled, setIsLoadSettled] = useState(false);
+  const { playlist, setPlaylist, isLoadSettled } = usePlaylistData(playlistId);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isCropperOpen, setIsCropperOpen] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
-  const [contextMenu, setContextMenu] = useState<{
-    index: number;
-    x: number;
-    y: number;
-  } | null>(null);
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [arrangeMode, setArrangeMode] = useState(false);
-  const [dragPreview, setDragPreview] = useState<ArrangeDragPreview>({
-    active: false,
-    indicatorY: null,
-  });
-  const listRef = useRef<HTMLDivElement>(null);
-  // Set on drag end so the pointerup's synthetic click cannot toggle the row
-  // that was just dragged; cleared on the next pointerdown.
-  const suppressRowClickRef = useRef(false);
-  const dragRef = useRef<ArrangeDragState | null>(null);
-  const dragHandlersRef = useRef<{
-    move: (event: PointerEvent) => void;
-    end: (event: PointerEvent) => void;
-  } | null>(null);
-
-  const loadPlaylist = useCallback(async () => {
-    try {
-      const data = await getPlaylistById(playlistId);
-      setPlaylist(data);
-    } catch (e) {
-      void captureError({
-        level: "error",
-        source: PLAYLIST_VIEW_MODULE,
-        message: `failed-to-load-playlist: ${e instanceof Error ? e.message : String(e)}`,
-      });
-      showErrorToast(t("playlist.load_error"));
-    } finally {
-      // Distinguishes "still loading" (render nothing) from "settled without a
-      // playlist" (playlist missing/deleted or load failed → message).
-      setIsLoadSettled(true);
-    }
-  }, [playlistId, t]);
-
-  useEffect(() => {
-    loadPlaylist().catch(
-      (err: unknown) =>
-        void captureError({
-          level: "error",
-          source: PLAYLIST_VIEW_MODULE,
-          message: `failed-to-load-playlist: ${err instanceof Error ? err.message : String(err)}`,
-        }),
-    );
-    const handlePlaylistsUpdated = () => {
-      void loadPlaylist();
-    };
-    const handleUserChanged = () => {
-      void loadPlaylist();
-    };
-    window.addEventListener("playlists-updated", handlePlaylistsUpdated);
-    window.addEventListener("user-changed", handleUserChanged);
-    return () => {
-      window.removeEventListener("playlists-updated", handlePlaylistsUpdated);
-      window.removeEventListener("user-changed", handleUserChanged);
-    };
-  }, [playlistId, loadPlaylist]);
-
-  useEffect(() => {
-    if (!playlist) return;
-    if (playlist.tracks.length > 0) prefetchVisibleTracks(playlist.tracks);
-  }, [playlist]);
-
-  // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
-  // empty state by swapping in a valid Playlist with no tracks. Keeps the
-  // real playlist's identity when it is already loaded; otherwise builds a
-  // minimal fake from the mount-time playlistId (the view only mounts while a
-  // playlist_* tab is active, so playlistId is stable for the mounted view).
-  // onDebugEvent no-ops in production builds; the listener never runs there.
-  useEffect(() => {
-    return onDebugEvent(DEBUG_EVENTS.PLAYLIST_EMPTY, () => {
-      setPlaylist((prev) =>
-        prev
-          ? { ...prev, tracks: [] }
-          : {
-              id: playlistId,
-              userEmail: "",
-              name: playlistId,
-              createdAt: 0,
-              tracks: [],
-            },
-      );
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once debug listener; re-subscribing on playlistId change would only matter after a direct playlist-to-playlist switch (no remount), and the real load effect overwrites the fake on that switch anyway.
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      // Unmount mid-drag must not leave window listeners behind. Uses the ref
-      // directly (the drag helpers below are not initialized on the
-      // early-return path above).
-      const handlers = dragHandlersRef.current;
-      if (handlers === null) return;
-      window.removeEventListener("pointermove", handlers.move);
-      window.removeEventListener("pointerup", handlers.end);
-      window.removeEventListener("pointercancel", handlers.end);
-      dragHandlersRef.current = null;
-    };
-  }, []);
-
   const tracks = playlist?.tracks ?? [];
+
+  // Selection resets arrange mode on exit; the ref defers to the arrange hook
+  // below without creating a hook-order cycle between the two.
+  const resetArrangeRef = useRef<() => void>(() => {});
+  const resetArrange = useCallback(() => {
+    resetArrangeRef.current();
+  }, []);
+
+  const {
+    selectionMode,
+    selected,
+    allSelected,
+    enterSelection,
+    exitSelection,
+    toggleSelected,
+    toggleSelectAll,
+    handleBulkRemove,
+    removeTrackById,
+  } = usePlaylistSelection({
+    playlistId,
+    tracks,
+    resetArrange,
+  });
+
+  const {
+    arrangeMode,
+    dragPreview,
+    listRef,
+    suppressRowClickRef,
+    enterArrangeMode,
+    handleArrangeDone,
+    handleArrangeCancel,
+    handleRowPointerDown,
+    resetArrange: resetArrangeMode,
+  } = usePlaylistArrange({
+    playlistId,
+    tracks,
+    selected,
+    setPlaylist,
+    exitSelection,
+  });
+
+  useEffect(() => {
+    resetArrangeRef.current = resetArrangeMode;
+  }, [resetArrangeMode]);
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
   const rowVirtualizer = useVirtualizer({
@@ -196,253 +98,6 @@ export function PlaylistView({
       </main>
     );
   }
-
-  // The playlist utils never reject (they log + toast internally), but keep
-  // the second line of defense so a programming error can never surface as an
-  // unhandled rejection from a click handler. Returns null on failure.
-  const runRemoval = async <T,>(
-    removal: () => Promise<T>,
-    failureLog: string,
-  ): Promise<T | null> => {
-    try {
-      return await removal();
-    } catch (err) {
-      void captureError({
-        level: "error",
-        source: PLAYLIST_VIEW_MODULE,
-        message: `${failureLog}: ${err instanceof Error ? err.message : String(err)}`,
-      });
-      showErrorToast(t("playlist.remove_error"));
-      return null;
-    }
-  };
-
-  const removeTrackById = async (trackId: string): Promise<void> => {
-    await runRemoval(
-      () => removeTrackFromPlaylist(playlistId, trackId),
-      "remove-track-failed",
-    );
-  };
-
-  // Row menu passes the clicked track (enter with that row selected); the
-  // header Select button enters with an empty selection (0 selected state).
-  const enterSelection = (trackId?: string) => {
-    setSelectionMode(true);
-    setSelected(trackId === undefined ? new Set() : new Set([trackId]));
-  };
-
-  const exitSelection = () => {
-    setSelectionMode(false);
-    setArrangeMode(false);
-    setSelected(new Set());
-  };
-
-  const toggleSelected = (trackId: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(trackId)) next.delete(trackId);
-      else next.add(trackId);
-      return next;
-    });
-  };
-
-  const allSelected =
-    tracks.length > 0 && tracks.every((track) => selected.has(track.id));
-
-  const toggleSelectAll = () => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const track of tracks) {
-        if (allSelected) next.delete(track.id);
-        else next.add(track.id);
-      }
-      return next;
-    });
-  };
-
-  // Arrange mode is only reachable with a non-empty selection (§4.1/Case 8);
-  // entering keeps the current selection, which IS the dragged group (§7.1).
-  const enterArrangeMode = () => {
-    if (selected.size === 0) return;
-    setArrangeMode(true);
-  };
-
-  // Done: leave arrange, stay in select mode with the selection kept — the
-  // user can continue with Remove/Arrange (the plan's §13 "keep" branch).
-  const handleArrangeDone = () => {
-    setArrangeMode(false);
-  };
-
-  // Cancel: abandon the whole batch flow (arrange + select mode), mirroring
-  // the toolbar X — the order already persisted per drop is NOT reverted.
-  const handleArrangeCancel = () => {
-    exitSelection();
-  };
-
-  const detachDragListeners = () => {
-    const handlers = dragHandlersRef.current;
-    if (handlers === null) return;
-    window.removeEventListener("pointermove", handlers.move);
-    window.removeEventListener("pointerup", handlers.end);
-    window.removeEventListener("pointercancel", handlers.end);
-    dragHandlersRef.current = null;
-  };
-
-  // Optimistic local order, then ONE persist per drop (§21/#22). On failure
-  // the local order rolls back to the pre-drop snapshot so the UI never shows
-  // an order the data layer does not have; the data layer already toasted.
-  const persistArrangeOrder = async (
-    previousTracks: Track[],
-    nextTracks: Track[],
-  ) => {
-    setPlaylist((prev) => (prev ? { ...prev, tracks: nextTracks } : prev));
-    const rollback = () => {
-      setPlaylist((prev) =>
-        prev && prev.tracks === nextTracks
-          ? { ...prev, tracks: previousTracks }
-          : prev,
-      );
-    };
-    try {
-      const updated = await updatePlaylist(playlistId, {
-        tracks: nextTracks,
-      });
-      if (updated === null) rollback();
-    } catch (err) {
-      rollback();
-      void captureError({
-        level: "error",
-        source: PLAYLIST_VIEW_MODULE,
-        message: `arrange-persist-failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
-      showErrorToast(t("playlist.update_error"));
-    }
-  };
-
-  const commitArrangeDrop = (
-    drag: ArrangeDragState,
-    insertionIndex: number,
-  ) => {
-    const next = applyArrangeDrop(
-      drag.tracksSnapshot,
-      drag.selectedSnapshot,
-      insertionIndex,
-    );
-    // Same reference → the drop resolves to the current order (dropped inside
-    // the group's own region, §9.2): no mutation, no persist, arrange stays.
-    if (next === drag.tracksSnapshot) return;
-    void persistArrangeOrder(drag.tracksSnapshot, next);
-  };
-
-  const handleRowPointerDown = (
-    event: React.PointerEvent<HTMLDivElement>,
-    trackId: string,
-  ) => {
-    suppressRowClickRef.current = false;
-    if (!arrangeMode) return;
-    if (event.button !== 0) return;
-    if (!selected.has(trackId)) return;
-    // Nested controls (checkbox) own their gestures.
-    const target = event.target;
-    if (target instanceof HTMLElement && target.closest("input,button,a")) {
-      return;
-    }
-
-    const drag: ArrangeDragState = {
-      pointerId: event.pointerId,
-      startY: event.clientY,
-      isDragging: false,
-      insertionIndex: null,
-      captureEl: event.currentTarget,
-      tracksSnapshot: tracks,
-      selectedSnapshot: selected,
-    };
-    dragRef.current = drag;
-
-    const onMove = (moveEvent: PointerEvent) => {
-      const state = dragRef.current;
-      if (state === null || state.pointerId !== moveEvent.pointerId) return;
-      if (!state.isDragging) {
-        if (
-          Math.abs(moveEvent.clientY - state.startY) <=
-          ARRANGE_DRAG_THRESHOLD_PX
-        )
-          return;
-        state.isDragging = true;
-        try {
-          state.captureEl.setPointerCapture(state.pointerId);
-        } catch (err) {
-          void captureError({
-            level: "warn",
-            source: PLAYLIST_VIEW_MODULE,
-            message: `arrange-capture-failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      }
-      const listTop = listRef.current?.getBoundingClientRect().top ?? 0;
-      const drop = resolveArrangeDrop(
-        state.tracksSnapshot,
-        state.selectedSnapshot,
-        moveEvent.clientY - listTop,
-      );
-      state.insertionIndex = drop?.insertionIndex ?? null;
-      const indicatorY = drop?.indicatorY ?? null;
-      // Light update: a pointermove inside the same boundary is a no-op
-      // (no re-render per pixel, §21).
-      setDragPreview((prev) =>
-        prev.active && prev.indicatorY === indicatorY
-          ? prev
-          : { active: true, indicatorY },
-      );
-    };
-
-    const onEnd = (endEvent: PointerEvent) => {
-      const state = dragRef.current;
-      if (state === null || state.pointerId !== endEvent.pointerId) return;
-      detachDragListeners();
-      dragRef.current = null;
-      try {
-        if (state.captureEl.hasPointerCapture(state.pointerId)) {
-          state.captureEl.releasePointerCapture(state.pointerId);
-        }
-      } catch (err) {
-        void captureError({
-          level: "warn",
-          source: PLAYLIST_VIEW_MODULE,
-          message: `arrange-release-failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      }
-      setDragPreview({ active: false, indicatorY: null });
-      if (state.isDragging) {
-        suppressRowClickRef.current = true;
-        if (state.insertionIndex !== null) {
-          commitArrangeDrop(state, state.insertionIndex);
-        }
-      }
-    };
-
-    dragHandlersRef.current = { move: onMove, end: onEnd };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onEnd);
-    window.addEventListener("pointercancel", onEnd);
-  };
-
-  const handleBulkRemove = async () => {
-    if (selected.size === 0) return;
-    const ids = [...selected];
-    // Snapshot before the await: the playlist may reload while the write is
-    // in flight, and the exit decision belongs to the click's own list.
-    const removedAll = tracks.every((track) => selected.has(track.id));
-    const ok = await runRemoval(
-      () => removeTracksFromPlaylist(playlistId, ids),
-      "remove-tracks-failed",
-    );
-    // Failure keeps the selection (and selection mode) so the user can retry;
-    // the data layer already surfaced the error toast.
-    if (ok !== true) return;
-    if (removedAll) exitSelection();
-    else setSelected(new Set());
-  };
 
   const MAX_COVER_BYTES = 5 * 1024 * 1024;
 
@@ -645,164 +300,23 @@ export function PlaylistView({
             <p className="mt-2 text-sm">{t("playlist.empty_state_subtitle")}</p>
           </div>
         ) : (
-          <div
-            ref={listRef}
-            data-testid="playlist-track-list"
-            className={`flex flex-col relative w-full ${arrangeMode ? "select-none" : ""}`}
-            style={{
-              height: `${String(rowVirtualizer.getTotalSize())}px`,
-              contain: "strict",
-            }}
-          >
-            {arrangeMode && dragPreview.indicatorY !== null && (
-              <div
-                data-testid="playlist-drop-indicator"
-                aria-hidden="true"
-                className="absolute left-0 right-0 h-0.5 bg-brand-primary z-20 pointer-events-none rounded-full"
-                style={{ top: `${String(dragPreview.indicatorY)}px` }}
-              />
-            )}
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const track = tracks[virtualRow.index];
-              if (track === undefined) return null;
-              const isContextTarget =
-                contextMenu !== null && contextMenu.index === virtualRow.index;
-              const isSelected = selected.has(track.id);
-              const isDragGhost = dragPreview.active && isSelected;
-              return (
-                <div
-                  key={virtualRow.key}
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    width: "100%",
-                    height: `${String(virtualRow.size)}px`,
-                    transform: `translateY(${String(virtualRow.start)}px)`,
-                  }}
-                >
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => {
-                      // A completed drag must not fall through to the click.
-                      if (suppressRowClickRef.current) {
-                        suppressRowClickRef.current = false;
-                        return;
-                      }
-                      if (selectionMode) toggleSelected(track.id);
-                      else onPlay(track, tracks);
-                    }}
-                    onPointerDown={(e) => {
-                      handleRowPointerDown(e, track.id);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter" && e.key !== " ") return;
-                      // Nested controls (checkbox, ⋯ trigger) own their keys.
-                      if (e.target !== e.currentTarget) return;
-                      e.preventDefault();
-                      if (selectionMode) toggleSelected(track.id);
-                      else onPlay(track, tracks);
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      // Selection mode replaces per-row actions entirely.
-                      if (selectionMode) return;
-                      setContextMenu({
-                        index: virtualRow.index,
-                        x: e.clientX,
-                        y: e.clientY,
-                      });
-                    }}
-                    className={`flex items-center gap-4 p-2 rounded-lg group transition-all active:scale-[0.99] ${
-                      arrangeMode && isSelected
-                        ? "cursor-grab touch-none"
-                        : "cursor-pointer"
-                    } ${isDragGhost ? "opacity-50" : ""}`}
-                  >
-                    <div
-                      className={`w-8 text-center text-sm ${selectionMode ? "flex items-center justify-center" : currentTrack?.id === track.id ? "text-brand-text hidden group-hover:block" : "text-gray-400 group-hover:hidden"}`}
-                    >
-                      {selectionMode ? (
-                        <QueueRowCheckbox
-                          checked={selected.has(track.id)}
-                          label={track.title}
-                          onToggle={() => {
-                            toggleSelected(track.id);
-                          }}
-                        />
-                      ) : currentTrack?.id === track.id ? (
-                        <Music className="w-4 h-4 mx-auto" />
-                      ) : (
-                        virtualRow.index + 1
-                      )}
-                    </div>
-                    <div
-                      className={`w-8 text-center items-center justify-center ${selectionMode ? "flex" : currentTrack?.id === track.id ? "flex group-hover:hidden" : "hidden group-hover:flex"}`}
-                    >
-                      {!selectionMode && (
-                        <Play
-                          className={`w-4 h-4 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white"}`}
-                          fill="currentColor"
-                        />
-                      )}
-                      {/* Arrange mode: grip marks the draggable (selected)
-                          group items; non-selected keep the slot empty so the
-                          row layout never shifts (§7.2). */}
-                      {arrangeMode && isSelected && (
-                        <GripVertical
-                          aria-hidden="true"
-                          className="w-4 h-4 text-gray-400 dark:text-gray-500"
-                        />
-                      )}
-                    </div>
-
-                    <div
-                      className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 overflow-hidden ${currentTrack?.id === track.id ? "bg-brand-primary/10 text-brand-text" : "bg-gray-200 dark:bg-gray-800"}`}
-                    >
-                      <Music
-                        className={`w-5 h-5 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-400"}`}
-                      />
-                    </div>
-
-                    <div className="flex-1 min-w-0 flex flex-col justify-center">
-                      <h4
-                        className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white group-hover:text-brand-text"}`}
-                      >
-                        {track.title}
-                      </h4>
-                      <p className="text-[13px] text-gray-500 truncate leading-tight">
-                        {track.artist || t("unknown_artist")}
-                      </p>
-                    </div>
-
-                    {!selectionMode && (
-                      <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                        <MoreMenu
-                          variant="playlist"
-                          track={track}
-                          forceOpen={isContextTarget}
-                          anchorPoint={
-                            isContextTarget
-                              ? { x: contextMenu.x, y: contextMenu.y }
-                              : null
-                          }
-                          onClose={() => {
-                            setContextMenu(null);
-                          }}
-                          onRemoveFromPlaylist={() => {
-                            void removeTrackById(track.id);
-                          }}
-                          onSelectMultiple={() => {
-                            enterSelection(track.id);
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <PlaylistTrackList
+            tracks={tracks}
+            virtualItems={rowVirtualizer.getVirtualItems()}
+            totalSize={rowVirtualizer.getTotalSize()}
+            listRef={listRef}
+            arrangeMode={arrangeMode}
+            dragPreview={dragPreview}
+            suppressRowClickRef={suppressRowClickRef}
+            selectionMode={selectionMode}
+            selected={selected}
+            currentTrack={currentTrack}
+            onPlay={onPlay}
+            toggleSelected={toggleSelected}
+            handleRowPointerDown={handleRowPointerDown}
+            removeTrackById={removeTrackById}
+            enterSelection={enterSelection}
+          />
         )}
       </div>
 
