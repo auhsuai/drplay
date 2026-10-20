@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 // search path; Task 3 of the search rebuild replaced it with the
 // worker-hosted engine. This guard ensures the orphaned module never comes
 // back and no straggler import survives a future refactor.
-const GUARD_FILE = fileURLToPath(import.meta.url);
+const GUARD_FILE = fileURLToPath(import.meta.url).toLowerCase();
 
 function collectTsSources(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -26,7 +26,7 @@ describe("useDebouncedLiveQuery removed", () => {
   it("no file under src references useDebouncedLiveQuery anymore", () => {
     const offenders = collectTsSources(join(process.cwd(), "src")).filter(
       (file) =>
-        file !== GUARD_FILE &&
+        file.toLowerCase() !== GUARD_FILE &&
         readFileSync(file, "utf8").includes("useDebouncedLiveQuery"),
     );
     expect(offenders).toEqual([]);

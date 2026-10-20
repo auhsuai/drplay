@@ -15,7 +15,7 @@ pub fn update_minimize_to_tray(minimize: bool) {
 /// must run BEFORE `show()`: `show()` is SW_SHOW and does not restore a
 /// minimized window, and tao's `set_focus()` no-ops while the window is
 /// minimized. Both tray entry points share this path.
-fn restore_main_window(app: &tauri::AppHandle) {
+pub(crate) fn restore_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

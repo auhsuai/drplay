@@ -36,7 +36,7 @@ use path_scope::path_starts_with_ci;
 #[cfg(windows)]
 use mpv::{mpv_command, mpv_get_property, mpv_kill_sync_best_effort, mpv_shutdown, mpv_spawn};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
-use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY};
+use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY, restore_main_window};
 #[cfg(windows)]
 use video_host::{video_host_acquire, video_host_first_frame_presented, video_host_set_rect, video_host_set_visible};
 #[cfg(windows)]
@@ -80,7 +80,15 @@ fn log_level_from_env() -> log::LevelFilter {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app_result = protocol::register(tauri::Builder::default())
+    // Single-instance guard MUST be registered before anything else so a second
+    // launch never spins up its own session/player/tray. It restores the main
+    // window of the already-running instance and exits the second one.
+    let builder = tauri::Builder::default().plugin(
+        tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            restore_main_window(app);
+        }),
+    );
+    let app_result = protocol::register(builder)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

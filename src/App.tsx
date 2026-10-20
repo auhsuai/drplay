@@ -38,6 +38,7 @@ import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
 import { usePlayerCommands } from "./player/usePlayerCommands";
 import { useFullscreenChrome } from "./player/useFullscreenChrome";
+import { useAutoHideCursor } from "./player/useAutoHideCursor";
 import {
   applyWindowFullscreen,
   syncWindowFullscreenState,
@@ -318,6 +319,16 @@ function App() {
     isFullscreen: isPlayerFullscreen,
   });
 
+  // Cursor auto-hide lives in its own hook (see useAutoHideCursor) so the
+  // fullscreen chrome policy and its tests stay untouched. The reveal is
+  // bridged through a ref because the hook is instantiated later (it depends
+  // on videoMenu), while the player command context needs a stable callback.
+  const revealCursorRef = useRef<() => void>(() => {});
+  const combinedActivity = useCallback(() => {
+    revealChrome();
+    revealCursorRef.current();
+  }, [revealChrome]);
+
   // The Media Information dialog suspends the fullscreen auto-hide through the
   // SAME seam as the video menu: open = reveal + suspend, close = FRESH 1000 ms
   // countdown. It is derived from the one dialog open-state, so there is no
@@ -393,7 +404,7 @@ function App() {
     // notifies it once per executed command, so a shortcut still fires exactly
     // once and only reveals as a side effect — no second keydown listener and
     // no redefined shortcut.
-    onActivity: revealChrome,
+    onActivity: combinedActivity,
   };
   usePlayerCommands(playerCommandContext);
 
@@ -421,6 +432,17 @@ function App() {
     onMenuOpenChange: setMenuOpen,
   });
   const { open: openVideoMenu } = videoMenu;
+
+  // Cursor auto-hide: only while the NowPlaying overlay shows a video. Suspended
+  // while the video menu or Media Info dialog is open. The hook owns the timer,
+  // listeners and native cursor visibility; App just feeds it the gates.
+  const autoHideCursor = useAutoHideCursor({
+    enabled: isNowPlayingOpen && isVideoActive,
+    suspended: videoMenu.isOpen || isMediaInfoOpen,
+  });
+  useEffect(() => {
+    revealCursorRef.current = autoHideCursor.revealCursor;
+  }, [autoHideCursor.revealCursor]);
   const stableOpenVideoMenuAtPoint = useCallback(
     (x: number, y: number) => {
       openVideoMenu("full", { kind: "point", x, y });
