@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AudioController } from "../lib/AudioController";
 import { usePlayerStore } from "../store/playerStore";
@@ -8,12 +8,26 @@ import {
   noteFormatError,
   resetAdvanceGuard,
 } from "../utils/playerError";
-import type { PlayerCommandContext } from "./commands";
+import {
+  PLAYER_COMMAND_IDS,
+  findCommandForEvent,
+  type PlayerCommandContext,
+} from "./commands";
 import { runPlayerCommand, usePlayerCommands } from "./usePlayerCommands";
 
 const { showErrorToast } = vi.hoisted(() => ({
   showErrorToast: vi.fn(),
 }));
+
+const reloadMocks = vi.hoisted(() => ({
+  requestPlayerReload: vi.fn(),
+}));
+
+vi.mock("./reloadPlayer", () => ({
+  requestPlayerReload: reloadMocks.requestPlayerReload,
+}));
+
+import { requestPlayerReload } from "./reloadPlayer";
 
 vi.mock("../utils/simpleToast", () => ({
   showErrorToast,
@@ -68,10 +82,14 @@ beforeEach(() => {
   });
   resetAdvanceGuard();
   showErrorToast.mockClear();
+  vi.mocked(requestPlayerReload).mockClear();
   document.body.innerHTML = "";
 });
 
 afterEach(() => {
+  // Unmount every hook rendered by the test: the single global keydown
+  // listener (and the reload interceptor) must not leak into the next test.
+  cleanup();
   usePlayerStore.setState({ errorInfo: null, playMode: "normal" });
 });
 
@@ -153,6 +171,22 @@ describe("usePlayerCommands", () => {
 
     pressKey(" ");
     expect(ctx.togglePlay).not.toHaveBeenCalled();
+  });
+
+  it("plain r is still the aspect-cycle command and never triggers a reload", () => {
+    const ctx = makeCtx();
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    const plain = new KeyboardEvent("keydown", { key: "r", cancelable: true });
+    expect(findCommandForEvent(plain)?.id).toBe(
+      PLAYER_COMMAND_IDS.PLAYER_ASPECT_CYCLE,
+    );
+
+    const event = pressKey("r");
+    expect(event.defaultPrevented).toBe(false);
+    expect(requestPlayerReload).not.toHaveBeenCalled();
   });
 
   it("always runs the freshest context (ctx change after rerender)", () => {
@@ -268,5 +302,69 @@ describe("storm banner guard", () => {
     expect(ctx.next).toHaveBeenCalledTimes(1);
     expect(usePlayerStore.getState().errorInfo).toBeNull();
     expect(guardAllowsAutoAdvance(Date.now())).toBe(true);
+  });
+});
+
+describe("reload interception (F5 / Ctrl+R)", () => {
+  it("intercepts F5, Shift+F5, Ctrl+F5, Ctrl+R and Ctrl+Shift+R before the command layer", () => {
+    const ctx = makeCtx();
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    const chords: Array<[string, KeyboardEventInit]> = [
+      ["F5", {}],
+      ["F5", { shiftKey: true }],
+      ["F5", { ctrlKey: true }],
+      ["r", { ctrlKey: true }],
+      ["R", { ctrlKey: true, shiftKey: true }],
+    ];
+    for (const [key, init] of chords) {
+      const event = pressKey(key, init);
+      expect(event.defaultPrevented).toBe(true);
+    }
+
+    expect(requestPlayerReload).toHaveBeenCalledTimes(chords.length);
+    expect(ctx.togglePlay).not.toHaveBeenCalled();
+  });
+
+  it("prevents the default of a held F5 repeat without starting a second shutdown", () => {
+    const ctx = makeCtx();
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    const event = pressKey("F5", { repeat: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(requestPlayerReload).not.toHaveBeenCalled();
+  });
+
+  it("intercepts F5 even while an input has focus", () => {
+    const ctx = makeCtx();
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    const event = pressKey("F5");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(requestPlayerReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the reload interceptor on unmount", () => {
+    const ctx = makeCtx();
+    const { unmount } = renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+    unmount();
+
+    const event = pressKey("F5");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(requestPlayerReload).not.toHaveBeenCalled();
   });
 });

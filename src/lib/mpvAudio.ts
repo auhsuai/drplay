@@ -25,6 +25,7 @@ import {
   MPV_PROPERTIES,
   MPV_VIDEO,
   parseProxyError,
+  RELOAD_SHUTDOWN_TIMEOUT_MS,
   SEEK_ACK_TIMEOUT_MS,
   SEEK_ACK_TOLERANCE_SECS,
   STALL_MIN_RESUME_SECS,
@@ -122,6 +123,14 @@ export class MpvAudioController {
   /** Sidecar restarts spent on the current load (bounded by
    *  LOADFILE_RESTART_MAX_ATTEMPTS, reset per user/UI load attempt). */
   private loadRestarts = 0;
+  /** F5/Ctrl+R reload in progress: the engine is being shut down for a page
+   *  refresh. Playback entry points stay locked and late end-file/ipc-closed
+   *  events are ignored until the page goes away (or the shutdown fails and
+   *  this flag reopens for a retry). */
+  private reloadInProgress = false;
+  /** Shared reload-shutdown promise: concurrent reload requests join the
+   *  first one instead of issuing a second `mpv_shutdown`. */
+  private reloadShutdown: Promise<void> | null = null;
   private volume = 1;
   private muted = false;
   private throttle = freshThrottleClocks();
@@ -289,6 +298,10 @@ export class MpvAudioController {
       this.watchdog.start();
     },
     onEndFile: (outcome, mpvError) => {
+      // A reload shutdown is commandeered by the user, not a playback failure:
+      // mpv may report end-file while going down — never auto-advance or
+      // surface an error for it.
+      if (this.reloadInProgress) return;
       this.playbackFinished = true;
       this.playing = false;
       this.clearLoadDeadline();
@@ -313,6 +326,9 @@ export class MpvAudioController {
       this.emitEndFileError();
     },
     onEngineClosed: (cause) => {
+      // The reload shutdown closes the engine on purpose — the "engine died"
+      // surface (log/error/reset) belongs to a real crash, not to the refresh.
+      if (this.reloadInProgress) return;
       // Why (R02-2): mpv died without an end-file — nothing else tells the
       // engine; reset lifecycle so the next playTrack respawns via mpv_spawn.
       logError(`mpv engine closed: ${cause}`);
@@ -590,6 +606,9 @@ export class MpvAudioController {
   }
 
   public async playTrack(track: Track, startTime?: number): Promise<void> {
+    // The reload flow owns the engine until the page goes away: a late click
+    // must not load a track into an engine that is being shut down.
+    if (this.reloadInProgress) return;
     const epoch = this.session.epoch;
     // Any explicit play request supersedes a pending pause intent — including
     // a retry after a failure, where the store is false without a user pause.
@@ -681,6 +700,7 @@ export class MpvAudioController {
   }
 
   public togglePlay(): void {
+    if (this.reloadInProgress) return;
     if (!this.lastTrack) return;
     if (this.playbackFinished) {
       // Mirror HTMLMediaElement.play() on an ended element: restart from top.
@@ -782,6 +802,51 @@ export class MpvAudioController {
     // Why: bump FIRST so every in-flight continuation (listener attach, spawn,
     // loadfile) observes the teardown at its next await boundary and aborts.
     this.session.beginRelease();
+    this.teardownReleasedState();
+    // A reload shutdown already owns the single mpv_shutdown call.
+    if (!this.reloadInProgress) {
+      void invoke(TAURI_COMMANDS.mpvShutdown).catch((e: unknown) => {
+        logWarn(`mpv-shutdown-failed: ${describeError(e)}`);
+      });
+    }
+  }
+
+  /**
+   * Stop the native engine and resolve only once the shutdown completed — the
+   * F5/Ctrl+R refresh path. The WebView reload must not start while mpv is
+   * still playing (the engine lives in the Rust process, not in the page).
+   * Listeners/state are torn down only after the shutdown resolves; on
+   * failure they stay alive so the user can retry or keep playing.
+   */
+  public shutdownForReload(): Promise<void> {
+    if (this.reloadShutdown) return this.reloadShutdown;
+    this.reloadInProgress = true;
+    // Invalidate in-flight continuations before the engine goes away.
+    this.session.beginRelease();
+    const shutdown = withStallQueryTimeout(
+      invoke(TAURI_COMMANDS.mpvShutdown),
+      RELOAD_SHUTDOWN_TIMEOUT_MS,
+    )
+      .then(() => {
+        this.teardownReleasedState();
+      })
+      .catch((e: unknown) => {
+        // Either the shutdown rejected/timeout (engine may still be alive) or
+        // the teardown itself threw: reopen the lock, drop the cached rejected
+        // promise (or every later F5 would replay it forever) and rethrow so
+        // the caller can log/toast and retry.
+        this.reloadInProgress = false;
+        this.reloadShutdown = null;
+        throw e;
+      });
+    this.reloadShutdown = shutdown;
+    return shutdown;
+  }
+
+  /** Shared release teardown: detach the listeners, finish the lifecycle and
+   *  reset every playback-owned field/timer. Runs for release() and for the
+   *  successful reload shutdown; never issues mpv_shutdown itself. */
+  private teardownReleasedState(): void {
     detachListeners(this.unlistenFns);
     this.unlistenFns = [];
     this.session.finishRelease();
@@ -812,9 +877,6 @@ export class MpvAudioController {
     this.loadRestarts = 0;
     this.interpolator.reset();
     this.throttle = freshThrottleClocks();
-    void invoke(TAURI_COMMANDS.mpvShutdown).catch((e: unknown) => {
-      logWarn(`mpv-shutdown-failed: ${describeError(e)}`);
-    });
   }
 
   /**

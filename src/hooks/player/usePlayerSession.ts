@@ -23,6 +23,19 @@ import { armRestoreResume } from "./restoreResume";
 const PLAYER_SESSION_MODULE = "usePlayerSession";
 const SAVE_THROTTLE_MS = 5000;
 
+/** Bridge to the mounted session effect, so the reload flow can force-save the
+ *  freshest position without duplicating the persistence logic. */
+let forceSave: (() => void) | null = null;
+
+/**
+ * Persist the current track/position now (bypassing the 5s throttle) — used by
+ * the F5/Ctrl+R reload BEFORE the engine is released. No-op while the session
+ * effect is unmounted.
+ */
+export function savePlayerSessionNow(): void {
+  forceSave?.();
+}
+
 export function usePlayerSession(
   setCurrentTrack: (
     track: Track | null | ((prev: Track | null) => Track | null),
@@ -202,6 +215,11 @@ export function usePlayerSession(
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handleBeforeUnload);
 
+    const saveNow = () => {
+      saveSession(true);
+    };
+    forceSave = saveNow;
+
     const audio = AudioController.getInstance();
     // R2.1: the session pairs the store's track with the engine clock, so an
     // event tagged with ANOTHER track means the engine is still on the old
@@ -223,6 +241,8 @@ export function usePlayerSession(
     });
 
     return () => {
+      // Identity check: a newer mount owns the bridge, never clear its handle.
+      if (forceSave === saveNow) forceSave = null;
       window.removeEventListener("beforeunload", handleBeforeUnload);
       window.removeEventListener("pagehide", handleBeforeUnload);
       unsubTime();

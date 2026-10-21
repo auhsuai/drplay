@@ -78,4 +78,9 @@ export class AudioController {
   public release(): void {
     this.engine.release();
   }
+
+  /** Awaitable engine shutdown used before a WebView reload (F5/Ctrl+R). */
+  public shutdownForReload(): Promise<void> {
+    return this.engine.shutdownForReload();
+  }
 }

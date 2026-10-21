@@ -1,5 +1,6 @@
 import React from "react";
 import { captureError } from "../utils/errorLog";
+import { requestPlayerReload } from "../player/reloadPlayer";
 import i18n from "../i18n";
 
 /**
@@ -66,7 +67,10 @@ export class ErrorBoundary extends React.Component<
   }
 
   private handleReload = (): void => {
-    window.location.reload();
+    // Same reload flow as F5/Ctrl+R: stop the native mpv engine before the
+    // WebView reloads, or the audio keeps playing behind the fresh page.
+    // requestPlayerReload never rejects — it reports failures itself.
+    void requestPlayerReload();
   };
 
   override render(): React.ReactNode {

@@ -141,6 +141,10 @@ export const LOADFILE_RESTART_MAX_ATTEMPTS = 1;
  *  turn the cure into a second silent wedge — the exact failure class this
  *  deadline exists to end. */
 export const LOADFILE_RESTART_TIMEOUT_MS = 10_000;
+/** Bound for the UI-reload shutdown. Same rationale as the restart bound: the
+ *  Rust shutdown awaits the engine teardown, and a hung reply must fail the
+ *  refresh (retryable toast, page NOT reloaded) instead of blocking forever. */
+export const RELOAD_SHUTDOWN_TIMEOUT_MS = 10_000;
 /** Two observed positions within this delta are the same frozen playhead. */
 export const STALL_EPSILON_SECS = 0.05;
 /** Below this pinned position a recovery reload restarts from the top — a

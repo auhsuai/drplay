@@ -8,7 +8,7 @@ import {
   buildStreamUrl,
 } from "../../utils/streamPrefetcher";
 import { captureError } from "../../utils/errorLog";
-import { usePlayerSession } from "./usePlayerSession";
+import { usePlayerSession, savePlayerSessionNow } from "./usePlayerSession";
 import { PLAYER_STOP_EVENT } from "./usePlayerLifecycle";
 import { clearRestoreResume, consumeRestoreResume } from "./restoreResume";
 import { usePlayerStore } from "../../store/playerStore";
@@ -39,6 +39,7 @@ const audioMock = vi.hoisted(() => ({
   getCurrentTime: vi.fn(() => 0),
   getDuration: vi.fn(() => 0),
   getCurrentTrackId: vi.fn(() => "t1"),
+  playTrack: vi.fn(() => Promise.resolve()),
   on: vi.fn<(event: string, handler: () => void) => () => void>(() => () => {}),
 }));
 
@@ -138,6 +139,23 @@ describe("usePlayerSession restore (lock-behavior)", () => {
     await flushMicrotasks();
 
     expect(onHydrated).toHaveBeenCalledTimes(1);
+  });
+
+  it("A3: restore chỉ commit track + triggerReload, KHÔNG auto-play sau reload", async () => {
+    localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({ track: makeTrack("t1", "q1"), time: 12, duration: 240 }),
+    );
+    mockedGet.mockResolvedValue(undefined);
+
+    const { setCurrentTrack, triggerReload } = makeHook();
+    await flushMicrotasks();
+
+    expect(setCurrentTrack).toHaveBeenCalledTimes(1);
+    expect(triggerReload).toHaveBeenCalledTimes(1);
+    // The position is armed as a one-shot hint for the FIRST Play, not as an
+    // automatic play after the reload.
+    expect(audioMock.playTrack).not.toHaveBeenCalled();
   });
 
   it("B: có session localStorage + kv queue + playmode shuffle → restore track + queue shuffle qua helper (head = restored track, đủ phần tử)", async () => {
@@ -886,5 +904,82 @@ describe("usePlayerSession save identity (SC6 — store/engine pair)", () => {
 
     expect(savedSession()).toMatchObject({ time: 30 });
     expect(savedSession()?.track?.id).toBe("t1");
+  });
+});
+
+describe("usePlayerSession force save (reload bridge)", () => {
+  function savedSession(): { track?: Track; time?: number } | null {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as { track?: Track; time?: number }) : null;
+  }
+
+  function pauseHandler() {
+    return audioMock.on.mock.calls.find((c) => c[0] === "pause")?.[1] as
+      ((payload?: unknown) => void) | undefined;
+  }
+
+  it("savePlayerSessionNow bypasses the 5s throttle and writes the freshest engine clock", () => {
+    vi.spyOn(performance, "now").mockReturnValue(10_000);
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: makeTrack("t1", "q1"),
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+    vi.mocked(audioMock.getCurrentTrackId).mockReturnValue("t1");
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(10);
+    vi.mocked(audioMock.getDuration).mockReturnValue(240);
+
+    makeHook();
+    act(() => {
+      pauseHandler()?.();
+    });
+    expect(savedSession()).toMatchObject({ time: 10 });
+
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(42);
+    // Still inside the throttle window: only the forced path may write now.
+    act(() => {
+      savePlayerSessionNow();
+    });
+
+    expect(savedSession()).toMatchObject({ time: 42 });
+  });
+
+  it("keeps the existing guards: no empty write, no foreign-track write", () => {
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: makeTrack("t1", "q1"),
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+    vi.mocked(audioMock.getDuration).mockReturnValue(0);
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(0);
+
+    makeHook();
+    act(() => {
+      savePlayerSessionNow();
+    });
+    expect(savedSession()).toBeNull();
+
+    vi.mocked(audioMock.getCurrentTrackId).mockReturnValue("t0");
+    vi.mocked(audioMock.getDuration).mockReturnValue(240);
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(30);
+    act(() => {
+      savePlayerSessionNow();
+    });
+    expect(savedSession()).toBeNull();
+  });
+
+  it("a late save after unmount is a no-op (bridge cleared with identity)", () => {
+    vi.mocked(usePlayerStore.getState).mockReturnValue({
+      currentTrack: makeTrack("t1", "q1"),
+    } as unknown as ReturnType<typeof usePlayerStore.getState>);
+    vi.mocked(audioMock.getCurrentTrackId).mockReturnValue("t1");
+    vi.mocked(audioMock.getCurrentTime).mockReturnValue(10);
+    vi.mocked(audioMock.getDuration).mockReturnValue(240);
+
+    const { unmount } = renderHook(() => {
+      usePlayerSession(vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    });
+    unmount();
+
+    act(() => {
+      savePlayerSessionNow();
+    });
+    expect(savedSession()).toBeNull();
   });
 });

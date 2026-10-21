@@ -7,6 +7,18 @@ import {
   type PlayerCommandContext,
   type PlayerCommandId,
 } from "./commands";
+import { requestPlayerReload } from "./reloadPlayer";
+
+/**
+ * Browser reload chords (F5 / Ctrl+R / Cmd+R, including the Shift and Ctrl
+ * variants). The Alt variants stay with the OS/WebView. Plain "r" is the
+ * aspect-cycle command and must never be treated as a reload.
+ */
+function isReloadShortcut(event: KeyboardEvent): boolean {
+  if (event.altKey) return false;
+  if (event.key === "F5") return true;
+  return (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r";
+}
 
 /**
  * Mount the SINGLE global player-keydown listener. The context is kept in a
@@ -26,9 +38,20 @@ export function usePlayerCommands(context: PlayerCommandContext): void {
       if (command.preventDefault) event.preventDefault();
       runPlayerCommand(command.id, contextRef.current);
     };
+    // Capture phase: run BEFORE the command layer and before the editable-focus
+    // guard. preventDefault is what stops WebView2's own F5/Ctrl+R reload — the
+    // custom flow must stop the native engine first (see reloadPlayer.ts).
+    const handleReloadKeyDown = (event: KeyboardEvent): void => {
+      if (!isReloadShortcut(event)) return;
+      event.preventDefault();
+      if (event.repeat) return;
+      void requestPlayerReload();
+    };
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleReloadKeyDown, true);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleReloadKeyDown, true);
     };
   }, []);
 }

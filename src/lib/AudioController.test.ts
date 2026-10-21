@@ -226,6 +226,24 @@ describe("AudioController facade over the mpv engine", () => {
     expect(timeupdate).not.toHaveBeenCalled();
   });
 
+  it("shutdownForReload delegates and resolves only after the engine teardown", async () => {
+    const ctrl = AudioControllerClass.getInstance();
+    const timeupdate = vi.fn();
+    ctrl.on("timeupdate", timeupdate);
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+
+    await ctrl.shutdownForReload();
+
+    const invoked = (
+      tauriMocks.invoke.mock.calls as unknown as Array<[string]>
+    ).map((call) => call[0]);
+    expect(invoked).toEqual(["mpv_shutdown"]);
+    expect(ctrl.getCurrentTrackId()).toBeNull();
+    fireProperty("time-pos", 5);
+    expect(timeupdate).not.toHaveBeenCalled();
+  });
+
   it("pause delegates to the engine pause property", async () => {
     const ctrl = AudioControllerClass.getInstance();
     await ctrl.playTrack(trackA);
