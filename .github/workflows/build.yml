@@ -3,12 +3,40 @@ name: Build DrPlay
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  build-windows:
+  frontend-check:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build
+
+  build-windows:
+    needs: frontend-check
+    runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v5
@@ -31,7 +59,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Fetch mpv sidecar binary
         run: node scripts/fetch-mpv.mjs
