@@ -374,6 +374,183 @@ async fn engine_021_spawn_is_idempotent_and_replaces_a_destroyed_engine() {
     engine.destroy(true).expect("cleanup destroy");
 }
 
+// --- Lifecycle gate (F5 reload race) ---------------------------------------
+
+/// A teardown hook that blocks `Engine::destroy` until the test releases it,
+/// so a second shutdown/spawn can be observed while the native teardown is
+/// genuinely in flight (not just a mocked ordering).
+fn blocking_teardown_hook(
+    engine: &Engine,
+    started: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+) {
+    engine.add_teardown_hook(Box::new(move |_engine| {
+        let _ = started.send(());
+        release.recv_timeout(Duration::from_secs(10)).map_err(|_timeout| {
+            super::engine::EngineError::RenderThread {
+                message: "test teardown hook did not receive a release".to_string(),
+            }
+        })
+    }));
+}
+
+/// Await the teardown-start signal WITHOUT blocking the async runtime thread
+/// (a `recv_timeout` here would stop the just-spawned shutdown task from ever
+/// running on a current-thread test runtime).
+async fn wait_for_teardown_start(started: tokio::sync::oneshot::Receiver<()>) {
+    tokio::time::timeout(Duration::from_secs(5), started)
+        .await
+        .expect("the native teardown must start")
+        .expect("the teardown hook must signal before returning");
+}
+
+/// A: two shutdowns must share ONE teardown. The second must wait for the
+/// first to finish instead of returning `Ok` just because the slot is empty.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // intentional: serializes against the other engine tests
+async fn shutdown_gate_joins_a_concurrent_shutdown_instead_of_answering_early() {
+    let _serial = serial();
+    if !engine_available() {
+        return;
+    }
+    let slot: Arc<EngineSlot> = Arc::new(tokio::sync::Mutex::new(None));
+    let (sink, _collected) = collector();
+    let engine = Engine::create(sink).expect("engine must create");
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    blocking_teardown_hook(&engine, started_tx, release_rx);
+    *slot.lock().await = Some(engine);
+
+    let first = {
+        let slot = Arc::clone(&slot);
+        tokio::spawn(async move { super::shutdown_slot(&slot, &super::LIFECYCLE_GATE).await })
+    };
+    wait_for_teardown_start(started_rx).await;
+    assert!(
+        slot.lock().await.is_none(),
+        "the engine is out of the slot while it is still being destroyed"
+    );
+
+    let second = {
+        let slot = Arc::clone(&slot);
+        tokio::spawn(async move { super::shutdown_slot(&slot, &super::LIFECYCLE_GATE).await })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !second.is_finished(),
+        "the second shutdown must wait for the running teardown, not answer early"
+    );
+
+    release_tx.send(()).expect("release the teardown");
+    assert!(
+        first.await.expect("join").is_ok(),
+        "the first shutdown must complete cleanly"
+    );
+    assert!(
+        second.await.expect("join").is_ok(),
+        "the joined shutdown must report the same successful teardown"
+    );
+}
+
+/// B: `mpv_spawn` must not create a replacement engine while the previous
+/// engine is still tearing down (the double-playback race).
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // intentional: serializes against the other engine tests
+async fn spawn_waits_for_a_running_teardown_before_creating_an_engine() {
+    let _serial = serial();
+    if !engine_available() {
+        return;
+    }
+    let slot: Arc<EngineSlot> = Arc::new(tokio::sync::Mutex::new(None));
+    let (sink, _collected) = collector();
+    let engine = Engine::create(sink).expect("engine must create");
+    let old_conn = engine.conn();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    blocking_teardown_hook(&engine, started_tx, release_rx);
+    *slot.lock().await = Some(engine);
+
+    let shutdown = {
+        let slot = Arc::clone(&slot);
+        tokio::spawn(async move { super::shutdown_slot(&slot, &super::LIFECYCLE_GATE).await })
+    };
+    wait_for_teardown_start(started_rx).await;
+
+    let spawn = {
+        let slot = Arc::clone(&slot);
+        let (sink, _collected) = collector();
+        tokio::spawn(async move { super::ensure_spawned_with_window(&slot, sink, None).await })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !spawn.is_finished(),
+        "mpv_spawn must not complete while the old engine is still tearing down"
+    );
+    assert!(
+        slot.lock().await.is_none(),
+        "no replacement engine may be published before the teardown ends"
+    );
+
+    release_tx.send(()).expect("release the teardown");
+    assert!(shutdown.await.expect("join").is_ok(), "cleanup shutdown must succeed");
+    let reply = spawn
+        .await
+        .expect("join")
+        .expect("spawn after a finished teardown must succeed");
+    let new_conn = reply["conn"].as_u64().expect("conn must be numeric");
+    assert!(
+        new_conn > old_conn,
+        "the replacement must be a NEW engine ({old_conn} -> {new_conn})"
+    );
+
+    let replacement = slot.lock().await.take().expect("the slot must hold the new engine");
+    replacement.destroy(true).expect("cleanup destroy");
+}
+
+/// C: a failed teardown must poison the engine, not fake an empty slot. No
+/// replacement may start while the old handle may still be alive.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // intentional: serializes against the other engine tests
+async fn failed_teardown_poisons_the_slot_and_refuses_a_replacement() {
+    let _serial = serial();
+    if !engine_available() {
+        return;
+    }
+    let slot: EngineSlot = tokio::sync::Mutex::new(None);
+    let (sink, _collected) = collector();
+    let engine = Engine::create(sink).expect("engine must create");
+    engine.add_teardown_hook(Box::new(|_engine| {
+        Err(super::engine::EngineError::RenderThread {
+            message: "injected teardown failure".to_string(),
+        })
+    }));
+    *slot.lock().await = Some(engine);
+
+    let failed = super::shutdown_slot(&slot, &super::LIFECYCLE_GATE).await;
+    assert!(failed.is_err(), "a failed teardown must never report success");
+    assert!(
+        slot.lock().await.is_some(),
+        "a failed teardown must keep the failed engine, not expose an empty slot"
+    );
+
+    let (sink, _collected) = collector();
+    let spawn_error = super::ensure_spawned_with_window(&slot, sink, None)
+        .await
+        .expect_err("spawn must refuse while the old engine may still be alive");
+    assert!(
+        spawn_error.contains("teardown failed"),
+        "the refusal must name the failed teardown: {spawn_error}"
+    );
+
+    let second = super::shutdown_slot(&slot, &super::LIFECYCLE_GATE).await;
+    assert!(second.is_err(), "the failure must persist for later shutdowns");
+
+    // Production deliberately keeps the handle when a teardown hook refuses
+    // to stop its thread (spec §18). Drop the test's ownership without
+    // creating a second engine; the test process ends with the harness.
+    let _ = slot.lock().await.take();
+}
+
 // --- ENGINE-024 -------------------------------------------------------------
 
 /// libmpv mode must never spawn an mpv process: the sidecar stays untouched.

@@ -6,6 +6,7 @@
  * reloads, after persisting the session the reloaded page will restore.
  */
 import i18next from "i18next";
+import { listen } from "@tauri-apps/api/event";
 import { AudioController } from "../lib/AudioController";
 import { describeError } from "../lib/mpvProtocol";
 import { savePlayerSessionNow } from "../hooks/player/usePlayerSession";
@@ -19,6 +20,39 @@ import { captureError } from "../utils/errorLog";
 import { showErrorToast } from "../utils/simpleToast";
 
 const PLAYER_RELOAD_MODULE = "playerReload";
+
+/** Emitted by `src-tauri/src/webview_reload.rs` after it suppressed the
+ *  WebView2 browser accelerator for F5/Ctrl+R. The native layer cannot await
+ *  the ordered flow, so it hands the request to this one orchestration. */
+const NATIVE_RELOAD_REQUEST_EVENT = "player-reload-requested";
+
+/**
+ * Bridge the native WebView2 accelerator handler into `requestPlayerReload`.
+ * Returns an idempotent unsubscribe. A failure to subscribe is logged, never
+ * thrown: the JS keydown path still exists for dev/web builds.
+ */
+export function listenForNativeReloadRequests(): () => void {
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  listen(NATIVE_RELOAD_REQUEST_EVENT, () => {
+    void requestPlayerReload();
+  })
+    .then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+    })
+    .catch((e: unknown) => {
+      void captureError({
+        level: "warn",
+        source: PLAYER_RELOAD_MODULE,
+        message: `native-reload-listen-failed: ${describeError(e)}`,
+      });
+    });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
 
 /** One reload flow at a time: repeated F5 presses (and chords) must not issue
  *  a second shutdown or a second reload. Cleared only when the flow fails. */

@@ -36,7 +36,6 @@ import { MpvAudioController } from "./mpvAudio";
 import { RELOAD_SHUTDOWN_TIMEOUT_MS } from "./mpvProtocol";
 
 const PROXY_PORT = 51234;
-const PROXY_URL_PREFIX = "http://127.0.0.1:51234/stream/";
 
 type TauriHandler = (event: { payload: unknown }) => void;
 
@@ -193,7 +192,7 @@ describe("MpvAudioController — awaitable shutdown for a UI reload", () => {
     expect(ctrl.getCurrentTrackId()).toBeNull();
   });
 
-  it("two concurrent shutdowns join the same promise and invoke mpv_shutdown once", async () => {
+  it("two concurrent shutdowns join one native mpv_shutdown and both wait for it", async () => {
     await ctrl.playTrack(trackA);
     const gate = deferred<undefined>();
     tauriMocks.invoke.mockClear();
@@ -204,7 +203,6 @@ describe("MpvAudioController — awaitable shutdown for a UI reload", () => {
     const first = ctrl.shutdownForReload();
     const second = ctrl.shutdownForReload();
 
-    expect(second).toBe(first);
     await Promise.resolve();
     expect(
       commandNames().filter((name) => name === "mpv_shutdown"),
@@ -218,7 +216,7 @@ describe("MpvAudioController — awaitable shutdown for a UI reload", () => {
     expect(liveListeners("mpv-property")).toBe(0);
   });
 
-  it("a rejected shutdown keeps the engine alive and reopens the lock for a retry", async () => {
+  it("a rejected shutdown keeps playback locked and a retry issues one fresh mpv_shutdown", async () => {
     await ctrl.playTrack(trackA);
     tauriMocks.invoke.mockClear();
     tauriMocks.invoke.mockImplementation((command: string) =>
@@ -231,48 +229,65 @@ describe("MpvAudioController — awaitable shutdown for a UI reload", () => {
       "mpv shutdown failed",
     );
 
-    // No teardown on failure: the UI keeps its engine, the listeners are still
-    // there, and the user can retry (or keep playing).
+    // The native lifecycle is unresolved: the local engine state must NOT be
+    // reported as torn down, and no Play track may reach the engine.
     expect(liveListeners("mpv-property")).toBe(1);
-    expect(liveListeners("mpv-event")).toBe(1);
-    expect(liveListeners("stream-proxy-error")).toBe(1);
     expect(ctrl.getCurrentTrackId()).toBe("A");
+    tauriMocks.invoke.mockClear();
+    await ctrl.playTrack(trackB);
+    ctrl.togglePlay();
+    expect(commandNames()).toEqual([]);
 
+    // A retry is the explicit recovery: it issues a fresh shutdown and only
+    // its success unlocks the page lifecycle.
     tauriMocks.invoke.mockClear();
     tauriMocks.invoke.mockImplementation(() => Promise.resolve(undefined));
-    await ctrl.playTrack(trackB);
-    expect(mpvCommands()).toContainEqual([
-      "loadfile",
-      `${PROXY_URL_PREFIX}B`,
-      "replace",
-    ]);
-    expect(ctrl.getCurrentTrackId()).toBe("B");
+    await ctrl.shutdownForReload();
+    expect(
+      commandNames().filter((name) => name === "mpv_shutdown"),
+    ).toHaveLength(1);
+    expect(liveListeners("mpv-property")).toBe(0);
+    expect(ctrl.getCurrentTrackId()).toBeNull();
   });
 
-  it("bounds a hung shutdown with RELOAD_SHUTDOWN_TIMEOUT_MS instead of hanging the reload", async () => {
+  it("a frontend timeout never unlocks playback and a retry joins the SAME native shutdown", async () => {
     await ctrl.playTrack(trackA);
+    const gate = deferred<undefined>();
+    let shutdownInvocations = 0;
     tauriMocks.invoke.mockClear();
-    tauriMocks.invoke.mockImplementation((command: string) =>
-      command === "mpv_shutdown"
-        ? new Promise<undefined>(() => {})
-        : Promise.resolve(undefined),
-    );
+    tauriMocks.invoke.mockImplementation((command: string) => {
+      if (command !== "mpv_shutdown") return Promise.resolve(undefined);
+      shutdownInvocations += 1;
+      return gate.promise;
+    });
 
     const pending = ctrl.shutdownForReload();
     const rejects = expect(pending).rejects.toThrow(/mpv IPC timeout/);
     await vi.advanceTimersByTimeAsync(RELOAD_SHUTDOWN_TIMEOUT_MS);
     await rejects;
 
+    // The JS timeout does not cancel the Rust command, so it proves nothing
+    // about the engine: no Play/spawn may start a second session.
     expect(liveListeners("mpv-property")).toBe(1);
     expect(ctrl.getCurrentTrackId()).toBe("A");
-
     tauriMocks.invoke.mockClear();
-    tauriMocks.invoke.mockImplementation(() => Promise.resolve(undefined));
     await ctrl.playTrack(trackB);
-    expect(ctrl.getCurrentTrackId()).toBe("B");
+    ctrl.togglePlay();
+    expect(commandNames()).toEqual([]);
+
+    // Retry joins the in-flight shutdown instead of issuing a second one...
+    const retry = ctrl.shutdownForReload();
+    await Promise.resolve();
+    expect(shutdownInvocations).toBe(1);
+
+    // ...and only the real completion resolves it and tears the state down.
+    gate.resolve(undefined);
+    await retry;
+    expect(liveListeners("mpv-property")).toBe(0);
+    expect(ctrl.getCurrentTrackId()).toBeNull();
   });
 
-  it("a teardown failure reopens the lock instead of caching a rejected shutdown", async () => {
+  it("a teardown failure is not cached: the next attempt runs a fresh shutdown", async () => {
     await ctrl.playTrack(trackA);
     tauriMocks.invoke.mockClear();
     tauriMocks.invoke.mockImplementation(() => Promise.resolve(undefined));
@@ -280,6 +295,11 @@ describe("MpvAudioController — awaitable shutdown for a UI reload", () => {
     hubMocks.detachThrows = true;
     await expect(ctrl.shutdownForReload()).rejects.toThrow("detach failed");
     hubMocks.detachThrows = false;
+
+    // Playback stays locked while the local teardown is unresolved.
+    tauriMocks.invoke.mockClear();
+    await ctrl.playTrack(trackB);
+    expect(commandNames()).toEqual([]);
 
     // Retry: the rejected promise must not be cached — a fresh shutdown runs.
     tauriMocks.invoke.mockClear();

@@ -7,7 +7,10 @@ import {
   type PlayerCommandContext,
   type PlayerCommandId,
 } from "./commands";
-import { requestPlayerReload } from "./reloadPlayer";
+import {
+  listenForNativeReloadRequests,
+  requestPlayerReload,
+} from "./reloadPlayer";
 
 /**
  * Browser reload chords (F5 / Ctrl+R / Cmd+R, including the Shift and Ctrl
@@ -49,9 +52,14 @@ export function usePlayerCommands(context: PlayerCommandContext): void {
     };
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keydown", handleReloadKeyDown, true);
+    // WebView2 handles F5/Ctrl+R as browser accelerators in its own process;
+    // the native layer blocks them and asks the page to run the SAME ordered
+    // flow. One reload request is deduped by requestPlayerReload either way.
+    const stopNativeRequests = listenForNativeReloadRequests();
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keydown", handleReloadKeyDown, true);
+      stopNativeRequests();
     };
   }, []);
 }

@@ -815,32 +815,41 @@ export class MpvAudioController {
    * Stop the native engine and resolve only once the shutdown completed — the
    * F5/Ctrl+R refresh path. The WebView reload must not start while mpv is
    * still playing (the engine lives in the Rust process, not in the page).
-   * Listeners/state are torn down only after the shutdown resolves; on
-   * failure they stay alive so the user can retry or keep playing.
+   * Listeners/state are torn down only after the shutdown resolves.
+   *
+   * The timeout bounds THIS wait, it never cancels the Rust command and is
+   * never evidence that the engine stopped: after a timeout the controller
+   * stays locked (no Play/spawn) and a retry joins the SAME `mpv_shutdown`.
+   * Only a successful native reply reopens the page lifecycle.
    */
   public shutdownForReload(): Promise<void> {
-    if (this.reloadShutdown) return this.reloadShutdown;
+    // Lock first, for every attempt: during an unresolved teardown no
+    // playback entry point may start a second native session.
     this.reloadInProgress = true;
-    // Invalidate in-flight continuations before the engine goes away.
-    this.session.beginRelease();
-    const shutdown = withStallQueryTimeout(
-      invoke(TAURI_COMMANDS.mpvShutdown),
+    if (this.reloadShutdown === null) {
+      // Invalidate in-flight continuations before the engine goes away.
+      this.session.beginRelease();
+      this.reloadShutdown = this.runReloadShutdown();
+    }
+    return withStallQueryTimeout(
+      this.reloadShutdown,
       RELOAD_SHUTDOWN_TIMEOUT_MS,
-    )
-      .then(() => {
-        this.teardownReleasedState();
-      })
-      .catch((e: unknown) => {
-        // Either the shutdown rejected/timeout (engine may still be alive) or
-        // the teardown itself threw: reopen the lock, drop the cached rejected
-        // promise (or every later F5 would replay it forever) and rethrow so
-        // the caller can log/toast and retry.
-        this.reloadInProgress = false;
-        this.reloadShutdown = null;
-        throw e;
-      });
-    this.reloadShutdown = shutdown;
-    return shutdown;
+    );
+  }
+
+  /** One native shutdown + local teardown, shared by every reload attempt.
+   *  A rejection clears the memo so a retry issues a fresh `mpv_shutdown`
+   *  (Rust answers from its real lifecycle state); playback stays locked. */
+  private async runReloadShutdown(): Promise<void> {
+    try {
+      await invoke(TAURI_COMMANDS.mpvShutdown);
+      this.teardownReleasedState();
+    } catch (e: unknown) {
+      // Never cache a rejected attempt: a later F5 must run a fresh one
+      // (Rust reports the true lifecycle state). Playback stays locked.
+      this.reloadShutdown = null;
+      throw e;
+    }
   }
 
   /** Shared release teardown: detach the listeners, finish the lifecycle and

@@ -92,6 +92,17 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
         match crate::player::spawn(&app).await {
             Ok(value) => return Ok(value),
             Err(error) => {
+                // A failed/ongoing native teardown means the old libmpv engine
+                // may still be alive. Falling back would start a second engine
+                // (mpv.exe) that plays over it — refuse instead.
+                if crate::player::has_unresolved_engine_failure() {
+                    log::error!(
+                        "[mpv] refusing the legacy sidecar fallback: the libmpv lifecycle is unresolved ({error})"
+                    );
+                    return Err(format!(
+                        "libmpv engine is still shutting down or failed to tear down; refusing to start a second engine: {error}"
+                    ));
+                }
                 log::error!(
                     "[mpv] libmpv engine failed to start, falling back to the legacy sidecar: {error}"
                 );

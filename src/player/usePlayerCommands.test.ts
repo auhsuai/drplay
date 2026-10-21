@@ -21,10 +21,14 @@ const { showErrorToast } = vi.hoisted(() => ({
 
 const reloadMocks = vi.hoisted(() => ({
   requestPlayerReload: vi.fn(),
+  stopNativeReloadRequests: vi.fn(),
 }));
 
 vi.mock("./reloadPlayer", () => ({
   requestPlayerReload: reloadMocks.requestPlayerReload,
+  listenForNativeReloadRequests: vi.fn(
+    () => reloadMocks.stopNativeReloadRequests,
+  ),
 }));
 
 import { requestPlayerReload } from "./reloadPlayer";
@@ -83,6 +87,7 @@ beforeEach(() => {
   resetAdvanceGuard();
   showErrorToast.mockClear();
   vi.mocked(requestPlayerReload).mockClear();
+  reloadMocks.stopNativeReloadRequests.mockClear();
   document.body.innerHTML = "";
 });
 
@@ -355,7 +360,7 @@ describe("reload interception (F5 / Ctrl+R)", () => {
     expect(requestPlayerReload).toHaveBeenCalledTimes(1);
   });
 
-  it("removes the reload interceptor on unmount", () => {
+  it("removes the reload interceptor and the native bridge on unmount", () => {
     const ctx = makeCtx();
     const { unmount } = renderHook(() => {
       usePlayerCommands(ctx);
@@ -366,5 +371,6 @@ describe("reload interception (F5 / Ctrl+R)", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(requestPlayerReload).not.toHaveBeenCalled();
+    expect(reloadMocks.stopNativeReloadRequests).toHaveBeenCalledTimes(1);
   });
 });

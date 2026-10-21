@@ -5,7 +5,7 @@
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -29,6 +29,14 @@ pub(super) const EVENT_WAIT_TIMEOUT_SECS: f64 = 1.0;
 /// Bound for the event thread to observe the stop flag and exit. The wakeup
 /// runs first, so this is a pathological-case guard, not a wait.
 const EVENT_THREAD_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Ordered teardown state of one engine. The transitions are monotonic and
+/// never regress, so a FAILED teardown can never be mistaken for a clean stop:
+/// reporting STOPPED while the render thread may still own the handle is what
+/// let a replacement engine start and play over the old one.
+const LIFECYCLE_RUNNING: u8 = 0;
+const LIFECYCLE_TEARING_DOWN: u8 = 1;
+const LIFECYCLE_STOPPED: u8 = 2;
+const LIFECYCLE_FAILED: u8 = 3;
 /// The one command whose reply advances the load epoch (mpv/ipc.rs:151-153).
 const LOADFILE_COMMAND: &str = "loadfile";
 /// Name of the event thread (observable via `GetThreadDescription`; the
@@ -71,6 +79,12 @@ pub(crate) enum EngineError {
     /// The render thread refused to stop within the join timeout. The mpv
     /// handle is intentionally left alive in that case (spec §18).
     RenderThread { message: String },
+    /// A second teardown reached an engine while the first one is still
+    /// running. The caller must wait for that teardown, never assume success.
+    TeardownInProgress,
+    /// An earlier teardown failed: the handle was deliberately NOT released
+    /// and may still be alive. A second engine must never be created over it.
+    TeardownFailed,
 }
 
 impl std::fmt::Display for EngineError {
@@ -118,6 +132,13 @@ impl std::fmt::Display for EngineError {
             EngineError::RenderThread { message } => {
                 write!(formatter, "libmpv render thread: {message}")
             }
+            EngineError::TeardownInProgress => {
+                write!(formatter, "libmpv engine teardown is already in progress")
+            }
+            EngineError::TeardownFailed => write!(
+                formatter,
+                "a previous libmpv engine teardown failed; the old handle may still be alive"
+            ),
         }
     }
 }
@@ -246,7 +267,9 @@ pub(crate) struct Engine {
     /// True from `destroy` start on: rejects new commands and stops the event
     /// thread loop.
     shutdown_flag: Arc<AtomicBool>,
-    destroyed: AtomicBool,
+    /// Monotonic teardown state (see `LIFECYCLE_*`). `destroy` reports success
+    /// only once the state reached STOPPED; a failed path stays FAILED forever.
+    lifecycle: AtomicU8,
     event_thread: Mutex<Option<JoinHandle<()>>>,
     teardown_hooks: Mutex<Vec<TeardownHook>>,
     /// S2: the GL render context. Set during `setup_player` (after
@@ -285,7 +308,7 @@ impl Engine {
             core: Arc::new(WireState::new(sink)),
             ffi_lock: RwLock::new(()),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
-            destroyed: AtomicBool::new(false),
+            lifecycle: AtomicU8::new(LIFECYCLE_RUNNING),
             event_thread: Mutex::new(None),
             teardown_hooks: Mutex::new(Vec::new()),
             render: OnceLock::new(),
@@ -425,7 +448,20 @@ log::info!("[player] libmpv engine created (conn {})", engine.conn());
 
     /// True while commands are still accepted (before any destroy).
     pub(crate) fn is_alive(&self) -> bool {
-        !self.destroyed.load(Ordering::SeqCst) && !self.shutdown_flag.load(Ordering::SeqCst)
+        self.lifecycle.load(Ordering::SeqCst) == LIFECYCLE_RUNNING
+            && !self.shutdown_flag.load(Ordering::SeqCst)
+    }
+
+    /// True after a teardown failed. The handle was deliberately not released,
+    /// so a replacement engine must never be created over it.
+    pub(crate) fn teardown_failed(&self) -> bool {
+        self.lifecycle.load(Ordering::SeqCst) == LIFECYCLE_FAILED
+    }
+
+    /// True only once the native teardown completed. Anything else (running,
+    /// tearing down, failed) means the handle may still be usable.
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.lifecycle.load(Ordering::SeqCst) == LIFECYCLE_STOPPED
     }
 
     /// Register a teardown step (S2 render-context free). Runs under the write
@@ -625,12 +661,44 @@ log::info!("[player] libmpv engine created (conn {})", engine.conn());
     }
 
     /// Ordered teardown: stop the event thread, run teardown hooks, destroy
-    /// the player handle. Idempotent. `commanded` = the app asked for it
-    /// (silent); false = engine loss (`ipc-closed` emitted once).
+    /// the player handle. Idempotent on success ONLY: a second call while the
+    /// first teardown runs is rejected, and an engine whose teardown failed
+    /// keeps returning that failure — never a fake success (reporting Ok while
+    /// the old handle may still be alive is what allows a second engine).
+    /// `commanded` = the app asked for it (silent); false = engine loss
+    /// (`ipc-closed` emitted once).
     pub(crate) fn destroy(&self, commanded: bool) -> Result<(), EngineError> {
-        if self.destroyed.swap(true, Ordering::SeqCst) {
-            return Ok(()); // idempotent: exactly one teardown per engine
+        match self.lifecycle.load(Ordering::SeqCst) {
+            LIFECYCLE_STOPPED => return Ok(()),
+            LIFECYCLE_FAILED => return Err(EngineError::TeardownFailed),
+            LIFECYCLE_TEARING_DOWN => return Err(EngineError::TeardownInProgress),
+            _ => {}
         }
+        if self
+            .lifecycle
+            .compare_exchange(
+                LIFECYCLE_RUNNING,
+                LIFECYCLE_TEARING_DOWN,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return Err(EngineError::TeardownInProgress);
+        }
+        let outcome = self.run_teardown(commanded);
+        self.lifecycle.store(
+            if outcome.is_ok() {
+                LIFECYCLE_STOPPED
+            } else {
+                LIFECYCLE_FAILED
+            },
+            Ordering::SeqCst,
+        );
+        outcome
+    }
+
+    fn run_teardown(&self, commanded: bool) -> Result<(), EngineError> {
         if commanded {
             self.core.mark_shutdown_requested();
         }

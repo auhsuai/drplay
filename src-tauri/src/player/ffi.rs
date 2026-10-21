@@ -216,7 +216,15 @@ impl Api {
         Ok(Api {
             create: resolve!("mpv_create", unsafe extern "C" fn() -> *mut MpvHandle),
             initialize: resolve!("mpv_initialize", unsafe extern "C" fn(*mut MpvHandle) -> c_int),
-            destroy: resolve!("mpv_destroy", unsafe extern "C" fn(*mut MpvHandle)),
+            // Why terminate, not `mpv_destroy`: measured on the pinned build
+            // (v0.41.0-1206-gfffe7a23a8) with WASAPI session enumeration —
+            // `mpv_destroy` returns while the audio session is still ACTIVE
+            // (the track keeps playing after the F5 shutdown). `mpv_destroy`
+            // merely detaches the client handle; `mpv_terminate_destroy` quits
+            // the player, waits for the core and closes the AO (session
+            // INACTIVE within 100ms). This engine owns the only handle, so
+            // terminating the core is exactly the intended teardown.
+            destroy: resolve!("mpv_terminate_destroy", unsafe extern "C" fn(*mut MpvHandle)),
             set_option_string: resolve!(
                 "mpv_set_option_string",
                 unsafe extern "C" fn(*mut MpvHandle, *const c_char, *const c_char) -> c_int
