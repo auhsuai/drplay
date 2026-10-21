@@ -80,7 +80,13 @@ export function TransportControls({
         className={`w-11 h-11 shrink-0 flex items-center justify-center text-white rounded-full transition-all duration-200 shadow-md active:scale-90 ${currentTrack ? "bg-brand-primary hover:bg-blue-600 hover:shadow-lg" : "bg-gray-400 cursor-not-allowed"}`}
         disabled={!currentTrack || isDownloading}
       >
-        {isDownloading || (isBuffering && isPlaying && !hasError) ? (
+        {/* Same expression as the full-screen transport (NowPlayingControls):
+            the spinner follows the ENGINE's signal — the single source of
+            truth for "the engine is waiting" (its startup loader is up for
+            the whole load window, until the playback chain is confirmed). The
+            engine never raises it while the user paused, so a paused track
+            shows the Pause icon, never a spinner. */}
+        {isDownloading || (isBuffering && !hasError) ? (
           <LoaderCircle className="w-6 h-6 animate-spin [transform-box:view-box] origin-center" />
         ) : hasError ? (
           <RefreshCw className="w-6 h-6" />

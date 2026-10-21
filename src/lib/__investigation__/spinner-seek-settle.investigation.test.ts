@@ -130,10 +130,12 @@ describe("spinner/seek/settle investigation — engine level (S1 + S4)", () => {
   async function playSettled(position: number): Promise<void> {
     await ctrl.playTrack(trackA);
     fireProperty("pause", false);
-    // Two ticks: v3 promotes the spinner immediately at playTrack (S2), then
-    // the 2nd changed tick settles it — net [true, false], tracker idle.
+    // Two ticks keep the real push path alive, and mpv's `playback-restart`
+    // (the confirmed playback start) is what dismisses the load's startup
+    // loader now — a tick pair alone never does.
     fireProperty("time-pos", position);
     fireProperty("time-pos", position + 0.2);
+    fireMpvEvent("playback-restart");
     await vi.advanceTimersByTimeAsync(300);
     expect(buffering).toEqual([true, false]);
     // R3.2: the store projection moved to the policy adapter — the engine
@@ -227,8 +229,8 @@ describe("spinner/seek/settle investigation — engine level (S1 + S4)", () => {
     // v3: A's spinner promoted immediately at playTrack (no display delay).
     expect(buffering).toEqual([true]);
 
-    // User pauses while A is still buffering. The tracker is NOT cancelled
-    // (mpvAudio.onPauseChange never touches buffering), so it stays shown.
+    // User pauses while A is still buffering. The user pause is not buffering
+    // (W14): the loader turns off — it is never shown as a stall.
     fireProperty("pause", true);
     await vi.advanceTimersByTimeAsync(1000);
     buffering.length = 0;
@@ -247,9 +249,8 @@ describe("spinner/seek/settle investigation — engine level (S1 + S4)", () => {
     // has produced no audio.
     expect(buffering, "no false may drop B's spinner").not.toContain(false);
     expect(buffering).toEqual([true]);
-    // Tracker is still alive: B's progressing ticks settle it exactly once.
-    fireProperty("time-pos", 1);
-    fireProperty("time-pos", 1.5);
+    // Tracker is still alive: B's confirmed playback start dismisses it once.
+    fireMpvEvent("playback-restart");
     expect(buffering).toEqual([true, false]);
   });
 
@@ -346,18 +347,23 @@ describe("spinner/seek/settle investigation — engine level (S1 + S4)", () => {
   });
 
   it("E9 (variant S4): frozen time-pos repeats are not progress — a changed tick is still required to settle", async () => {
-    await ctrl.playTrack(trackA); // v3: shown
-    expect(buffering).toEqual([true]);
+    await ctrl.playTrack(trackA);
+    fireMpvEvent("playback-restart"); // the load's loader is gone
+    expect(buffering).toEqual([true, false]);
     buffering.length = 0;
 
-    fireProperty("time-pos", 5); // 1st counted value
+    ctrl.seek(5); // a seek session — the tick-pair rule applies here
+    await vi.advanceTimersByTimeAsync(SPINNER_DELAY_MS);
+    expect(buffering).toEqual([true]);
+
+    fireProperty("time-pos", 5); // 1st counted value (it also acks the seek)
     fireProperty("time-pos", 5); // identical — frozen, must not count
     fireProperty("time-pos", 5); // identical — frozen, must not count
     await vi.advanceTimersByTimeAsync(300);
-    expect(buffering).toEqual([]); // still shown: no progress
+    expect(buffering).toEqual([true]); // still shown: no progress
 
     fireProperty("time-pos", 5.1); // changed within 1s of the last counted tick
-    expect(buffering).toEqual([false]);
+    expect(buffering).toEqual([true, false]);
   });
 
   it("E10 (variant S1): a second seek re-targets the ack filter — the first target's late report is dropped", async () => {

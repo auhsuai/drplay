@@ -137,6 +137,12 @@ function fireProperty(name: string, data: unknown): void {
   }
 }
 
+function fireMpvEvent(event: string, reason: string | null = null): void {
+  for (const handler of tauriListeners.get("mpv-event") ?? []) {
+    handler({ payload: { event, reason, error: null } });
+  }
+}
+
 function commandNames(): string[] {
   return (tauriMocks.invoke.mock.calls as unknown as Array<[string]>).map(
     (call) => call[0],
@@ -400,7 +406,8 @@ describe("MpvAudioController — release() vs in-flight start (lifecycle epoch)"
       return Promise.resolve(undefined);
     });
 
-    fireProperty("pause", false); // arms the watchdog + interpolator
+    fireProperty("pause", false); // arms the interpolator
+    fireMpvEvent("playback-restart"); // the chain is up — the watchdog polls
     await vi.advanceTimersByTimeAsync(2 * WATCHDOG_INTERVAL_MS);
     expect(tauriMocks.invoke).toHaveBeenCalledWith("mpv_get_property", {
       prop: "time-pos",

@@ -71,6 +71,11 @@ function fireProperty(name: string, data: unknown): void {
     handler({ payload: { name, data } });
 }
 
+function fireMpvEvent(event: string, reason: string | null = null): void {
+  for (const handler of tauriListeners.get("mpv-event") ?? [])
+    handler({ payload: { event, reason, error: null } });
+}
+
 /** Freezes the watchdog backfill: every poll returns the same stale value. */
 function freezeWatchdogPoll(): void {
   tauriMocks.invoke.mockImplementation((command: string) =>
@@ -121,14 +126,16 @@ describe("clock-stall oscillation — engine level (head-of-file, no audio yet)"
   });
 
   /**
-   * Plays A through the first two real pushes (spinner settles), then stops
-   * any further push: from here on only the watchdog could resync.
+   * Plays A through the first two real pushes (the confirmed start dismisses
+   * the load's loader), then stops any further push: from here on only the
+   * watchdog could resync.
    */
   async function playSettledThenSilence(): Promise<void> {
     await ctrl.playTrack(trackA);
     fireProperty("pause", false);
     fireProperty("time-pos", 0.5);
     fireProperty("time-pos", 0.6);
+    fireMpvEvent("playback-restart"); // the confirmed start dismisses the loader
     await vi.advanceTimersByTimeAsync(300);
     expect(buffering).toEqual([true, false]);
     timeupdates.length = 0;

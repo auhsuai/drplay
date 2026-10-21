@@ -32,12 +32,16 @@ const LOGGER_SOURCE = "videoFirstFrame";
  * window exists where neither path can deliver — the hook pulls the same state
  * once via `video_host_first_frame_presented` and self-heals.
  *
- * `mediaKey` is the current media id, or `null` for no media (nothing to wait
- * for, nothing to subscribe to). Changing it RESETS the answer during render —
- * not in an effect — so the previous item's frame can never be shown for one
- * frame as the new item's video. The reset also guards both delivery paths:
- * push handler and pull result share one `markReady` whose `previous.key ===
- * mediaKey` check drops anything that raced a media switch.
+ * `mediaKey` identifies ONE media LOAD, or `null` for "nothing to wait for"
+ * (nothing to subscribe to). The caller owns the identity: the engine mints a
+ * new attempt id per load, so the key pairs the track with the load attempt
+ * (`track#attempt`) — a re-load of the SAME track is a different load and
+ * must not inherit the previous one's readiness. Changing the key RESETS the
+ * answer during render — not in an effect — so the previous load's frame can
+ * never be shown for one frame as the new load's video. The reset also guards
+ * both delivery paths: push handler and pull result share one `markReady`
+ * whose `previous.key === mediaKey` check drops anything that raced a media
+ * switch.
  */
 export function useVideoFirstFrame(mediaKey: string | null): boolean {
   const [state, setState] = useState({ key: mediaKey, hasFrame: false });

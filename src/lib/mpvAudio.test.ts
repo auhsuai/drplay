@@ -403,16 +403,21 @@ describe("MpvAudioController — mpv-property mapping (payload shape = AudioEven
   });
 
   it("paused-for-cache -> buffering {isBuffering} in order (sustained stall passes the delay)", () => {
-    // playTrack arms a pending request — settle it via two ticks so this test
-    // asserts only the genuine mpv stall path (transition true->false).
+    // The load's startup loader is up — mpv confirms the playback chain
+    // (playback-restart) so this test asserts only the genuine mpv stall
+    // path (transition true->false).
     fireProperty("time-pos", 0.5);
     fireProperty("time-pos", 1);
+    fireMpvEvent("playback-restart");
     events.length = 0;
 
     fireProperty("paused-for-cache", true);
     expect(emitted("buffering")).toEqual([]); // not yet — stall unconfirmed
 
     vi.advanceTimersByTime(250); // stall sustained -> shown
+    expect(emitted("buffering")).toEqual([
+      { trackId: "A", attempt: 1, isBuffering: true },
+    ]);
     fireProperty("paused-for-cache", false); // stall over -> settle
     expect(emitted("buffering")).toEqual([
       { trackId: "A", attempt: 1, isBuffering: true },
@@ -536,9 +541,22 @@ describe("MpvAudioController — mpv-event mapping", () => {
     expect(mpvCommands()).toEqual([]);
   });
 
-  it("unrelated mpv events (start-file, playback-restart) are ignored", () => {
+  it("an unrelated mpv event (start-file) is ignored; playback-restart IS dispatched", () => {
+    const buffering = vi.fn();
+    ctrl.on("buffering", buffering);
+
     fireMpvEvent("start-file");
+    expect(ended).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(buffering).not.toHaveBeenCalled();
+
+    // playback-restart is the confirmed playback start — the engine acts on
+    // it (it dismisses the load's startup loader). It is never a terminal
+    // outcome.
     fireMpvEvent("playback-restart");
+    expect(buffering).toHaveBeenCalledWith(
+      expect.objectContaining({ isBuffering: false }),
+    );
     expect(ended).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
   });
@@ -993,10 +1011,15 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     vi.restoreAllMocks();
   });
 
-  /** Two time-pos ticks inside the window = playback truly progressing. */
-  function settleViaTicks(): void {
+  /**
+   * Ends the LOAD's startup session: two time-pos ticks (the real push path)
+   * plus mpv's `playback-restart` — the confirmed playback start, the only
+   * signal that may dismiss the startup loader.
+   */
+  function settleStartup(): void {
     fireProperty("time-pos", 0.5);
     fireProperty("time-pos", 1);
+    fireMpvEvent("playback-restart");
   }
 
   it("new playTrack: immediate promote (S2) — true right away, no spinner gap before first-audio", async () => {
@@ -1011,9 +1034,9 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     ]);
   });
 
-  it("load settled right after playTrack: immediate true then tick-settle — false exactly once", async () => {
+  it("load settled right after playTrack: immediate true, then the CONFIRMED start dismisses it — false exactly once", async () => {
     await ctrl.playTrack(trackA);
-    settleViaTicks();
+    settleStartup();
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
       { isBuffering: false, trackId: "A", attempt: 1 },
@@ -1026,30 +1049,34 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     ]);
   });
 
-  it("shown spinner settles on the 2nd time-pos tick within 1s — false exactly once", async () => {
+  it("a shown SEEK spinner settles on the 2nd time-pos tick within 1s — false exactly once", async () => {
     await ctrl.playTrack(trackA);
+    settleStartup();
+    buffering.length = 0;
+
+    ctrl.seek(42);
     vi.advanceTimersByTime(250);
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
     ]);
 
-    fireProperty("time-pos", 1); // tick 1 — mpv may still be stalling
+    fireProperty("time-pos", 42); // tick 1 (it also acks the seek)
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
     ]);
-    fireProperty("time-pos", 2); // tick 2 within 1s — playback progressing
+    fireProperty("time-pos", 42.5); // tick 2 within 1s — playback progressing
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
       { isBuffering: false, trackId: "A", attempt: 1 },
     ]);
 
-    fireProperty("time-pos", 3);
+    fireProperty("time-pos", 43);
     expect(buffering).toHaveLength(2); // dedupe: no duplicate false
   });
 
   it("seek: pending only — no immediate emit, command still sent", async () => {
     await ctrl.playTrack(trackA);
-    settleViaTicks();
+    settleStartup();
     buffering.length = 0;
     tauriMocks.invoke.mockClear();
 
@@ -1060,7 +1087,7 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
 
   it("seek outside buffer: true at exactly ~250ms, held until ticks settle -> false once", async () => {
     await ctrl.playTrack(trackA);
-    settleViaTicks();
+    settleStartup();
     buffering.length = 0;
 
     ctrl.seek(120);
@@ -1082,7 +1109,7 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
 
   it("seek into an already-cached range with fast ticks never flashes", async () => {
     await ctrl.playTrack(trackA);
-    settleViaTicks();
+    settleStartup();
     fireProperty("demuxer-cache-state", {
       "seekable-ranges": [{ start: 0, end: 180 }],
     });
@@ -1097,7 +1124,14 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     expect(buffering).toEqual([]);
   });
 
-  it("playTrack with startTime: spinner already shown (v3); the deferred seek keeps it and ticks settle", async () => {
+  // UPDATED CONTRACT (v6): this test used to assert that the deferred seek
+  // took the session over and that a tick pair settled the loader. A seek must
+  // NOT downgrade a STARTUP session: the tick-pair settle and the 8s net are
+  // the SEEK's rules, and applying them to a load that was never confirmed
+  // dropped the loader of a slow load at the 8s mark. The loader is now
+  // dismissed by the confirmed playback start alone (see
+  // mpvAudio.startupSession.test.ts for the full contract).
+  it("playTrack with startTime: spinner already shown (v3); the deferred seek keeps the startup session", async () => {
     await ctrl.playTrack(trackB, 120);
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "B", attempt: 1 },
@@ -1115,6 +1149,13 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     ]);
     fireProperty("time-pos", 120);
     fireProperty("time-pos", 121);
+    // The tick pair is the SEEK's settle rule — it does not apply to a load
+    // whose playback was never confirmed.
+    expect(buffering).toEqual([
+      { isBuffering: true, trackId: "B", attempt: 1 },
+    ]);
+
+    fireMpvEvent("playback-restart");
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "B", attempt: 1 },
       { isBuffering: false, trackId: "B", attempt: 1 },
@@ -1123,7 +1164,7 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
 
   it("same-track resume + togglePlay never request (no pending, no events)", async () => {
     await ctrl.playTrack(trackA);
-    settleViaTicks();
+    settleStartup();
     buffering.length = 0;
     fireProperty("pause", true);
     tauriMocks.invoke.mockClear();
@@ -1169,7 +1210,7 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
 
   it("paused-for-cache=false while idle emits nothing; repeat true does not double-arm", async () => {
     await ctrl.playTrack(trackA);
-    settleViaTicks();
+    settleStartup();
     buffering.length = 0;
 
     fireProperty("paused-for-cache", false);
@@ -1188,21 +1229,25 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     ]);
   });
 
-  it("safety net: shown auto-settles 8s after request", async () => {
+  it("safety net: a shown SEEK spinner auto-settles 8s after the request", async () => {
     await ctrl.playTrack(trackA);
+    settleStartup();
+    buffering.length = 0;
+
+    ctrl.seek(42);
     vi.advanceTimersByTime(250);
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
     ]);
 
-    vi.advanceTimersByTime(7750); // 8000ms total from request
+    vi.advanceTimersByTime(7750); // 8000ms total from the request
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
       { isBuffering: false, trackId: "A", attempt: 1 },
     ]);
   });
 
-  it("switch mid-stall: resetForTrack drops A's session, B promotes fresh and re-arms its own net", async () => {
+  it("switch mid-stall: resetForTrack drops A's session, B promotes fresh and keeps its own loader (no 8s net)", async () => {
     await ctrl.playTrack(trackA);
     vi.advanceTimersByTime(250);
     expect(buffering).toEqual([
@@ -1219,23 +1264,19 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
       { isBuffering: true, trackId: "B", attempt: 2 },
     ]);
 
-    vi.advanceTimersByTime(7999); // B's re-armed net not yet fired
+    // W8: B's startup loader is bounded by the load deadline + the stall
+    // reconciler, never by the 8s seek net — a slow load keeps its spinner.
+    vi.advanceTimersByTime(8000);
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
       { isBuffering: true, trackId: "B", attempt: 2 },
-    ]);
-    vi.advanceTimersByTime(1);
-    expect(buffering).toEqual([
-      { isBuffering: true, trackId: "A", attempt: 1 },
-      { isBuffering: true, trackId: "B", attempt: 2 },
-      { isBuffering: false, trackId: "B", attempt: 2 },
     ]);
   });
 
   it("timers are cleaned up: seek arms display+deadline+failsafe, settle drains, release cancels", async () => {
     await ctrl.playTrack(trackA);
     fireMpvEvent("file-loaded"); // the load completed — clears the load deadline
-    settleViaTicks();
+    settleStartup();
     // R3.2: a loaded track is rolling engine-side, so the backfill machines are
     // armed. Park it paused (real user path) to isolate the seek/display timers.
     fireProperty("pause", true);
@@ -1251,7 +1292,7 @@ describe("MpvAudioController — buffering spinner (display-delay v2)", () => {
     expect(buffering).toEqual([
       { isBuffering: true, trackId: "A", attempt: 1 },
       { isBuffering: false, trackId: "A", attempt: 1 },
-    ]); // v3: shown at playTrack, settled by the ticks
+    ]); // v3: shown at playTrack, dismissed by the confirmed start
 
     ctrl.seek(30);
     expect(vi.getTimerCount()).toBe(3);
@@ -1301,6 +1342,8 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
   it("push stall >1.2s while playing: polls mpv_get_property and backfills through the real onTimeUpdate path", async () => {
     fireProperty("pause", false); // engine play fact — playback is rolling
     expect(emitted("play")).toEqual([{ trackId: "A", attempt: 1 }]);
+    // The chain must be confirmed before the watchdog may poll.
+    fireMpvEvent("playback-restart");
     tauriMocks.invoke.mockImplementation((command: string) =>
       command === "mpv_get_property"
         ? Promise.resolve(90)
@@ -1329,6 +1372,7 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
 
   it("regular pushes keep the watchdog quiet (no mpv_get_property)", async () => {
     fireProperty("pause", false);
+    fireMpvEvent("playback-restart"); // the chain is up — the watchdog is armed
     tauriMocks.invoke.mockClear();
 
     for (let i = 0; i < 8; i++) {
@@ -1343,6 +1387,7 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
   });
 
   it("paused: watchdog never polls", async () => {
+    fireMpvEvent("playback-restart"); // the chain is up — the watchdog is armed
     fireProperty("pause", true);
     expect(emitted("pause")).toEqual([{ trackId: "A", attempt: 1 }]);
 
@@ -1356,6 +1401,7 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
 
   it("release() cancels the watchdog interval (no timer leak)", async () => {
     fireProperty("pause", false);
+    fireMpvEvent("playback-restart"); // the chain is up — the watchdog is armed
     tauriMocks.invoke.mockClear();
 
     ctrl.release();
@@ -1370,6 +1416,7 @@ describe("MpvAudioController — time-pos watchdog (push-stall backfill, mpv #13
 
   it("nil poll result during the seek window: skipped round, rate-limited warn from mpvProtocol, no timeupdate", async () => {
     fireProperty("pause", false);
+    fireMpvEvent("playback-restart"); // the chain is up — the watchdog is armed
     tauriMocks.invoke.mockImplementation((command: string) =>
       command === "mpv_get_property"
         ? Promise.resolve(null)
@@ -1402,6 +1449,9 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
     attachMocks();
     ctrl = new MpvAudioController();
     await ctrl.playTrack(trackA);
+    // The load's startup loader is up until mpv confirms the chain
+    // (playback-restart) — the synthetic clock only runs once it is gone.
+    fireMpvEvent("playback-restart");
     timeupdates = [];
     ctrl.on("timeupdate", (payload) => timeupdates.push(payload));
     tauriMocks.invoke.mockClear();
@@ -1451,6 +1501,7 @@ describe("MpvAudioController — engine time interpolator (push-gap clock)", () 
     await vi.advanceTimersByTimeAsync(300);
 
     await ctrl.playTrack(trackB); // beginTrack resets the interpolation base
+    fireMpvEvent("playback-restart"); // B's chain is up — the clock may run
     fireProperty("pause", false); // mpv playing again — still no real time-pos
     timeupdates.length = 0;
 
@@ -1624,6 +1675,7 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
   it("active track: pause=false -> play fact + 3 timers; pause=true -> pause fact + 0 timers", async () => {
     await ctrl.playTrack(trackA);
     fireMpvEvent("file-loaded"); // the load completed — clears the load deadline
+    fireMpvEvent("playback-restart"); // the chain is up — the watchdog may poll
     fireProperty("time-pos", 0.5);
     fireProperty("time-pos", 1); // two changed ticks settle the playTrack spinner
     // Park at a known stopped state: a loaded track is already rolling, so the
@@ -1641,14 +1693,16 @@ describe("MpvAudioController — lifecycle guard: onPauseChange (R3) + beginTrac
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("active track before file-loaded: pause=false still emits the play fact + arms timers (resume-on-switch)", async () => {
+  it("active track before file-loaded: pause=false still emits the play fact + arms the reconciler (the watchdog waits for the chain)", async () => {
     await ctrl.playTrack(trackA); // loadfile sent, no file-loaded yet
-    expect(vi.getTimerCount()).toBe(3); // load deadline + buffering net + interpolator
+    expect(vi.getTimerCount()).toBe(2); // load deadline + interpolator (the startup loader has no 8s net)
 
     fireProperty("pause", false);
 
     expect(facts).toEqual(["play"]);
-    expect(vi.getTimerCount()).toBe(5); // + watchdog + reconciler
+    // W1: `pause=false` alone never arms the time-pos watchdog — only mpv's
+    // `playback-restart` proves the chain is up.
+    expect(vi.getTimerCount()).toBe(3); // + reconciler
   });
 
   it("finished track (end-file eof): pause=false emits no fact and arms no timer", async () => {

@@ -7,8 +7,8 @@
  * intent's commit point; this harness mocks the engine, so it emits no
  * buffering transitions — the pre-load window shape is unchanged.)
  * During that window the exact UI gates
- *   TransportControls.tsx:58  isDownloading || (isBuffering && isPlaying && !hasError)
- *   NowPlayingControls.tsx:54 isDownloading || (isBuffering && isPlaying)
+ *   TransportControls.tsx   isDownloading || (isBuffering && !hasError)
+ *   NowPlayingControls.tsx  isDownloading || (isBuffering && !hasError)
  * are BOTH false → no spinner while the new track has zero audio.
  *
  * RED today: spinnerVisible === false.

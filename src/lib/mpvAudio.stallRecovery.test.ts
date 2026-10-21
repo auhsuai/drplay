@@ -9,8 +9,8 @@
  * - (f) a playhead pinned for STALL_RECOVER_MS reloads the stream (bounded
  *   attempts, resume seek), then surfaces network_interrupted and a replay of
  *   the same track must reload again;
- * - (g) file-loaded re-arms the watchdog so track 2+ keeps its backfill after
- *   track 1's end-file stopped it;
+ * - (g) the confirmed playback start (playback-restart) re-arms the watchdog
+ *   so track 2+ keeps its backfill after track 1's end-file stopped it;
  * - (h) a user pause never triggers a reconcile query or a recovery.
  */
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
@@ -212,13 +212,14 @@ describe("MpvAudioController — stall reconciler (pinned-playhead self-heal)", 
     ]);
   });
 
-  it("(g) track 2 after track 1's end-file: file-loaded re-arms the watchdog backfill", async () => {
+  it("(g) track 2 after track 1's end-file: the confirmed chain re-arms the watchdog backfill", async () => {
     await ctrl.playTrack(trackA);
     fireProperty("pause", false);
     fireMpvEvent("end-file", "eof"); // terminal: stops the watchdog
 
-    await ctrl.playTrack(trackB); // auto-advance — no pause event follows
+    await ctrl.playTrack(trackB); // auto-advance - no pause event follows
     fireMpvEvent("file-loaded");
+    fireMpvEvent("playback-restart"); // B's chain is up — the watchdog may poll
     tauriMocks.invoke.mockClear();
 
     // No time-pos pushes at all: once the staleness window elapses the

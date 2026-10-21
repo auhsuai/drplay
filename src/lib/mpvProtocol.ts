@@ -37,6 +37,16 @@ export const MPV_PROPERTIES = {
 
 export const MPV_EVENTS = {
   fileLoaded: "file-loaded",
+  /**
+   * mpv's own event name for MPV_EVENT_PLAYBACK_RESTART (client.h:21): "There
+   * was a discontinuity of some sort (like a seek), and playback was
+   * reinitialized. Usually happens on start of playback and after seeking."
+   * It fires once mpv's output chain is READY — the only proof the frontend
+   * gets that playback actually started. Both engines deliver the same
+   * verbatim name (the legacy IPC forwards it, the native engine maps the
+   * event id to mpv's own name).
+   */
+  playbackRestart: "playback-restart",
   endFile: "end-file",
   ipcClosed: "ipc-closed",
 } as const;
@@ -327,6 +337,12 @@ export type MpvEventCallbacks = {
   onBuffering: (isBuffering: boolean) => void;
   onCacheState: (ranges: MpvRange[]) => void;
   onFileLoaded: () => void;
+  /**
+   * mpv's playback chain is up (playback-restart). The engine uses it as the
+   * single proof that playback started: it dismisses the startup loader and
+   * arms the time-pos watchdog — nothing else may stand in for it.
+   */
+  onPlaybackRestart: () => void;
   onEndFile: (outcome: "eof" | "error", mpvError?: string | null) => void;
   onEngineClosed: (cause: string) => void;
   onMalformed: (detail: string) => void;
@@ -389,6 +405,10 @@ export function dispatchMpvEvent(
   }
   if (event === MPV_EVENTS.fileLoaded) {
     cb.onFileLoaded();
+    return;
+  }
+  if (event === MPV_EVENTS.playbackRestart) {
+    cb.onPlaybackRestart();
     return;
   }
   if (event === MPV_EVENTS.ipcClosed) {

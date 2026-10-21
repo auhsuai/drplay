@@ -308,3 +308,44 @@ describe("NowPlayingView buffering identity (R2.1 — stale-track misattribution
     expect(container.querySelector(".animate-spin")).not.toBeNull();
   });
 });
+
+// U4: the AUDIO branch must not depend on the video frame signal. The engine's
+// buffering signal is the only spinner source it needs — an audio track has no
+// frame to wait for, so the view must not subscribe to (or pull) it.
+describe("NowPlayingView audio branch never waits for a video frame (U4)", () => {
+  afterEach(() => {
+    storeState.currentTrack = null;
+    storeState.isDownloading = false;
+    cleanup();
+  });
+
+  it("the audio controls spin on the engine's buffering alone (no frame involved)", () => {
+    storeState.currentTrack = makeTrack();
+    const { container } = render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={makeTrack()}
+        isPlaying={false}
+      />,
+    );
+
+    act(() => {
+      audioMock._emit("buffering", {
+        isBuffering: true,
+        trackId: "track-1",
+        attempt: 1,
+      });
+    });
+
+    expect(container.querySelector(".animate-spin")).not.toBeNull();
+    // No video surface at all: the audio branch never asks for a frame.
+    expect(container.querySelector("[data-testid='video-surface']")).toBeNull();
+  });
+
+  it("an empty player shows no spinner and no surface", () => {
+    const { container } = render(<NowPlayingView {...baseProps()} />);
+
+    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.querySelector("[data-testid='video-surface']")).toBeNull();
+  });
+});

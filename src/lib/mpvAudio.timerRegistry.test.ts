@@ -81,8 +81,11 @@ describe("MpvAudioController — timer registry + release invariant (R1.5)", () 
     await ctrl.playTrack(trackA);
 
     expect(ctrl.activeTimerNames()).toEqual(
-      expect.arrayContaining(["load-deadline", "buffering-deadline"]),
+      expect.arrayContaining(["load-deadline", "interpolator"]),
     );
+    // W8: the load's startup loader has NO 8s net — only the load deadline
+    // and the stall reconciler bound a slow load.
+    expect(ctrl.activeTimerNames()).not.toContain("buffering-deadline");
     expect(ctrl.activeTimerCount()).toBe(vi.getTimerCount());
 
     ctrl.release();
@@ -102,6 +105,7 @@ describe("MpvAudioController — timer registry + release invariant (R1.5)", () 
   it("every group (watchdog, reconciler, interpolator, seek failsafe, buffering) is registered, and release drains them all", async () => {
     await ctrl.playTrack(trackA);
     fireMpvEvent("file-loaded");
+    fireMpvEvent("playback-restart"); // the chain is up — the watchdog is armed
     fireProperty("pause", false);
     fireProperty("time-pos", 0.5);
     fireProperty("time-pos", 1); // two changed ticks settle the track spinner

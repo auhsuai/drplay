@@ -178,6 +178,37 @@ describe("useVideoFirstFrame", () => {
     expect(result.current).toBe(true);
   });
 
+  it("a new LOAD ATTEMPT of the SAME track drops the previous readiness", async () => {
+    // The readiness is keyed on (track, attempt): the engine mints a new
+    // attempt per load, so a re-load of the same track (retry, load-deadline
+    // restart, replay after end-file) is a DIFFERENT load with no frame of its
+    // own yet. The previous attempt's answer must not survive it.
+    const { result, rerender } = renderHook(
+      ({ key }: { key: string }) => useVideoFirstFrame(key),
+      { initialProps: { key: "v1#1" } },
+    );
+    await waitFor(() => {
+      expect(eventMocks.handlers).toHaveLength(1);
+    });
+
+    await deliverEvent();
+    expect(result.current).toBe(true);
+
+    // The same track, loaded again (a new attempt id).
+    rerender({ key: "v1#2" });
+    await waitFor(() => {
+      expect(eventMocks.handlers).toHaveLength(2);
+    });
+    expect(result.current).toBe(false);
+
+    // The NEW load's frame marks the new attempt ready.
+    await act(async () => {
+      await Promise.resolve();
+      eventMocks.handlers[1]?.();
+    });
+    expect(result.current).toBe(true);
+  });
+
   it("a failed pull resolves false and leaves the hook waiting for the push", async () => {
     coreMocks.invoke.mockImplementation((cmd: string) =>
       cmd === PULL_COMMAND

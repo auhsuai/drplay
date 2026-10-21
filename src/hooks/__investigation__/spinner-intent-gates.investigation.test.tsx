@@ -15,8 +15,15 @@
  *   alive through the whole pre-audio window.
  *
  * Gates under test (exact component expressions):
- *   TransportControls.tsx:58  isDownloading || (isBuffering && isPlaying && !hasError)
- *   NowPlayingControls.tsx:65 isDownloading || (isBuffering && isPlaying && !hasError)
+ *   TransportControls.tsx   isDownloading || (isBuffering && !hasError)
+ *   NowPlayingControls.tsx  isDownloading || (isBuffering && !hasError)
+ *
+ * UPDATED CONTRACT (U2 + engine pause/stall fix): the gate follows the
+ * ENGINE's signal — the single source of truth for "the engine is waiting"
+ * (its startup loader is up for the whole load window, until the playback
+ * chain is confirmed). The engine never raises it while the user paused, so
+ * the gate needs no isPlaying term. The assertions below are unchanged: they
+ * check that a spinner source covers the window, which the gate still does.
  */
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,13 +156,9 @@ function nowPlayingSpins(props: {
   return container.querySelector(".animate-spin") !== null;
 }
 
-/** Exact NowPlayingControls.tsx:69 gate over runtime values (hasError=false). */
-function spinnerGate(
-  isDownloading: boolean,
-  isBuffering: boolean,
-  isPlaying: boolean,
-): boolean {
-  return isDownloading || (isBuffering && isPlaying);
+/** Exact NowPlayingControls.tsx gate over runtime values (hasError=false). */
+function spinnerGate(isDownloading: boolean, isBuffering: boolean): boolean {
+  return isDownloading || isBuffering;
 }
 
 beforeEach(() => {
@@ -216,12 +219,8 @@ describe("spinner intent gates investigation — hook/UI (S2 + S3)", () => {
 
     const s = usePlayerStore.getState();
     expect(s.isDownloading).toBe(false); // hook exit at first-audio (unchanged)
-    // Exact TransportControls.tsx:58 / NowPlayingControls.tsx:69 gate:
-    const spinnerVisible = spinnerGate(
-      s.isDownloading,
-      engineBuffering,
-      s.isPlaying,
-    );
+    // Exact TransportControls.tsx / NowPlayingControls.tsx gate:
+    const spinnerVisible = spinnerGate(s.isDownloading, engineBuffering);
     expect(
       spinnerVisible,
       "no spinner source covered the first-audio window",
@@ -263,11 +262,7 @@ describe("spinner intent gates investigation — hook/UI (S2 + S3)", () => {
     expect(s.isDownloading).toBe(false);
     // B's engine clock is frozen from here on (no more time-pos pushes) but
     // the buffering source is still on — no gap.
-    const spinnerVisible = spinnerGate(
-      s.isDownloading,
-      engineBuffering,
-      s.isPlaying,
-    );
+    const spinnerVisible = spinnerGate(s.isDownloading, engineBuffering);
     expect(
       spinnerVisible,
       "track B is silent with NO spinner: first-audio left no source",
@@ -300,8 +295,6 @@ describe("spinner intent gates investigation — hook/UI (S2 + S3)", () => {
     });
     const s = usePlayerStore.getState();
     const engineBuffering = true;
-    expect(spinnerGate(s.isDownloading, engineBuffering, s.isPlaying)).toBe(
-      true,
-    );
+    expect(spinnerGate(s.isDownloading, engineBuffering)).toBe(true);
   });
 });

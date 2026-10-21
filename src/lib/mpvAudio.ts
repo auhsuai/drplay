@@ -68,6 +68,13 @@ export class MpvAudioController {
    *  never a display channel: mpv's end-file is the single place an error
    *  surfaces (the two events describe the same failure — dedupe). */
   private lastProxyError: { fileId: string; status: number } | null = null;
+  /**
+   * The RAW `paused-for-cache` fact mpv last reported. Kept even while the
+   * user paused: the user's pause suppresses the UI SIGNAL, not the fact, and
+   * the tracker is re-synced with this value on resume — so it always knows
+   * whether mpv is stalled NOW, not what it was when the user paused.
+   */
+  private lastPausedForCache = false;
   private lastTrack: Track | null = null;
   private currentTrackId: string | null = null;
   private playbackFinished = true;
@@ -80,6 +87,12 @@ export class MpvAudioController {
   // reconciler gate on it (the reconciler also re-checks paused/finished so a
   // stale flag can never look active).
   private playing = false;
+  // Why (RC1/RC5): mpv's playback chain is UP for the current attempt
+  // (`playback-restart`). `playing` alone is true from the loadfile on, so
+  // only this fact may arm the time-pos watchdog (it polls `time-pos` over
+  // IPC) and dismiss the startup loader — a track that was loaded but never
+  // started is not a track that is playing.
+  private chainReady = false;
   // Why (F5-6/F8-2): pause() is fire-and-forget and no-ops before beginTrack,
   // so a pause requested inside the load window (or before a deadline sidecar
   // restart) would leave no trace — beginTrack then forced mpv back to play
@@ -123,7 +136,11 @@ export class MpvAudioController {
     this.emit("buffering", { isBuffering });
   }, this.timers);
   private watchdog = new TimePosWatchdog(
-    () => this.playing,
+    // Why (RC1/RC5): the watchdog polls `time-pos` over IPC — it may only
+    // run once mpv's playback chain is UP for this attempt. `playing` alone
+    // is true from the loadfile on, so polling then queried a track that had
+    // not started yet.
+    () => this.playing && this.chainReady,
     () =>
       invoke(TAURI_COMMANDS.mpvGetProperty, { prop: MPV_PROPERTIES.timePos }),
     (time) => {
@@ -212,11 +229,22 @@ export class MpvAudioController {
         this.interpolator.reset();
         this.watchdog.stop();
         this.reconciler.stop();
+        // Why (W14): a user pause is NOT buffering — the spinner must turn
+        // off, or the UI spins forever over a paused track.
+        this.buffering.settle();
+        // The user's pause takes over from mpv's cache state: forget the
+        // stall, so a stale "active" stall can neither block the tick-pair
+        // settle nor make the 8s net re-arm forever while the user is paused.
+        this.buffering.clearStall();
         if (!active) return;
         this.emit("pause", undefined);
         this.playing = false;
       } else {
         if (!active) return;
+        // Re-sync the tracker with the RAW cache fact: after the resume it
+        // must know whether mpv is stalled NOW (a real stall after the resume
+        // has to show), not what it was when the user paused.
+        this.buffering.reportMpvBuffering(this.lastPausedForCache);
         // v3: pause=false no longer settles the spinner (S3/S4) — it also
         // follows a switch-while-paused clearing mpv's global flag, proving
         // nothing about audio flow. Truth settles via ticks/end-file/mpv.
@@ -228,6 +256,14 @@ export class MpvAudioController {
       }
     },
     onBuffering: (isBuffering) => {
+      this.lastPausedForCache = isBuffering;
+      // Why: a user pause is NOT buffering. mpv computes `paused-for-cache`
+      // from the cache state alone — it does not depend on the user's pause —
+      // so a push can arrive while the user paused. Promoting the spinner
+      // there would misrepresent a deliberate pause as a wait for the cache,
+      // and the UI trusts this signal as the engine's single truth. The raw
+      // fact is kept and replayed on resume.
+      if (this.paused) return;
       this.buffering.reportMpvBuffering(isBuffering);
     },
     onCacheState: (ranges) => {
@@ -240,9 +276,17 @@ export class MpvAudioController {
       this.applyPendingSeek();
       // Why: mpv's pause flag does not change across a loadfile replace, so
       // track N>1 never gets a pause=false event — file-loaded is the moment
-      // the backfill watchdog and the stall reconciler must be (re)armed.
-      this.watchdog.start();
+      // the stall reconciler must be (re)armed. The time-pos watchdog is NOT
+      // armed here: only mpv's `playback-restart` proves the chain is up.
       this.reconciler.start();
+    },
+    onPlaybackRestart: () => {
+      // Why (RC4/RC5): mpv's playback chain is UP for this attempt — the
+      // only proof that playback really started. It dismisses the startup
+      // loader (nothing else may) and arms the time-pos watchdog.
+      this.chainReady = true;
+      this.buffering.onPlaybackStart();
+      this.watchdog.start();
     },
     onEndFile: (outcome, mpvError) => {
       this.playbackFinished = true;
@@ -446,9 +490,15 @@ export class MpvAudioController {
     this.playbackFinished = false;
     // A live track starts its own failure scope (F8-6).
     this.failureSurfacedForAttempt = false;
+    // Why (W17): a new attempt has no playback chain yet — the previous
+    // attempt's `playback-restart` must not arm this one.
+    this.chainReady = false;
     // A new stream resets the proxy-error signal: an event from the previous
     // track must never classify THIS track's end-file (R05).
     this.lastProxyError = null;
+    // The raw cache fact belongs to the previous stream: a new track starts
+    // with "no stall known" until mpv reports one.
+    this.lastPausedForCache = false;
     // mpv resets the playhead on loadfile replace — report 0 immediately (plan 2.3 race rule).
     this.currentTime = 0;
     this.duration = 0;
@@ -736,11 +786,13 @@ export class MpvAudioController {
     this.unlistenFns = [];
     this.session.finishRelease();
     this.lastProxyError = null;
+    this.lastPausedForCache = false;
     this.lastTrack = null;
     this.currentTrackId = null;
     this.playbackFinished = true;
     this.paused = false;
     this.playing = false;
+    this.chainReady = false;
     this.pauseIntent = false;
     this.failureSurfacedForAttempt = false;
     this.currentTime = 0;

@@ -66,7 +66,12 @@ export function NowPlayingControls({
           aria-label={isPlaying ? t("player.pause") : t("player.play")}
           className="w-10 h-10 flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90"
         >
-          {isDownloading || (isBuffering && isPlaying && !hasError) ? (
+          {/* The spinner follows the ENGINE's signal — the single source of
+              truth for "the engine is waiting" (its startup loader is up for
+              the whole load window, until the playback chain is confirmed).
+              The engine never raises it while the user paused, so a paused
+              track shows the Pause icon, never a spinner. */}
+          {isDownloading || (isBuffering && !hasError) ? (
             <LoaderCircle className="w-5 h-5 animate-spin [transform-box:view-box] origin-center" />
           ) : hasError ? (
             <RefreshCw className="w-5 h-5" />

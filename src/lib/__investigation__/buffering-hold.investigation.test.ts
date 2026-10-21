@@ -38,7 +38,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: tauriMocks.listen }));
 vi.mock("../../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "../mpvAudio";
-import { BUFFERING_TIMEOUT_MS } from "../mpvProtocol";
+import { BUFFERING_TIMEOUT_MS, SPINNER_DELAY_MS } from "../mpvProtocol";
 
 const PROXY_PORT = 51234;
 /** Runs far above this tolerance = the ~1s interpolation runaway. */
@@ -199,12 +199,19 @@ describe("buffering hold investigation — engine level (v4 spin-hold)", () => {
       `clock stayed stuck after the stall ended: ${JSON.stringify(timeupdates)}`,
     ).toBeGreaterThan(1.5);
 
-    // Tick-settle works again for the next request (flag cleared by report(false)).
+    // Tick-settle works again for the next request (flag cleared by
+    // report(false)).
     buffering.length = 0;
     await ctrl.playTrack(trackB);
+    fireMpvEvent("playback-restart"); // B's chain is up — the loader is gone
+    ctrl.seek(10); // a seek session — the tick-pair rule applies
+    await vi.advanceTimersByTimeAsync(SPINNER_DELAY_MS);
+    expect(buffering).toEqual([true, false, true]);
     fireProperty("time-pos", 10);
     fireProperty("time-pos", 10.5);
     expect(buffering, "tick-settle did not recover after the stall").toEqual([
+      true,
+      false,
       true,
       false,
     ]);
@@ -238,12 +245,17 @@ describe("buffering hold investigation — engine level (v4 spin-hold)", () => {
     expect(buffering).toEqual([true]); // no false, no resurrected timer
 
     await ctrl.playTrack(trackB); // fresh cycle
-    expect(buffering).toEqual([true, true]);
+    fireMpvEvent("playback-restart"); // B's chain is up — the loader is gone
+    expect(buffering).toEqual([true, true, false]);
+    // A seek session settles on its own ticks — the dead stall flag is gone.
+    buffering.length = 0;
+    ctrl.seek(1);
+    await vi.advanceTimersByTimeAsync(SPINNER_DELAY_MS);
     fireProperty("time-pos", 1);
     fireProperty("time-pos", 1.5);
     expect(
       buffering,
       "cancel() leaked paused-for-cache=true into the next engine",
-    ).toEqual([true, true, false]);
+    ).toEqual([true, false]);
   });
 });

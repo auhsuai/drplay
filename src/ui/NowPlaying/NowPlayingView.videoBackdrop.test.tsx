@@ -61,6 +61,9 @@ const audioMock = vi.hoisted(() => {
         handlers[event] = (handlers[event] ?? []).filter((h) => h !== handler);
       };
     }),
+    _emit(event: string, payload?: unknown) {
+      for (const h of handlers[event] ?? []) h(payload);
+    },
     getVolume: vi.fn(() => 0.5),
     isMuted: vi.fn(() => false),
     toggleMute: vi.fn(() => false),
@@ -151,6 +154,18 @@ async function firstFrame(): Promise<void> {
   });
 }
 
+/**
+ * The engine's load-start event: the engine mints a new ATTEMPT id per load
+ * and publishes it with this event. The first-frame readiness is keyed on
+ * (track, attempt), so a load must be announced before its frame is awaited.
+ */
+function loadStarted(trackId: string, attempt: number): void {
+  storeState.currentTrack = { id: trackId, title: trackId };
+  act(() => {
+    audioMock._emit("buffering", { isBuffering: true, trackId, attempt });
+  });
+}
+
 beforeEach(() => {
   tauriMocks.invoke.mockReset();
   tauriMocks.invoke.mockResolvedValue(undefined);
@@ -198,6 +213,8 @@ describe("the video area is opaque black until a frame is presented", () => {
     const { container } = render(
       <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
     );
+    // The load is announced first: the readiness is keyed on (track, attempt).
+    loadStarted(VIDEO.id, 1);
     expect(bgLayer(container).style.clipPath).toBe("");
 
     await firstFrame();
@@ -218,6 +235,7 @@ describe("the video area is opaque black until a frame is presented", () => {
     const { container, rerender } = render(
       <NowPlayingView {...props} currentTrack={VIDEO} />,
     );
+    loadStarted(VIDEO.id, 1);
     await firstFrame();
     expect(bgLayer(container).style.clipPath).toContain("polygon(evenodd");
 
@@ -246,6 +264,7 @@ describe("the video area is opaque black until a frame is presented", () => {
     const { unmount } = render(
       <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
     );
+    loadStarted(VIDEO.id, 1);
     await firstFrame();
     unmount();
     expect(eventMocks.unlisten).toHaveBeenCalled();

@@ -28,6 +28,19 @@ async function firstFrame(): Promise<void> {
   });
 }
 
+/**
+ * The engine's load-start event. The engine mints a new ATTEMPT id per load
+ * and publishes it with this event, and the first-frame readiness is keyed on
+ * (track, attempt) — so a load must be announced before its frame can be
+ * awaited.
+ */
+function loadStarted(trackId: string, attempt: number): void {
+  storeState.currentTrack = { id: trackId, title: trackId };
+  act(() => {
+    audioMock._emit("buffering", { isBuffering: true, trackId, attempt });
+  });
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -1085,6 +1098,9 @@ describe("S4: host transparency — the player background clips the video rect",
     const { container } = render(
       <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
     );
+    // The load must be announced first: the readiness is keyed on
+    // (track, attempt), so the view only waits for a frame of a load it knows.
+    loadStarted(VIDEO.id, 1);
 
     // Host is already shown, but nothing has been presented: punching the hole
     // here is what let the (transparent) shell show through the empty rect.
@@ -1116,6 +1132,109 @@ describe("S4: host transparency — the player background clips the video rect",
     expect(bgLayer(container)).toBeNull();
     const main = container.querySelector<HTMLElement>("main");
     expect(main?.style.background).toContain("var(--player-bg-solid)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U3/U4: the first-frame readiness belongs to ONE LOAD, not to one track.
+//
+// The engine mints an ATTEMPT id per load and publishes it with the buffering
+// event it raises at the start of every load. Keying the readiness on
+// (track, attempt) is what makes a RE-LOAD of the same track (retry,
+// load-deadline restart, replay after end-file) drop the previous attempt's
+// answer: the new load has no frame of its own yet, and reusing the old one
+// left the video rect unpainted (a transparent hole) with no startup spinner.
+// ---------------------------------------------------------------------------
+describe("the first-frame readiness belongs to one LOAD", () => {
+  function bgLayer(container: HTMLElement): HTMLElement | null {
+    return container.querySelector<HTMLElement>(
+      "[data-testid='drplay-player-bg']",
+    );
+  }
+  function surfaceBox(container: HTMLElement): HTMLElement {
+    const box = container.querySelector<HTMLElement>(
+      "[data-testid='video-surface']",
+    );
+    if (!box) throw new Error("video surface not rendered");
+    return box;
+  }
+  function spinner(container: HTMLElement): Element | null {
+    return (
+      container
+        .querySelector("[data-testid='video-surface']")
+        ?.querySelector("svg.lucide-loader-circle") ?? null
+    );
+  }
+  /** The engine confirmed the playback chain: its buffering signal is over. */
+  function loadSettled(trackId: string, attempt: number): void {
+    storeState.currentTrack = { id: trackId, title: trackId };
+    act(() => {
+      audioMock._emit("buffering", { isBuffering: false, trackId, attempt });
+    });
+  }
+
+  it("a RE-LOAD of the same track drops the previous load's readiness", async () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} isPlaying />,
+    );
+    loadStarted(VIDEO.id, 1);
+    await firstFrame();
+    // Load #1 presented a frame: the hole is punched, the backdrop is gone.
+    expect(bgLayer(container)?.style.clipPath ?? "").toContain(
+      "polygon(evenodd",
+    );
+    expect(surfaceBox(container).className).not.toContain("bg-black");
+
+    // The SAME track is loaded again (retry / load-deadline restart / replay
+    // after end-file). The engine mints a new attempt, and that load has no
+    // frame yet: the previous load's readiness must not survive it.
+    loadStarted(VIDEO.id, 2);
+
+    expect(bgLayer(container)?.style.clipPath ?? "").toBe("");
+    expect(surfaceBox(container).className).toContain("bg-black");
+  });
+
+  it("the surface keeps the spinner after the engine settled but before the first frame", () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={VIDEO} isPlaying />,
+    );
+    loadStarted(VIDEO.id, 1);
+    loadSettled(VIDEO.id, 1);
+
+    // The engine confirmed the playback (no buffering) and the intent window
+    // is over, but this load has presented no frame yet: the surface must
+    // still spin, or the user stares at an empty video rect.
+    expect(spinner(container)).not.toBeNull();
+  });
+
+  it("a track switch never reuses the previous track's readiness", async () => {
+    const props = baseProps();
+    const { container, rerender } = render(
+      <NowPlayingView {...props} currentTrack={VIDEO} isPlaying />,
+    );
+    loadStarted(VIDEO.id, 1);
+    await firstFrame();
+    expect(bgLayer(container)?.style.clipPath ?? "").toContain(
+      "polygon(evenodd",
+    );
+
+    loadStarted(VIDEO_2.id, 2);
+    rerender(<NowPlayingView {...props} currentTrack={VIDEO_2} isPlaying />);
+
+    expect(bgLayer(container)?.style.clipPath ?? "").toBe("");
+    expect(surfaceBox(container).className).toContain("bg-black");
+  });
+
+  it("an AUDIO track never subscribes to the frame signal (no listener, no pull)", () => {
+    render(<NowPlayingView {...baseProps()} currentTrack={AUDIO} />);
+
+    // Audio has no frame to wait for: it must not spend a listener and an
+    // IPC round trip on the video-only signal.
+    expect(eventMocks.handlers).toHaveLength(0);
+    const pulls = (
+      tauriMocks.invoke.mock.calls as unknown as Array<[string]>
+    ).filter((call) => call[0] === "video_host_first_frame_presented");
+    expect(pulls).toHaveLength(0);
   });
 });
 

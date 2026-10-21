@@ -91,6 +91,33 @@ describe("NowPlayingControls play-button state matrix", () => {
     expect(getPlayButton(container).disabled).toBe(false);
   });
 
+  // UPDATED CONTRACT (U2 + engine pause/stall fix): the spinner follows the
+  // ENGINE's signal — the single source of truth for "the engine is waiting"
+  // (its startup loader is up for the whole load window, until the playback
+  // chain is confirmed). The engine never raises it while the user paused
+  // (src/lib/mpvAudio.pauseStall.test.ts), so a paused track shows the Pause
+  // icon, never a spinner.
+  it("the engine's buffering signal alone spins (the engine is the only truth)", () => {
+    const { container } = render(
+      <NowPlayingControls
+        {...baseProps({ isBuffering: true, isPlaying: false })}
+      />,
+    );
+    expect(container.querySelector(".animate-spin")).not.toBeNull();
+    expect(container.querySelector(".lucide-pause")).toBeNull();
+    expect(container.querySelector(".lucide-play")).toBeNull();
+  });
+
+  it("a buffering engine never shows the Pause icon (playback is not confirmed yet)", () => {
+    const { container } = render(
+      <NowPlayingControls
+        {...baseProps({ isBuffering: true, isPlaying: true })}
+      />,
+    );
+    expect(container.querySelector(".animate-spin")).not.toBeNull();
+    expect(container.querySelector(".lucide-pause")).toBeNull();
+  });
+
   it("shows pause when playing without buffering or downloading", () => {
     const { container } = render(
       <NowPlayingControls {...baseProps({ isPlaying: true })} />,

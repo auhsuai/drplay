@@ -35,6 +35,7 @@ function makeCb(): MpvEventCallbacks {
     onBuffering: vi.fn(),
     onCacheState: vi.fn(),
     onFileLoaded: vi.fn(),
+    onPlaybackRestart: vi.fn(),
     onEndFile: vi.fn(),
     onEngineClosed: vi.fn(),
     onMalformed: vi.fn(),
@@ -683,20 +684,14 @@ describe("time-pos nil-drop warn (push path, rate-limited 1/30s)", () => {
   });
 });
 
-describe("BufferingTracker v3 settle rules (spinner contract guard)", () => {
-  it("request(true) promotes at once; two CHANGED ticks within 1s settle; the watchdog reuses onTimeTick without altering the rule", () => {
+describe("BufferingTracker settle rules (spinner contract guard)", () => {
+  it("request(true) promotes at once — the load window has a spinner source", () => {
     vi.useFakeTimers();
     try {
       const emitted: boolean[] = [];
       const tracker = new BufferingTracker((b) => emitted.push(b));
       tracker.request(true); // playTrack path: immediate promote (S2)
       expect(emitted).toEqual([true]);
-
-      tracker.onTimeTick(1);
-      tracker.onTimeTick(1); // same value — not progress (S4)
-      vi.advanceTimersByTime(100);
-      tracker.onTimeTick(2); // 2nd CHANGED value within 1s
-      expect(emitted).toEqual([true, false]);
     } finally {
       vi.useRealTimers();
     }
@@ -722,8 +717,31 @@ describe("BufferingTracker v3 settle rules (spinner contract guard)", () => {
   });
 });
 
-describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
-  it("a changed tick pair never settles while mpv reports paused-for-cache=true; report(false) is the settle signal", () => {
+describe("BufferingTracker startup loader (chain-ready contract)", () => {
+  it("a tick pair never settles the STARTUP loader — only a confirmed start does", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true); // the load path
+      expect(emitted).toEqual([true]);
+
+      tracker.onTimeTick(1);
+      tracker.onTimeTick(2); // changed pair — the seek rule, NOT the startup rule
+      expect(emitted, "a time-pos pair dismissed the startup loader").toEqual([
+        true,
+      ]);
+      expect(tracker.isShown()).toBe(true);
+
+      tracker.onPlaybackStart(); // mpv's playback chain is up
+      expect(emitted).toEqual([true, false]);
+      expect(tracker.isShown()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the FIRST paused-for-cache=false dismisses nothing (it only says the property exists)", () => {
     vi.useFakeTimers();
     try {
       const emitted: boolean[] = [];
@@ -731,9 +749,108 @@ describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
       tracker.request(true);
       expect(emitted).toEqual([true]);
 
+      tracker.reportMpvBuffering(false); // mpv pushes this right after a load
+      expect(
+        emitted,
+        "the first paused-for-cache=false dismissed the startup loader",
+      ).toEqual([true]);
+      expect(tracker.isShown()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the 8s net never settles the STARTUP loader — a slow load keeps its spinner", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+
+      vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS * 3);
+      expect(
+        emitted,
+        "the startup loader was lost to the seek safety net",
+      ).toEqual([true]);
+      expect(tracker.isShown()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a REAL cache stall that ends dismisses the startup loader", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      expect(emitted).toEqual([true]);
+
+      tracker.reportMpvBuffering(true); // a genuine stall
+      tracker.reportMpvBuffering(false); // mpv resumed
+      expect(emitted).toEqual([true, false]);
+      expect(tracker.isShown()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a stall in force HOLDS the loader: a confirmed start does not dismiss it", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true);
+      tracker.reportMpvBuffering(true); // mpv is still cache-paused
+
+      tracker.onPlaybackStart();
+      expect(
+        emitted,
+        "the confirmed start dismissed a loader that mpv still holds stalled",
+      ).toEqual([true]);
+
+      tracker.reportMpvBuffering(false); // the stall ends
+      expect(emitted).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a seek after the startup loader owns the seek rules again (tick pair + 8s net)", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(true); // startup loader
+      tracker.onPlaybackStart(); // confirmed start
+      expect(emitted).toEqual([true, false]);
+
+      tracker.request(); // a seek
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
+      expect(emitted).toEqual([true, false, true]);
+
+      tracker.onTimeTick(5);
+      tracker.onTimeTick(5.5);
+      expect(emitted).toEqual([true, false, true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("BufferingTracker stall rules (mpv paused-for-cache spin-hold)", () => {
+  it("a changed tick pair never settles while mpv reports paused-for-cache=true; report(false) is the settle signal", () => {
+    vi.useFakeTimers();
+    try {
+      const emitted: boolean[] = [];
+      const tracker = new BufferingTracker((b) => emitted.push(b));
+      tracker.request(); // a seek session (the tick-pair rule applies)
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
+      expect(emitted).toEqual([true]);
+
       tracker.reportMpvBuffering(true);
       tracker.onTimeTick(1);
-      tracker.onTimeTick(2); // changed within 1s — v3 settled here
+      tracker.onTimeTick(2); // changed within 1s — the seek rule would settle here
       expect(emitted, "tick pair settled during a real stall").toEqual([true]);
       expect(tracker.isShown()).toBe(true);
 
@@ -749,7 +866,8 @@ describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
     try {
       const emitted: boolean[] = [];
       const tracker = new BufferingTracker((b) => emitted.push(b));
-      tracker.request(true);
+      tracker.request();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
       tracker.reportMpvBuffering(true);
 
       vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS);
@@ -770,7 +888,10 @@ describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
     try {
       const emitted: boolean[] = [];
       const tracker = new BufferingTracker((b) => emitted.push(b));
-      tracker.request(true);
+      tracker.request();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
+      expect(emitted).toEqual([true]);
+
       vi.advanceTimersByTime(BUFFERING_TIMEOUT_MS);
       expect(emitted).toEqual([true, false]);
     } finally {
@@ -783,14 +904,16 @@ describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
     try {
       const emitted: boolean[] = [];
       const tracker = new BufferingTracker((b) => emitted.push(b));
-      tracker.request(true);
+      tracker.request();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
       tracker.reportMpvBuffering(true);
       tracker.onTimeTick(1);
       tracker.onTimeTick(2); // blocked
       tracker.reportMpvBuffering(false); // shown -> settle
       expect(emitted).toEqual([true, false]);
 
-      tracker.request(true);
+      tracker.request();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
       tracker.onTimeTick(3);
       tracker.onTimeTick(3.5);
       expect(emitted).toEqual([true, false, true, false]);
@@ -804,7 +927,8 @@ describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
     try {
       const emitted: boolean[] = [];
       const tracker = new BufferingTracker((b) => emitted.push(b));
-      tracker.request(true);
+      tracker.request();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
       tracker.reportMpvBuffering(true);
 
       tracker.cancel(); // release path: silent
@@ -812,7 +936,8 @@ describe("BufferingTracker v4 (mpv paused-for-cache spin-hold)", () => {
       expect(emitted).toEqual([true]);
       expect(tracker.isShown()).toBe(false);
 
-      tracker.request(true);
+      tracker.request();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
       tracker.onTimeTick(1);
       tracker.onTimeTick(2);
       expect(emitted).toEqual([true, true, false]);
@@ -852,11 +977,13 @@ describe("BufferingTracker resetForTrack (track switch, silent session reset)", 
     try {
       const emitted: boolean[] = [];
       const tracker = new BufferingTracker((b) => emitted.push(b));
-      tracker.request(true);
+      tracker.request();
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
       tracker.reportMpvBuffering(true); // track A stalled: flag now sticky
 
       tracker.resetForTrack(); // switch to B (beginTrack order: reset, then request)
-      tracker.request(true); // B's load promotes the spinner
+      tracker.request(); // B's seek session
+      vi.advanceTimersByTime(SPINNER_DELAY_MS);
       tracker.onTimeTick(1);
       tracker.onTimeTick(2); // B's own CHANGED tick pair
       expect(emitted).toEqual([true, true, false]); // settles — flag is gone
@@ -908,6 +1035,26 @@ describe("dispatchMpvEvent routing (R02-1 / R02-2)", () => {
     const cb = makeCb();
     dispatchMpvEvent({ event: "ipc-closed" }, cb);
     expect(cb.onEngineClosed).toHaveBeenCalledWith(expect.any(String));
+  });
+
+  it("playback-restart routes to onPlaybackRestart (the only 'playback started' proof)", () => {
+    const cb = makeCb();
+    dispatchMpvEvent({ event: "playback-restart" }, cb);
+    expect(cb.onPlaybackRestart).toHaveBeenCalledTimes(1);
+    // It is NOT a file-loaded and NOT an end-file: the engine tells the
+    // three apart (the startup loader only listens to the restart).
+    expect(cb.onFileLoaded).not.toHaveBeenCalled();
+    expect(cb.onEndFile).not.toHaveBeenCalled();
+  });
+
+  it("an unknown mpv event (start-file) is ignored — no callback fires", () => {
+    const cb = makeCb();
+    dispatchMpvEvent({ event: "start-file" }, cb);
+    expect(cb.onPlaybackRestart).not.toHaveBeenCalled();
+    expect(cb.onFileLoaded).not.toHaveBeenCalled();
+    expect(cb.onEndFile).not.toHaveBeenCalled();
+    expect(cb.onEngineClosed).not.toHaveBeenCalled();
+    expect(cb.onMalformed).not.toHaveBeenCalled();
   });
 });
 

@@ -145,3 +145,29 @@ fn uncommanded_close_is_emitted_exactly_once_with_the_eof_cause() {
     );
     assert_eq!(closes[0].2, core.conn(), "the close event carries the engine identity");
 }
+
+#[test]
+fn playback_restart_reaches_the_wire_as_a_named_event() {
+    // client.h: MPV_EVENT_PLAYBACK_RESTART = 21. The frontend treats this
+    // event as the only proof that mpv's playback chain is up.
+    assert_eq!(ffi::MPV_EVENT_PLAYBACK_RESTART, 21);
+
+    // The wire shape is the same one the legacy IPC produces for a verbatim
+    // event name, so both engines speak one vocabulary.
+    assert_eq!(
+        events::named_event_message("playback-restart".to_string()),
+        IpcMessage::MpvEvent {
+            event: "playback-restart".to_string(),
+            reason: None,
+            error: None,
+        }
+    );
+    assert_eq!(
+        events::named_event_message("file-loaded".to_string()),
+        IpcMessage::MpvEvent {
+            event: "file-loaded".to_string(),
+            reason: None,
+            error: None,
+        }
+    );
+}

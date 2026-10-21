@@ -575,9 +575,114 @@ describe("VideoSurface loading affordance", () => {
     expect(spinner()).not.toBeNull();
   });
 
-  it("buffering a PAUSED track does not spin", () => {
+  // UPDATED CONTRACT (U1 + engine pause/stall fix): this test used to assert
+  // that a buffering track WITHOUT isPlaying does NOT spin. The component now
+  // follows the ENGINE's signal — the single source of truth for "the engine
+  // is waiting" — so the expectation is inverted: isBuffering means spinner.
+  // The invariant the old test protected ("a user pause is never reported as
+  // buffering") is now enforced where it belongs, in the ENGINE
+  // (src/lib/mpvAudio.pauseStall.test.ts): the engine suppresses a
+  // `paused-for-cache` push that arrives while the user paused, so the
+  // (isBuffering=true, isPlaying=false) combination cannot come from a
+  // deliberate pause. A paused track (the engine settled its buffering) is
+  // covered by the test right below.
+  it("the engine's buffering signal alone spins (the engine is the only truth)", () => {
     render(<VideoSurface active isPlaying={false} isBuffering />);
 
+    expect(spinner()).not.toBeNull();
+  });
+
+  it("a PAUSED track shows NO spinner (the engine settled its buffering on the pause)", () => {
+    render(<VideoSurface active isPlaying={false} isBuffering={false} />);
+
+    expect(spinner()).toBeNull();
+  });
+
+  it("a playing video with NO frame yet keeps the spinner (the pre-frame window)", () => {
+    // The load intent is over (isDownloading false) but this load has
+    // presented no frame yet: without the spinner the user stares at an empty
+    // (transparent) video rect with no sign that anything is happening.
+    render(
+      <VideoSurface
+        active
+        isPlaying
+        isDownloading={false}
+        hasFirstFrame={false}
+      />,
+    );
+
+    expect(spinner()).not.toBeNull();
+  });
+
+  it("the spinner goes away once the first frame of this load is presented", () => {
+    const { rerender } = render(
+      <VideoSurface
+        active
+        isPlaying
+        isDownloading={false}
+        hasFirstFrame={false}
+      />,
+    );
+    expect(spinner()).not.toBeNull();
+
+    rerender(
+      <VideoSurface active isPlaying isDownloading={false} hasFirstFrame />,
+    );
+    expect(spinner()).toBeNull();
+  });
+
+  it("a confirmed stall AFTER the first frame spins again, and the engine's settle hides it", () => {
+    const { rerender } = render(
+      <VideoSurface active isPlaying isDownloading={false} hasFirstFrame />,
+    );
+    expect(spinner()).toBeNull();
+
+    // mpv reports paused-for-cache: the engine's spinner is up again.
+    rerender(
+      <VideoSurface
+        active
+        isPlaying
+        isDownloading={false}
+        hasFirstFrame
+        isBuffering
+      />,
+    );
+    expect(spinner()).not.toBeNull();
+
+    // The stall ended: the engine settled it — no more spinner.
+    rerender(
+      <VideoSurface
+        active
+        isPlaying
+        isDownloading={false}
+        hasFirstFrame
+        isBuffering={false}
+      />,
+    );
+    expect(spinner()).toBeNull();
+  });
+
+  it("an errored or ended surface never spins, whatever the engine says", () => {
+    const { rerender } = render(
+      <VideoSurface active isPlaying isBuffering isDownloading />,
+    );
+    expect(spinner()).not.toBeNull();
+
+    rerender(
+      <VideoSurface active isPlaying isBuffering isDownloading hasError />,
+    );
+    expect(spinner()).toBeNull();
+
+    rerender(
+      <VideoSurface
+        active
+        isPlaying
+        isBuffering
+        isDownloading
+        hasError={false}
+        isEnded
+      />,
+    );
     expect(spinner()).toBeNull();
   });
 

@@ -47,6 +47,12 @@ pub(crate) const MPV_EVENT_SHUTDOWN: MpvEventId = 1;
 pub(crate) const MPV_EVENT_LOG_MESSAGE: MpvEventId = 2;
 pub(crate) const MPV_EVENT_END_FILE: MpvEventId = 7;
 pub(crate) const MPV_EVENT_FILE_LOADED: MpvEventId = 8;
+/// client.h `MPV_EVENT_PLAYBACK_RESTART = 21`: "There was a discontinuity of
+/// some sort (like a seek), and playback was reinitialized. Usually happens
+/// on start of playback and after seeking." The frontend uses it as the ONLY
+/// proof that mpv's playback chain is up (the legacy IPC forwards the same
+/// event name verbatim, so both engines speak one vocabulary).
+pub(crate) const MPV_EVENT_PLAYBACK_RESTART: MpvEventId = 21;
 pub(crate) const MPV_EVENT_PROPERTY_CHANGE: MpvEventId = 22;
 
 /// Numeric log levels (`enum mpv_log_level`); lower = more important.

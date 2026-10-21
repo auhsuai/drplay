@@ -53,6 +53,11 @@ function fireProperty(name: string, data: unknown): void {
     handler({ payload: { name, data } });
 }
 
+function fireMpvEvent(event: string, reason: string | null = null): void {
+  for (const handler of tauriListeners.get("mpv-event") ?? [])
+    handler({ payload: { event, reason, error: null } });
+}
+
 function mpvCommands(): string[][] {
   return (
     tauriMocks.invoke.mock.calls as unknown as Array<
@@ -116,9 +121,8 @@ describe("Bug B investigation — spinner gone on track switch", () => {
       { trackId: "B", attempt: 2, isBuffering: true },
     ]);
 
-    // Tracker is alive: B's progressing ticks settle it exactly once.
-    fireProperty("time-pos", 1);
-    fireProperty("time-pos", 2);
+    // Tracker is alive: B's confirmed playback start dismisses it exactly once.
+    fireMpvEvent("playback-restart");
     expect(buffering).toEqual([
       { trackId: "B", attempt: 2, isBuffering: true },
       { trackId: "B", attempt: 2, isBuffering: false },
@@ -158,9 +162,8 @@ describe("Bug B investigation — spinner gone on track switch", () => {
       { trackId: "B", attempt: 2, isBuffering: true },
     ]); // no false, no re-promote
 
-    // Tracker is still alive: B's first progressing ticks settle it once.
-    fireProperty("time-pos", 1);
-    fireProperty("time-pos", 1.5);
+    // Tracker is still alive: B's confirmed playback start dismisses it once.
+    fireMpvEvent("playback-restart");
     expect(buffering).toEqual([
       { trackId: "B", attempt: 2, isBuffering: true },
       { trackId: "B", attempt: 2, isBuffering: false },
@@ -197,17 +200,19 @@ describe("Bug B investigation — spinner gone on track switch", () => {
     fireProperty("pause", false);
     vi.advanceTimersByTime(SPINNER_DELAY_MS);
     // v3: settle only comes from truth, so no false may appear here — only
-    // C's own fresh promote on top of B's.
+    // C's own fresh promote on top of B's. (W14: the USER pause turned B's
+    // loader off — the only false, and it happened before C was loaded.)
     expect(buffering).toEqual([
       { trackId: "B", attempt: 2, isBuffering: true },
+      { trackId: "B", attempt: 2, isBuffering: false },
       { trackId: "C", attempt: 3, isBuffering: true },
     ]);
 
-    // Alive check: C's progressing ticks settle the spinner exactly once.
-    fireProperty("time-pos", 1);
-    fireProperty("time-pos", 1.5);
+    // Alive check: C's confirmed playback start dismisses the spinner once.
+    fireMpvEvent("playback-restart");
     expect(buffering).toEqual([
       { trackId: "B", attempt: 2, isBuffering: true },
+      { trackId: "B", attempt: 2, isBuffering: false },
       { trackId: "C", attempt: 3, isBuffering: true },
       { trackId: "C", attempt: 3, isBuffering: false },
     ]);

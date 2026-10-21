@@ -438,6 +438,16 @@ async fn playback_smoke_load_pause_seek_stop_and_wire_events() {
     assert_eq!(loaded.1, 1, "events after the loadfile reply carry the new epoch");
     assert_eq!(loaded.2, conn, "events carry the engine identity");
 
+    // The playback chain must announce itself: `playback-restart` is the only
+    // proof that mpv is actually playing, and the frontend gates its startup
+    // loader AND its time-pos watchdog on it.
+    let restarted = wait_for(&collected, Duration::from_secs(10), |(message, _, _)| {
+        is_event(message, "playback-restart")
+    })
+    .expect("playback-restart must arrive within 10s");
+    assert_eq!(restarted.1, 1, "the restart event carries the current epoch");
+    assert_eq!(restarted.2, conn, "the restart event carries the engine identity");
+
     let position = wait_for(&collected, Duration::from_secs(10), |(message, _, _)| {
         property_number(message, "time-pos").map(|value| value > 0.0).unwrap_or(false)
     })

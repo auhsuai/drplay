@@ -120,6 +120,23 @@ fn end_file_event_falls_back_to_error_field() {
     );
 }
 
+#[test]
+fn playback_restart_event_is_forwarded_verbatim_to_the_sink() {
+    // mpv's own event name reaches the frontend unchanged — the legacy sidecar
+    // and the native libmpv engine must speak ONE vocabulary, so the frontend
+    // sees "playback-restart" from either backend.
+    let (core, collected) = core_with_collector();
+    core.dispatch(r#"{"event":"playback-restart"}"#);
+    assert_eq!(
+        collected_messages(&collected),
+        [IpcMessage::MpvEvent {
+            event: "playback-restart".to_string(),
+            reason: None,
+            error: None,
+        }]
+    );
+}
+
 #[tokio::test]
 async fn reader_eof_notifies_sink_that_the_connection_closed() {
     let (core, collected) = core_with_collector();

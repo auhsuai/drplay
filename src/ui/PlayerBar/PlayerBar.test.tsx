@@ -48,9 +48,12 @@ vi.mock("react-i18next", () => {
 
 // Identifiable LoaderCircle stub (the real icon renders an SVG): the spinner
 // is the only observable effect of the local buffering state, so tests assert
-// whether this component was rendered at all.
-const { loaderIcon } = vi.hoisted(() => ({
+// whether this component was rendered at all. The Pause icon is spied for the
+// same reason: the transport must NOT show it while the engine is still
+// loading (playback is not confirmed yet).
+const { loaderIcon, pauseIcon } = vi.hoisted(() => ({
   loaderIcon: vi.fn(() => null),
+  pauseIcon: vi.fn(() => null),
 }));
 
 vi.mock("lucide-react", () => {
@@ -87,6 +90,7 @@ vi.mock("lucide-react", () => {
   const Stub = () => null;
   const map = Object.fromEntries(icons.map((n) => [n, Stub]));
   map["LoaderCircle"] = loaderIcon;
+  map["Pause"] = pauseIcon;
   return map;
 });
 
@@ -1933,6 +1937,7 @@ describe("PlayerBar buffering display identity (R2.1 — stale-track misattribut
 
   beforeEach(() => {
     loaderIcon.mockClear();
+    pauseIcon.mockClear();
     usePlayerStore.setState({
       currentTrack: makeTrack(),
       isPlaying: true,
@@ -1973,6 +1978,45 @@ describe("PlayerBar buffering display identity (R2.1 — stale-track misattribut
     });
 
     expect(loaderIcon).toHaveBeenCalled();
+  });
+
+  // UPDATED CONTRACT (U2 + engine pause/stall fix): the transport spinner
+  // follows the ENGINE's signal — the single source of truth for "the engine
+  // is waiting" (its startup loader is up for the whole load window, until
+  // the playback chain is confirmed). The engine never raises it while the
+  // user paused (src/lib/mpvAudio.pauseStall.test.ts), so a paused track
+  // shows the Pause icon, never a spinner.
+  it("the engine's buffering signal alone spins (the engine is the only truth)", () => {
+    renderPlayer({ isPlaying: false });
+
+    act(() => {
+      fakeController._emit("buffering", {
+        isBuffering: true,
+        trackId: "track-1",
+        attempt: 7,
+      });
+    });
+
+    expect(loaderIcon).toHaveBeenCalled();
+    expect(pauseIcon).not.toHaveBeenCalled();
+  });
+
+  it("a buffering engine never shows the Pause icon (playback is not confirmed yet)", () => {
+    renderPlayer({ isPlaying: true });
+    // The first render (before the engine reported anything) may still show
+    // the Pause icon; what matters is that the buffering signal takes over.
+    pauseIcon.mockClear();
+
+    act(() => {
+      fakeController._emit("buffering", {
+        isBuffering: true,
+        trackId: "track-1",
+        attempt: 7,
+      });
+    });
+
+    expect(loaderIcon).toHaveBeenCalled();
+    expect(pauseIcon).not.toHaveBeenCalled();
   });
 });
 

@@ -337,11 +337,27 @@ export function VideoSurface({
   // ACTUALLY loading — otherwise, whenever the host is hidden (overlay closed,
   // error, ended) the user is left watching a spinner that means nothing.
   //
-  // Same condition as the play button's spinner (NowPlayingControls): the
-  // pre-load intent window, or buffering while playback is running. A paused
-  // or failed or finished video is not loading and must not spin.
+  // Three loading facts, all of them owned by the engine or by the intent:
+  //  * isDownloading — the pre-load intent window (track selected, the
+  //    stream has not started yet). The engine has nothing to say yet.
+  //  * isBuffering — the ENGINE's signal and the single source of truth for
+  //    "the engine is waiting": its startup loader (up from the loadfile
+  //    until the playback chain is confirmed) or a confirmed cache stall.
+  //    The engine guarantees it is never raised while the user paused (a
+  //    pause settles the tracker, and a later `paused-for-cache` push is
+  //    suppressed until the resume — see mpvAudio.ts), so a deliberately
+  //    paused video never shows a spinner.
+  //  * isPlaying && !hasFirstFrame — the video is selected and running, but
+  //    no frame of THIS load has been presented yet. The surface must keep
+  //    the spinner here: without it the user stares at an empty (transparent)
+  //    video rect with no sign that anything is happening.
+  // A failed or finished video is not loading, and neither is a paused one:
+  // the engine settles its buffering on a user pause, so both branches go
+  // false together.
   const isLoading =
-    !hasError && !isEnded && (isDownloading || (isBuffering && isPlaying));
+    !hasError &&
+    !isEnded &&
+    (isDownloading || isBuffering || (isPlaying && !hasFirstFrame));
 
   // Fill mode (D3): the parent already owns the space, so the box follows it
   // (`w-full h-full`) with square corners (rounded-none) — windowed and

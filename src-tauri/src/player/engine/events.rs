@@ -46,16 +46,17 @@ pub(super) fn event_loop(api: Arc<ffi::Api>, handle: SendHandle, core: Arc<WireS
             ffi::MPV_EVENT_LOG_MESSAGE => dispatch_log(event),
             ffi::MPV_EVENT_PROPERTY_CHANGE => dispatch_property(event, &core),
             ffi::MPV_EVENT_END_FILE => dispatch_end_file(&api, event, &core),
-            ffi::MPV_EVENT_FILE_LOADED => {
-                core.emit(IpcMessage::MpvEvent {
-                    event: event_name(&api, event.event_id),
-                    reason: None,
-                    error: None,
-                });
+            ffi::MPV_EVENT_FILE_LOADED | ffi::MPV_EVENT_PLAYBACK_RESTART => {
+                // Why: the frontend needs BOTH names — `file-loaded` closes the
+                // load window, `playback-restart` is the only proof that mpv's
+                // playback chain is up (it fires once the output chain is
+                // ready, also after a seek). The legacy IPC forwards the same
+                // event names verbatim, so both engines speak one vocabulary.
+                core.emit(named_event_message(event_name(&api, event.event_id)));
             }
             _ => {
-                // Other events (seek, playback-restart, ...) are not part of
-                // the frozen wire contract; the frontend ignores them.
+                // Other events (seek, ...) are not part of the frozen wire
+                // contract; the frontend ignores them.
             }
         }
     }
@@ -124,6 +125,17 @@ fn dispatch_end_file(api: &ffi::Api, event: &MpvEvent, core: &WireState) {
         reason: Some(reason),
         error,
     });
+}
+
+/// The wire message for an mpv event that carries no payload beyond its name
+/// (pure — the caller resolves the name from mpv itself, so the string is
+/// byte-identical with the legacy IPC's verbatim event name).
+pub(super) fn named_event_message(event: String) -> IpcMessage {
+    IpcMessage::MpvEvent {
+        event,
+        reason: None,
+        error: None,
+    }
 }
 
 /// Wire event name from mpv itself (e.g. `end-file`, `file-loaded`), exactly
