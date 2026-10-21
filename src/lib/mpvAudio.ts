@@ -123,7 +123,7 @@ export class MpvAudioController {
   /** Sidecar restarts spent on the current load (bounded by
    *  LOADFILE_RESTART_MAX_ATTEMPTS, reset per user/UI load attempt). */
   private loadRestarts = 0;
-  /** F5/Ctrl+R reload in progress: the engine is being shut down for a page
+  /** F5 reload in progress: the engine is being shut down for a page
    *  refresh. Playback entry points stay locked and late end-file/ipc-closed
    *  events are ignored until the page goes away (or the shutdown fails and
    *  this flag reopens for a retry). */
@@ -813,7 +813,7 @@ export class MpvAudioController {
 
   /**
    * Stop the native engine and resolve only once the shutdown completed — the
-   * F5/Ctrl+R refresh path. The WebView reload must not start while mpv is
+   * F5 refresh path. The WebView reload must not start while mpv is
    * still playing (the engine lives in the Rust process, not in the page).
    * Listeners/state are torn down only after the shutdown resolves.
    *

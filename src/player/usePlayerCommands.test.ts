@@ -310,15 +310,27 @@ describe("storm banner guard", () => {
   });
 });
 
-describe("reload interception (F5 / Ctrl+R)", () => {
-  it("intercepts F5, Shift+F5, Ctrl+F5, Ctrl+R and Ctrl+Shift+R before the command layer", () => {
+describe("reload interception (plain F5)", () => {
+  it("intercepts a plain F5 before the command layer", () => {
+    const ctx = makeCtx();
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    const event = pressKey("F5");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(requestPlayerReload).toHaveBeenCalledTimes(1);
+    expect(ctx.togglePlay).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept the F5 variants or Ctrl+R any more", () => {
     const ctx = makeCtx();
     renderHook(() => {
       usePlayerCommands(ctx);
     });
 
     const chords: Array<[string, KeyboardEventInit]> = [
-      ["F5", {}],
       ["F5", { shiftKey: true }],
       ["F5", { ctrlKey: true }],
       ["r", { ctrlKey: true }],
@@ -326,11 +338,10 @@ describe("reload interception (F5 / Ctrl+R)", () => {
     ];
     for (const [key, init] of chords) {
       const event = pressKey(key, init);
-      expect(event.defaultPrevented).toBe(true);
+      expect(event.defaultPrevented).toBe(false);
     }
 
-    expect(requestPlayerReload).toHaveBeenCalledTimes(chords.length);
-    expect(ctx.togglePlay).not.toHaveBeenCalled();
+    expect(requestPlayerReload).not.toHaveBeenCalled();
   });
 
   it("prevents the default of a held F5 repeat without starting a second shutdown", () => {

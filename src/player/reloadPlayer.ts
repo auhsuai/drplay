@@ -1,5 +1,5 @@
 /**
- * F5 / Ctrl+R orchestration. A WebView2 reload only refreshes the React page:
+ * F5 orchestration. A WebView2 reload only refreshes the React page:
  * the Tauri process (and the native mpv engine inside it) keeps running, so
  * the audio continues behind a fresh UI that knows nothing about it. This
  * module owns the single ordered flow that stops the engine BEFORE the page
@@ -21,8 +21,8 @@ import { showErrorToast } from "../utils/simpleToast";
 
 const PLAYER_RELOAD_MODULE = "playerReload";
 
-/** Emitted by `src-tauri/src/webview_reload.rs` after it suppressed the
- *  WebView2 browser accelerator for F5/Ctrl+R. The native layer cannot await
+/** Emitted by `src-tauri/src/webview_keys.rs` after it suppressed the
+ *  WebView2 browser accelerator for F5. The native layer cannot await
  *  the ordered flow, so it hands the request to this one orchestration. */
 const NATIVE_RELOAD_REQUEST_EVENT = "player-reload-requested";
 

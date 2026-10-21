@@ -1,4 +1,4 @@
-// Orchestration contract for the F5 / Ctrl+R reload: persist the session,
+// Orchestration contract for the F5 reload: persist the session,
 // invalidate in-flight intents, await the native mpv shutdown, clear the
 // one-shot restore hint, then reload. Every side effect is injected so the
 // ORDER (not just the presence) is pinned here.

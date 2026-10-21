@@ -29,7 +29,7 @@ let forceSave: (() => void) | null = null;
 
 /**
  * Persist the current track/position now (bypassing the 5s throttle) — used by
- * the F5/Ctrl+R reload BEFORE the engine is released. No-op while the session
+ * the F5 reload BEFORE the engine is released. No-op while the session
  * effect is unmounted.
  */
 export function savePlayerSessionNow(): void {

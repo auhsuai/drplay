@@ -26,7 +26,7 @@ mod video_host;
 #[cfg(windows)]
 mod context_menu;
 #[cfg(windows)]
-mod webview_reload;
+mod webview_keys;
 mod stream_proxy;
 mod path_scope;
 
@@ -121,12 +121,14 @@ pub fn run() {
             #[cfg(windows)]
             crate::player::initialize_engine_state();
 
-            // F5/Ctrl+R are browser accelerators handled inside WebView2, not
-            // reliably stoppable from a JavaScript keydown handler. Intercept
-            // them natively and route the request into the app's ordered
+            // WebView2 browser accelerators (Ctrl+P, Ctrl+F, Ctrl+=, F12,
+            // Alt+Left/Right, ...) are handled inside WebView2, not reliably
+            // stoppable from a JavaScript keydown handler. The native module
+            // owns the whole keyboard policy: it turns the browser
+            // accelerator set off and keeps F5 for the app's ordered
             // reload flow (session save -> mpv shutdown -> WebView reload).
             #[cfg(windows)]
-            webview_reload::install(app.handle());
+            webview_keys::install(app.handle());
 
             if let Ok(cache_dir) = app.path().app_cache_dir() {
                 // S3: on-disk cover cache root + background GC thread (runs
@@ -222,11 +224,11 @@ pub fn run() {
                 // this handler entirely are still covered by KILL_ON_JOB_CLOSE.
                 #[cfg(windows)]
                 mpv_kill_sync_best_effort(app_handle);
-                // Drop the native reload handler while the WebView still
+                // Drop the native keyboard handler while the WebView still
                 // exists; the controller releases it on teardown anyway, but
                 // an explicit unsubscribe keeps one owner of the registration.
                 #[cfg(windows)]
-                webview_reload::uninstall(app_handle);
+                webview_keys::uninstall(app_handle);
                 // In-process engine counterpart: ordered destroy (event thread
                 // join + mpv_destroy). No-op when no engine was spawned.
                 #[cfg(windows)]

@@ -67,7 +67,7 @@ export class ErrorBoundary extends React.Component<
   }
 
   private handleReload = (): void => {
-    // Same reload flow as F5/Ctrl+R: stop the native mpv engine before the
+    // Same reload flow as F5: stop the native mpv engine before the
     // WebView reloads, or the audio keeps playing behind the fresh page.
     // requestPlayerReload never rejects — it reports failures itself.
     void requestPlayerReload();

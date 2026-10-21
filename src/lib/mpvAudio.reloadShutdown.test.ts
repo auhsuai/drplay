@@ -1,5 +1,5 @@
 /**
- * Regression: F5 / Ctrl+R must stop the native mpv engine BEFORE the WebView
+ * Regression: F5 must stop the native mpv engine BEFORE the WebView
  * reloads. The engine lives in Rust (process-lifetime), so a bare page reload
  * leaves the audio playing while the fresh UI knows nothing about it. These
  * tests pin the awaitable shutdown, its lock, and the unchanged release() path.
