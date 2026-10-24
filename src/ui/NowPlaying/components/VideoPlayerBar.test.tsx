@@ -30,12 +30,27 @@ vi.mock("react-i18next", () => {
   };
 });
 
-const audioMock = vi.hoisted(() => ({
-  getVolume: vi.fn(() => 0.5),
-  isMuted: vi.fn(() => false),
-  toggleMute: vi.fn(() => false),
-  setVolume: vi.fn(),
-}));
+const audioMock = vi.hoisted(() => {
+  const handlers: Record<string, Array<(payload?: unknown) => void>> = {};
+  return {
+    on: vi.fn((event: string, handler: (payload?: unknown) => void) => {
+      (handlers[event] ??= []).push(handler);
+      return () => {
+        handlers[event] = (handlers[event] ?? []).filter((h) => h !== handler);
+      };
+    }),
+    _emit(event: string, payload?: unknown): void {
+      for (const handler of handlers[event] ?? []) handler(payload);
+    },
+    getCurrentTime: vi.fn(() => 0),
+    getDuration: vi.fn(() => 0),
+    getCurrentTrackId: vi.fn<() => string | null>(() => null),
+    getVolume: vi.fn(() => 0.5),
+    isMuted: vi.fn(() => false),
+    toggleMute: vi.fn(() => false),
+    setVolume: vi.fn(),
+  };
+});
 vi.mock("../../../lib/AudioController", () => ({
   AudioController: { getInstance: () => audioMock },
 }));
@@ -69,11 +84,9 @@ function baseProps() {
     isDownloading: false,
     hasError: false,
     onRetry: vi.fn(),
-    playMode: "normal" as const,
     onTogglePlay: vi.fn(),
     onNext: vi.fn(),
     onPrev: vi.fn(),
-    onTogglePlayMode: vi.fn(),
     audio: audioMock as unknown as AudioController,
     isFullscreen: false,
     onToggleFullscreen: vi.fn(),
@@ -142,9 +155,10 @@ describe("VideoPlayerBar structure", () => {
     expect(screen.getByRole("button", { name: en.player.prev })).toBeTruthy();
     expect(screen.getByRole("button", { name: en.player.play })).toBeTruthy();
     expect(screen.getByRole("button", { name: en.player.next })).toBeTruthy();
+    expect(screen.getByTestId("video-time-display")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: en.player.play_mode }),
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: en.player.play_mode }),
+    ).toBeNull();
   });
 
   it("shows the track title truncated, with the full title on the title attribute", () => {
@@ -159,7 +173,18 @@ describe("VideoPlayerBar structure", () => {
     expect(title?.className).toContain("truncate");
     expect(title?.className).toContain("hidden");
     expect(title?.className).toContain("md:block");
-    expect(title?.className).toContain("max-w-[28ch]");
+    expect(title?.className).toContain("text-center");
+    expect(title?.className).toContain("w-full");
+    expect(title?.className).toContain("min-w-0");
+    expect(title?.className).toContain("max-w-[45vw]");
+    expect(title?.className).toContain("xl:max-w-[560px]");
+    expect(title?.className).not.toContain("max-w-[28ch]");
+    expect(title?.className).not.toContain("shrink-0");
+
+    const region = title?.parentElement as HTMLElement;
+    expect(region.className).toContain("flex-1");
+    expect(region.className).toContain("min-w-0");
+    expect(region.className).not.toContain("absolute");
   });
 
   it("uses the default responsive VolumeSlider rail (visible from xl and up)", () => {
@@ -171,6 +196,48 @@ describe("VideoPlayerBar structure", () => {
     expect(rail?.className).toContain("hidden");
     expect(rail?.className).toContain("xl:flex");
   });
+
+  it("shares the 125px rail and 8px icon gap with every other volume surface", () => {
+    const { container } = render(<VideoPlayerBar {...baseProps()} />);
+
+    const rail = container.querySelector<HTMLElement>(
+      "[data-testid='volume-bar']",
+    );
+    const iconGroup = rail?.parentElement as HTMLElement;
+    const outer = iconGroup.parentElement as HTMLElement;
+
+    expect(rail?.className).toContain("w-[125px]");
+    expect(rail?.className).not.toContain("w-24");
+    expect(rail?.className).not.toContain("w-32");
+    expect(iconGroup.className.split(" ")).toContain("gap-2");
+    expect(iconGroup.className.split(" ")).not.toContain("gap-4");
+    expect(outer.className.split(" ")).toContain("gap-4");
+  });
+
+  // The video bar replaces the play-mode button with a non-interactive clock;
+  // its transport is a tight left-anchored cluster (auto tracks, no 1fr hole).
+  it("puts the clock first in the transport's left cell, before Prev", () => {
+    render(<VideoPlayerBar {...baseProps()} />);
+
+    const clock = screen.getByTestId("video-time-display");
+    const prev = screen.getByRole("button", { name: en.player.prev });
+    const leftCell = prev.parentElement as HTMLElement;
+
+    expect(leftCell.children[0]).toBe(clock);
+    expect(leftCell.children[1]).toBe(prev);
+
+    const grid = leftCell.parentElement as HTMLElement;
+    expect(grid.className).toContain("grid-cols-[auto_auto_auto]");
+    expect(grid.children).toHaveLength(3);
+
+    expect(clock.className).toContain("tabular-nums");
+    expect(clock.className).toContain("whitespace-nowrap");
+    expect(clock.className).not.toContain("absolute");
+    expect(clock.textContent).toBe("0:00 / --:--");
+    expect(
+      screen.queryByRole("button", { name: en.player.play_mode }),
+    ).toBeNull();
+  });
 });
 
 describe("VideoPlayerBar wiring", () => {
@@ -181,12 +248,10 @@ describe("VideoPlayerBar wiring", () => {
     fireEvent.click(screen.getByRole("button", { name: en.player.play }));
     fireEvent.click(screen.getByRole("button", { name: en.player.next }));
     fireEvent.click(screen.getByRole("button", { name: en.player.prev }));
-    fireEvent.click(screen.getByRole("button", { name: en.player.play_mode }));
 
     expect(props.onTogglePlay).toHaveBeenCalledTimes(1);
     expect(props.onNext).toHaveBeenCalledTimes(1);
     expect(props.onPrev).toHaveBeenCalledTimes(1);
-    expect(props.onTogglePlayMode).toHaveBeenCalledTimes(1);
   });
 
   // Slice 2: the More button no longer opens a NATIVE menu section — it opens

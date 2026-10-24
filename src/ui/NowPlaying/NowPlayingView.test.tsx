@@ -54,11 +54,26 @@ const audioMock = vi.hoisted(() => {
     isMuted: vi.fn(() => false),
     toggleMute: vi.fn(() => false),
     setVolume: vi.fn(),
+    // Video tracks render the shared VideoPlayerBar (clock + transport), which
+    // reads the engine clock through these.
+    getCurrentTime: vi.fn(() => 0),
+    getDuration: vi.fn(() => 0),
+    getCurrentTrackId: vi.fn<() => string | null>(() => null),
   };
 });
 
 vi.mock("../../lib/AudioController", () => ({
   AudioController: { getInstance: () => audioMock },
+}));
+
+// A video track mounts VideoSurface + useVideoFirstFrame, which use these IPC
+// modules. Stubbed so the video-rendering tests stay deterministic in jsdom.
+const tauriMocks = vi.hoisted(() => ({
+  invoke: vi.fn(() => Promise.resolve(undefined)),
+}));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 // Controllable stand-in for the shared player store: the view reads
@@ -147,6 +162,81 @@ describe("NowPlayingView back-button accessible name (P2-12-3)", () => {
     render(<NowPlayingView {...baseProps()} currentTrack={makeTrack()} />);
 
     expect(screen.getByRole("button", { name: en.common.close })).toBeTruthy();
+  });
+});
+
+describe("NowPlayingView collapse button on VIDEO + fullscreen chrome", () => {
+  const VIDEO_TRACK: Track = { ...makeTrack(), originalName: "movie.mkv" };
+
+  function closeButton(): HTMLElement {
+    return screen.getByRole("button", { name: en.common.close });
+  }
+
+  function closeWrapper(): HTMLElement {
+    const wrapper = closeButton().parentElement;
+    if (!wrapper) throw new Error("close wrapper not rendered");
+    return wrapper;
+  }
+
+  it("a video track renders the collapse button; clicking it only calls onBack", () => {
+    const props = baseProps();
+    render(<NowPlayingView {...props} currentTrack={VIDEO_TRACK} />);
+
+    const button = closeButton();
+    // The wrapper owns the position + chrome classes; the button is its direct
+    // child so the fade/pointer-events contract is testable on the wrapper.
+    expect(button.parentElement?.className).toContain("absolute");
+    fireEvent.click(button);
+    expect(props.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("fullscreen with hidden chrome fades the wrapper out and disables pointer events", () => {
+    render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO_TRACK}
+        isFullscreen
+        chromeVisible={false}
+      />,
+    );
+
+    const wrapper = closeWrapper();
+    expect(wrapper.className).toContain("opacity-0");
+    expect(wrapper.className).toContain("pointer-events-none");
+    expect(
+      wrapper.className.split(" ").filter((c) => c.startsWith("opacity-")),
+    ).toEqual(["opacity-0"]);
+  });
+
+  it("fullscreen with visible chrome paints the wrapper and keeps it interactive", () => {
+    render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO_TRACK}
+        isFullscreen
+      />,
+    );
+
+    const wrapper = closeWrapper();
+    expect(wrapper.className).toContain("opacity-100");
+    expect(wrapper.className).not.toContain("pointer-events-none");
+    expect(
+      wrapper.className.split(" ").filter((c) => c.startsWith("opacity-")),
+    ).toEqual(["opacity-100"]);
+  });
+
+  it("windowed ignores chromeVisible (the bar is always painted)", () => {
+    render(
+      <NowPlayingView
+        {...baseProps()}
+        currentTrack={VIDEO_TRACK}
+        chromeVisible={false}
+      />,
+    );
+
+    const wrapper = closeWrapper();
+    expect(wrapper.className).toContain("opacity-100");
+    expect(wrapper.className).not.toContain("pointer-events-none");
   });
 });
 
@@ -259,6 +349,25 @@ describe("NowPlayingView transport completeness in the full-screen surface", () 
     expect(rail).not.toBeNull();
     // Reachable here — the PlayerBar hides its own rail below the xl breakpoint.
     expect(rail?.className).not.toContain("hidden");
+  });
+
+  it("uses the shared 125px rail and 8px icon gap on the audio surface", () => {
+    const { container } = render(
+      <NowPlayingView {...baseProps()} currentTrack={makeTrack()} />,
+    );
+    const rail = container.querySelector<HTMLElement>(
+      "[data-testid='volume-bar']",
+    );
+    const iconGroup = rail?.parentElement as HTMLElement;
+    const outer = iconGroup.parentElement as HTMLElement;
+
+    expect(rail?.className).toContain("w-[125px]");
+    expect(rail?.className).toContain("h-1.5");
+    expect(rail?.className).toContain("rounded-full");
+    expect(rail?.className).not.toContain("hidden");
+    expect(rail?.className).not.toContain("xl:flex");
+    expect(iconGroup.className.split(" ")).toContain("gap-2");
+    expect(outer.className.split(" ")).toContain("gap-4");
   });
 
   it("still owns prev / play / next / play-mode (unchanged transport surface)", () => {

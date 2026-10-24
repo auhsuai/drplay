@@ -293,11 +293,6 @@ export const NowPlayingView = memo(function NowPlayingView({
   // The header copy of that toggle is gone (user decision): the floating bar
   // carries its own, and `f` / Escape exist.
 
-  // The header chevron survives AUDIO only. The video surface has no header
-  // chrome at all — the bar's controls plus Escape / `f` are the way out, and
-  // that is asserted by tests, not by a comment.
-  const showBackButton = !isVideoTrack;
-
   // S4: the player background. VIDEO mode moves it off <main> onto the
   // dedicated layer below, which clips the native host rect out while the
   // host is visible — the DComp video visual composites BELOW the webview
@@ -349,19 +344,28 @@ export const NowPlayingView = memo(function NowPlayingView({
           stays visible (and the center button below becomes the retry). */}
       <ErrorToast errorInfo={errorInfo} inline />
 
-      {/* Back Button — AUDIO only (see `showBackButton`). The video surface
-          has no header chrome. */}
-      {showBackButton && (
-        <div className="absolute top-6 left-6 z-50">
-          <button
-            onClick={onBack}
-            aria-label={t("common.close")}
-            className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
-          >
-            <ChevronDown className="w-6 h-6" />
-          </button>
-        </div>
-      )}
+      {/* Collapse chevron — BOTH surfaces. In fullscreen it follows
+          useFullscreenChrome exactly like the floating bar (opacity +
+          pointer-events, never display:none); windowed it is always painted
+          and `chromeVisible` is ignored. z-50 keeps it above the z-10 video
+          column, and the webview composites ABOVE the mpv visual (the DComp
+          video visual composites below the webview), so the native host
+          cannot swallow it. */}
+      <div
+        className={`absolute top-6 left-6 z-50 transition-opacity duration-200 ${
+          isFullscreen && !chromeVisible
+            ? "opacity-0 pointer-events-none"
+            : "opacity-100"
+        }`}
+      >
+        <button
+          onClick={onBack}
+          aria-label={t("common.close")}
+          className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors active:scale-95"
+        >
+          <ChevronDown className="w-6 h-6" />
+        </button>
+      </div>
 
       {isVideoTrack ? (
         /* D3 media-player layout (spec §15/§16/§34): the video fills the
@@ -422,11 +426,9 @@ export const NowPlayingView = memo(function NowPlayingView({
             isDownloading={isDownloading}
             hasError={errorInfo !== null}
             onRetry={retryCurrentTrack}
-            playMode={playMode}
             onTogglePlay={handleManualTogglePlay}
             onNext={handleManualNext}
             onPrev={handleManualPrev}
-            onTogglePlayMode={onTogglePlayMode}
             audio={AudioController.getInstance()}
             isFullscreen={isFullscreen}
             onToggleFullscreen={onToggleFullscreen}
@@ -436,7 +438,11 @@ export const NowPlayingView = memo(function NowPlayingView({
           />
         </div>
       ) : (
-        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 animate-in fade-in zoom-in-95 duration-500 overflow-y-auto">
+        // No entrance fade/zoom here: the overlay's own slide is the ONLY
+        // motion of opening/closing. A content fade on top of it reads as
+        // "the panel faded in", hiding the slide (and a scale on a
+        // full-height container looks like the whole surface resizing).
+        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 md:p-12 overflow-y-auto">
           {/* Content group: centered vertically when room, scrolls when not. */}
           <div
             className={`w-full flex flex-col items-center ${

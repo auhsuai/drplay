@@ -561,6 +561,81 @@ describe("MoreMenu playerbar variant regression", () => {
   });
 });
 
+describe("MoreMenu playerbar queue toggle", () => {
+  function queueItem(): HTMLElement {
+    return within(menuEl()).getByRole("menuitemcheckbox", {
+      name: "Play Queue",
+    });
+  }
+
+  it("shows the Play Queue row and reflects isQueueOpen through aria-checked", () => {
+    const { rerender } = render(
+      <MoreMenu
+        isPlayerBarMode
+        track={makeTrack()}
+        isQueueOpen={false}
+        onToggleQueue={vi.fn()}
+      />,
+    );
+    openTrigger();
+    expect(queueItem().getAttribute("aria-checked")).toBe("false");
+
+    rerender(
+      <MoreMenu
+        isPlayerBarMode
+        track={makeTrack()}
+        isQueueOpen
+        onToggleQueue={vi.fn()}
+      />,
+    );
+    expect(queueItem().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("calls onToggleQueue exactly once and closes the menu", () => {
+    const onToggleQueue = vi.fn();
+    render(
+      <MoreMenu
+        isPlayerBarMode
+        track={makeTrack()}
+        isQueueOpen={false}
+        onToggleQueue={onToggleQueue}
+      />,
+    );
+    openTrigger();
+    fireEvent.click(queueItem());
+
+    expect(onToggleQueue).toHaveBeenCalledTimes(1);
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("renders no Play Queue row when onToggleQueue is absent (other callers unchanged)", () => {
+    render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
+    openTrigger();
+    expect(
+      within(menuEl()).queryByRole("menuitemcheckbox", { name: "Play Queue" }),
+    ).toBeNull();
+  });
+
+  it("never shows Play Queue in the default variant even when the props are passed", () => {
+    render(
+      <MoreMenu
+        track={makeTrack()}
+        driveItem={makeDriveItem()}
+        token="tok"
+        isQueueOpen
+        onToggleQueue={vi.fn()}
+      />,
+    );
+    openTrigger();
+    expect(
+      within(menuEl()).queryByRole("menuitemcheckbox", { name: "Play Queue" }),
+    ).toBeNull();
+    expect(
+      within(menuEl()).queryByRole("menuitem", { name: "Play Queue" }),
+    ).toBeNull();
+  });
+});
+
 describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
   function renderRecent(): void {
     render(

@@ -136,6 +136,83 @@ describe("usePlayerCommands", () => {
     expect(ctx._audio.toggleMute).toHaveBeenCalledTimes(1);
   });
 
+  it("wires plain Up/Down to volume, Ctrl to volume and Shift to the 60 s seek", () => {
+    const ctx = makeCtx();
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    const up = pressKey("ArrowUp");
+    expect(up.defaultPrevented).toBe(true);
+    expect(ctx._audio.setVolume).toHaveBeenCalledWith(0.6);
+    expect(ctx._audio.seek).not.toHaveBeenCalled();
+    ctx._audio.setVolume.mockClear();
+
+    pressKey("ArrowDown");
+    expect(ctx._audio.setVolume).toHaveBeenCalledWith(0.4);
+    expect(ctx._audio.seek).not.toHaveBeenCalled();
+    ctx._audio.setVolume.mockClear();
+
+    pressKey("ArrowUp", { ctrlKey: true });
+    expect(ctx._audio.setVolume).toHaveBeenCalledWith(0.6);
+    expect(ctx._audio.seek).not.toHaveBeenCalled();
+    ctx._audio.setVolume.mockClear();
+
+    pressKey("ArrowDown", { ctrlKey: true });
+    expect(ctx._audio.setVolume).toHaveBeenCalledWith(0.4);
+    expect(ctx._audio.seek).not.toHaveBeenCalled();
+    ctx._audio.setVolume.mockClear();
+
+    pressKey("ArrowUp", { repeat: true });
+    expect(ctx._audio.setVolume).toHaveBeenCalledWith(0.6);
+    ctx._audio.setVolume.mockClear();
+
+    pressKey("ArrowUp", { shiftKey: true });
+    expect(ctx._audio.seek).toHaveBeenCalledWith(160);
+    expect(ctx._audio.setVolume).not.toHaveBeenCalled();
+    ctx._audio.seek.mockClear();
+
+    pressKey("ArrowDown", { shiftKey: true });
+    expect(ctx._audio.seek).toHaveBeenCalledWith(40);
+    expect(ctx._audio.setVolume).not.toHaveBeenCalled();
+    ctx._audio.seek.mockClear();
+
+    pressKey("ArrowLeft");
+    expect(ctx._audio.seek).toHaveBeenCalledWith(95);
+    ctx._audio.seek.mockClear();
+
+    pressKey("ArrowRight");
+    expect(ctx._audio.seek).toHaveBeenCalledWith(105);
+    ctx._audio.seek.mockClear();
+
+    pressKey("ArrowLeft", { shiftKey: true });
+    expect(ctx._audio.seek).toHaveBeenCalledWith(99);
+    ctx._audio.seek.mockClear();
+
+    pressKey("ArrowRight", { shiftKey: true });
+    expect(ctx._audio.seek).toHaveBeenCalledWith(101);
+    expect(ctx._audio.setVolume).not.toHaveBeenCalled();
+  });
+
+  it("clamps Up/Down volume at 0 and 1", () => {
+    const high = makeCtx();
+    high._audio.getVolume.mockReturnValue(0.95);
+    renderHook(() => {
+      usePlayerCommands(high);
+    });
+    pressKey("ArrowUp");
+    expect(high._audio.setVolume).toHaveBeenCalledWith(1);
+    cleanup();
+
+    const low = makeCtx();
+    low._audio.getVolume.mockReturnValue(0.05);
+    renderHook(() => {
+      usePlayerCommands(low);
+    });
+    pressKey("ArrowDown");
+    expect(low._audio.setVolume).toHaveBeenCalledWith(0);
+  });
+
   it("wires Ctrl+Shift+S to shuffle and F8 to the queue toggle", () => {
     const ctx = makeCtx();
     renderHook(() => {

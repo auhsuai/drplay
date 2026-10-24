@@ -120,8 +120,18 @@ describe("commands — shortcut map", () => {
       { shiftKey: true },
       PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_1,
     ],
-    ["ArrowUp", {}, PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60],
-    ["ArrowDown", {}, PLAYER_COMMAND_IDS.PLAYER_SEEK_BACKWARD_60],
+    ["ArrowUp", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP],
+    ["ArrowDown", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_DOWN],
+    [
+      "ArrowUp",
+      { shiftKey: true },
+      PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60,
+    ],
+    [
+      "ArrowDown",
+      { shiftKey: true },
+      PLAYER_COMMAND_IDS.PLAYER_SEEK_BACKWARD_60,
+    ],
     ["f", {}, PLAYER_COMMAND_IDS.PLAYER_FULLSCREEN],
     ["a", {}, PLAYER_COMMAND_IDS.PLAYER_AUDIO_NEXT],
     ["A", { shiftKey: true }, PLAYER_COMMAND_IDS.PLAYER_AUDIO_PREV],
@@ -166,6 +176,43 @@ describe("commands — shortcut map", () => {
     ["q", { metaKey: true }, PLAYER_COMMAND_IDS.PLAYER_QUEUE_TOGGLE],
   ])("maps %o %o -> %s", (key, init, expected) => {
     expect(idFor(key, init)).toBe(expected);
+  });
+
+  it("resolves every arrow chord to exactly one command at most", () => {
+    const chords: Array<[string, KeyboardEventInit, PlayerCommandId | undefined]> = [
+      ["ArrowUp", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP],
+      ["ArrowUp", { ctrlKey: true }, PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP],
+      ["ArrowUp", { shiftKey: true }, PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60],
+      ["ArrowUp", { ctrlKey: true, shiftKey: true }, undefined],
+      ["ArrowUp", { ctrlKey: true, altKey: true }, undefined],
+      ["ArrowDown", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_DOWN],
+      ["ArrowDown", { ctrlKey: true }, PLAYER_COMMAND_IDS.PLAYER_VOLUME_DOWN],
+      [
+        "ArrowDown",
+        { shiftKey: true },
+        PLAYER_COMMAND_IDS.PLAYER_SEEK_BACKWARD_60,
+      ],
+      ["ArrowDown", { ctrlKey: true, shiftKey: true }, undefined],
+      [
+        "ArrowDown",
+        { ctrlKey: true, altKey: true },
+        PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_RESET,
+      ],
+      ["ArrowLeft", { ctrlKey: true, altKey: true }, PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_DOWN],
+      ["ArrowRight", { ctrlKey: true, altKey: true }, PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_UP],
+    ];
+
+    for (const [key, init, expected] of chords) {
+      const matches = PLAYER_COMMANDS.filter((command) =>
+        command.match(keyEvent(key, init)),
+      );
+      expect(matches.length).toBeLessThanOrEqual(1);
+      expect(findCommandForEvent(keyEvent(key, init))?.id).toBe(expected);
+    }
+
+    expect(idFor("ArrowUp", { ctrlKey: true, altKey: true })).not.toBe(
+      PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP,
+    );
   });
 
   it("keeps F8 and Ctrl+Q as aliases of the same queue command (old behavior preserved)", () => {
@@ -238,6 +285,9 @@ describe("commands — shortcut map", () => {
     expect(idFor("ArrowUp", { ctrlKey: true, repeat: true })).toBe(
       PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP,
     );
+    expect(idFor("ArrowUp", { repeat: true })).toBe(
+      PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP,
+    );
     expect(idFor("]", { repeat: true })).toBe(
       PLAYER_COMMAND_IDS.PLAYER_SPEED_UP,
     );
@@ -274,7 +324,9 @@ describe("commands — shortcut map", () => {
       }
     }
     expect(shortcutFor(PLAYER_COMMAND_IDS.PLAYER_PLAY_PAUSE)).toBe("Space");
-    expect(shortcutFor(PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP)).toBe("Ctrl+Up");
+    expect(shortcutFor(PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP)).toBe(
+      "\u2191 / Ctrl+\u2191",
+    );
     expect(shortcutFor(PLAYER_COMMAND_IDS.PLAYER_SUB_DELAY_RESET)).toBe(
       "Shift+H",
     );

@@ -1,14 +1,15 @@
 import { memo, useCallback, useState, useEffect } from "react";
-import { useTranslation } from "react-i18next";
-import { List } from "lucide-react";
 import { AudioController } from "../../lib/AudioController";
 import { isForeignTrackEvent } from "../../lib/audioNativeEvents";
 import { usePlayerStore } from "../../store/playerStore";
 import type { PlayerBarProps } from "./types";
 import { TrackInfo } from "./TrackInfo";
 import { TransportControls } from "./TransportControls";
+import { LikeButton } from "./LikeButton";
+import { PlayModeButton } from "./PlayModeButton";
 import { SeekBar } from "../components/SeekBar";
 import { VolumeSlider } from "./VolumeSlider";
+import { MoreMenu } from "../components/MoreMenu";
 import { ErrorToast } from "./ErrorToast";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 import { resetAdvanceGuard, retryCurrentTrack } from "../../utils/playerError";
@@ -26,7 +27,6 @@ function PlayerBarImpl({
   isQueueOpen,
   onToggleQueue,
 }: PlayerBarProps) {
-  const { t } = useTranslation();
   const audio = AudioController.getInstance();
 
   // Local UI state (không gây ảnh hưởng global). Seek/volume/favorite state
@@ -123,35 +123,48 @@ function PlayerBarImpl({
           isDownloading={isDownloading ?? false}
           hasError={errorInfo !== null}
           onRetry={retryCurrentTrack}
-          playMode={playMode}
           onTogglePlay={handleManualTogglePlay}
           onPrevTrack={handleManualPrev}
           onNextTrack={handleManualNext}
-          onTogglePlayMode={onTogglePlayMode}
+          leading={
+            <>
+              {/* Below lg the heart is hidden; this 40px box keeps the left
+                  cell the same width as the right one (mode button) so Play
+                  stays centred. */}
+              <div
+                aria-hidden="true"
+                className="lg:hidden w-10 h-10 shrink-0"
+              />
+              <div className="hidden lg:flex w-10 h-10 items-center justify-center">
+                <LikeButton currentTrack={currentTrack} />
+              </div>
+            </>
+          }
+          trailing={
+            <PlayModeButton
+              currentTrack={currentTrack}
+              playMode={playMode}
+              onTogglePlayMode={onTogglePlayMode}
+            />
+          }
         />
         <SeekBar currentTrack={currentTrack} audio={audio} variant="top" />
       </div>
 
-      {/* Right: Volume Controls (queue button leads the volume icon) */}
-      <VolumeSlider
-        audio={audio}
-        leading={
-          <button
-            type="button"
-            onClick={onToggleQueue}
-            aria-label={t("queue.open")}
-            title={t("queue.open")}
-            aria-expanded={isQueueOpen}
-            className={`p-2 rounded-full transition-all active:scale-[0.92] shrink-0 ${
-              isQueueOpen
-                ? "text-brand-text bg-brand-primary/10"
-                : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"
-            }`}
-          >
-            <List className="w-6 h-6" />
-          </button>
-        }
-      />
+      {/* Right: utilities — volume → more (queue toggle lives in the menu) */}
+      <div className="flex items-center justify-end gap-2 min-w-0">
+        <VolumeSlider audio={audio} />
+        {currentTrack && (
+          <div className="hidden lg:block shrink-0">
+            <MoreMenu
+              track={currentTrack}
+              isPlayerBarMode={true}
+              isQueueOpen={isQueueOpen}
+              onToggleQueue={onToggleQueue}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Error Toast */}
       <ErrorToast errorInfo={errorInfo} />
@@ -169,7 +182,7 @@ export const PlayerBar = memo(PlayerBarImpl, (prevProps, nextProps) => {
     // removed bridge effect. The prop itself is still accepted (App passes
     // it) but intentionally ignored here until the dead wiring is removed.
     // The queue drawer lives in App/AppShell now; without this the memoized
-    // bar would keep the stale button highlight + aria-expanded.
+    // bar would keep the stale Play Queue checked state in the MoreMenu.
     prevProps.isQueueOpen === nextProps.isQueueOpen
   );
 });

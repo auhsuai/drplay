@@ -41,7 +41,7 @@ import { emitPlayerUi } from "../playerUiBus";
 export const VOLUME_STEP = 0.1;
 /** Fine seek step (Shift+Arrow). */
 const SEEK_STEP_FINE_SECONDS = 1;
-/** Long seek step (ArrowUp/Down). */
+/** Long seek step (Shift+ArrowUp/Down). */
 const SEEK_STEP_LARGE_SECONDS = 60;
 /** Subtitle/audio delay nudge per keypress (VLC-style 50 ms). */
 const SUB_DELAY_STEP_SECONDS = 0.05;
@@ -184,10 +184,10 @@ export const COMMAND_DEFINITIONS: readonly PlayerCommand[] = [
   {
     id: PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60,
     labelKey: "player.command.seek_forward_60",
-    shortcut: "\u2191 60s",
+    shortcut: "Shift+\u2191 60s",
     preventDefault: true,
     repeatable: true,
-    match: (e) => noModifiers(e) && e.key === "ArrowUp",
+    match: (e) => noModifiers(e) && e.shiftKey && e.key === "ArrowUp",
     run: (ctx) => {
       seekRelative(ctx.audio, SEEK_STEP_LARGE_SECONDS);
     },
@@ -195,10 +195,10 @@ export const COMMAND_DEFINITIONS: readonly PlayerCommand[] = [
   {
     id: PLAYER_COMMAND_IDS.PLAYER_SEEK_BACKWARD_60,
     labelKey: "player.command.seek_backward_60",
-    shortcut: "\u2193 60s",
+    shortcut: "Shift+\u2193 60s",
     preventDefault: true,
     repeatable: true,
-    match: (e) => noModifiers(e) && e.key === "ArrowDown",
+    match: (e) => noModifiers(e) && e.shiftKey && e.key === "ArrowDown",
     run: (ctx) => {
       seekRelative(ctx.audio, -SEEK_STEP_LARGE_SECONDS);
     },
@@ -270,10 +270,13 @@ export const COMMAND_DEFINITIONS: readonly PlayerCommand[] = [
   {
     id: PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP,
     labelKey: "player.command.volume_up",
-    shortcut: "Ctrl+Up",
+    shortcut: "\u2191 / Ctrl+\u2191",
     preventDefault: true,
     repeatable: true,
-    match: (e) => commandModifier(e) && e.key === "ArrowUp",
+    match: (e) =>
+      (noModifiers(e) || commandModifier(e)) &&
+      !e.shiftKey &&
+      e.key === "ArrowUp",
     run: (ctx) => {
       adjustVolume(ctx, 1);
     },
@@ -281,10 +284,13 @@ export const COMMAND_DEFINITIONS: readonly PlayerCommand[] = [
   {
     id: PLAYER_COMMAND_IDS.PLAYER_VOLUME_DOWN,
     labelKey: "player.command.volume_down",
-    shortcut: "Ctrl+Down",
+    shortcut: "\u2193 / Ctrl+\u2193",
     preventDefault: true,
     repeatable: true,
-    match: (e) => commandModifier(e) && e.key === "ArrowDown",
+    match: (e) =>
+      (noModifiers(e) || commandModifier(e)) &&
+      !e.shiftKey &&
+      e.key === "ArrowDown",
     run: (ctx) => {
       adjustVolume(ctx, -1);
     },

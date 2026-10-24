@@ -13,8 +13,9 @@
  *     shows through the empty video rect.
  *  2. The signal that ends that state is a real one-shot event from the render
  *     thread, not a timeout, and it resets per media item.
- *  3. The header chevron and the header fullscreen button are gone, the bottom
- *     bar keeps EXACTLY its control set, and NowPlaying is still exitable.
+ *  3. The header fullscreen button is gone, the bottom bar keeps EXACTLY its
+ *     control set, the collapse chevron now exists on the video surface too,
+ *     and NowPlaying is still exitable.
  */
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useState, type ReactElement } from "react";
@@ -64,6 +65,9 @@ const audioMock = vi.hoisted(() => {
     _emit(event: string, payload?: unknown) {
       for (const h of handlers[event] ?? []) h(payload);
     },
+    getCurrentTime: vi.fn(() => 0),
+    getDuration: vi.fn(() => 0),
+    getCurrentTrackId: vi.fn<() => string | null>(() => null),
     getVolume: vi.fn(() => 0.5),
     isMuted: vi.fn(() => false),
     toggleMute: vi.fn(() => false),
@@ -275,18 +279,20 @@ describe("the video area is opaque black until a frame is presented", () => {
 // 2. Header controls removed, bottom bar untouched, navigation not stranded
 // ---------------------------------------------------------------------------
 describe("header controls", () => {
-  it("the video surface has no header chevron and no header fullscreen button", () => {
+  it("the video surface has exactly one header chevron and no header fullscreen button", () => {
     const { container } = render(
       <NowPlayingView {...baseProps()} currentTrack={VIDEO} />,
     );
 
     expect(
-      container.querySelector('button[aria-label="common.close"]'),
-    ).toBeNull();
+      container.querySelectorAll('button[aria-label="common.close"]'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelectorAll(".absolute.top-6.left-6"),
+    ).toHaveLength(1);
     expect(
       container.querySelector("[data-testid='fullscreen-toggle']"),
     ).toBeNull();
-    expect(container.querySelectorAll(".absolute.top-6.left-6").length).toBe(0);
   });
 
   it("the bottom bar keeps EXACTLY its control set (nothing dropped, nothing re-added)", () => {
@@ -307,7 +313,6 @@ describe("header controls", () => {
       "player.more",
       "player.next",
       "player.play",
-      "player.play_mode",
       "player.prev",
     ]);
     // The two deleted standalone buttons must stay deleted.
@@ -355,9 +360,10 @@ describe("header controls", () => {
     }
 
     const { container } = render(<Harness />);
+    // The overlay now carries the collapse chevron on the video surface too.
     expect(
-      container.querySelector('button[aria-label="common.close"]'),
-    ).toBeNull();
+      container.querySelectorAll('button[aria-label="common.close"]'),
+    ).toHaveLength(1);
 
     // From fullscreen the first Escape only leaves fullscreen...
     fireEvent.keyDown(window, { key: "Escape" });

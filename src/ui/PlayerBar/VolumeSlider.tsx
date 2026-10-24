@@ -123,23 +123,25 @@ export function VolumeSlider({
   return (
     <div className="flex items-center justify-end min-w-0 pl-2 gap-4">
       {leading}
-      <VolumeIcon
-        className="w-6 h-6 text-gray-500 hover:text-white cursor-pointer"
-        onClick={toggleMute}
-      />
-      <div
-        ref={volumeBarRef}
-        data-testid="volume-bar"
-        className={`${alwaysShowRail ? "flex" : "hidden xl:flex"} w-24 h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center`}
-        onPointerDown={handleVolumePointerDown}
-      >
+      <div className="flex items-center gap-2">
+        <VolumeIcon
+          className="w-6 h-6 text-gray-500 hover:text-white cursor-pointer"
+          onClick={toggleMute}
+        />
         <div
-          className={`absolute left-0 h-full bg-gray-500 dark:bg-gray-400 group-hover:bg-brand-primary ${isVolumeActive ? "!bg-brand-primary" : ""} rounded-full transition-colors`}
-          style={{ width: `${String(volumePercent)}%` }}
+          ref={volumeBarRef}
+          data-testid="volume-bar"
+          className={`${alwaysShowRail ? "flex" : "hidden xl:flex"} w-[125px] h-1.5 bg-gray-200 dark:bg-[#2A2A2A] rounded-full cursor-pointer relative group items-center`}
+          onPointerDown={handleVolumePointerDown}
         >
           <div
-            className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 ${isVolumeActive ? "!opacity-100" : ""} transition-opacity shrink-0`}
-          ></div>
+            className={`absolute left-0 h-full bg-gray-500 dark:bg-gray-400 group-hover:bg-brand-primary ${isVolumeActive ? "!bg-brand-primary" : ""} rounded-full transition-colors`}
+            style={{ width: `${String(volumePercent)}%` }}
+          >
+            <div
+              className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 ${isVolumeActive ? "!opacity-100" : ""} transition-opacity shrink-0`}
+            ></div>
+          </div>
         </div>
       </div>
     </div>

@@ -17,16 +17,18 @@ player bar and the keyboard can never drift apart.
 | `Shift+Left` | `PLAYER_SEEK_BACKWARD_1` | Exact seek −1 s |
 | `Right` | `PLAYER_SEEK_FORWARD_5` | Seek +5 s |
 | `Shift+Right` | `PLAYER_SEEK_FORWARD_1` | Exact seek +1 s |
-| `Up` | `PLAYER_SEEK_FORWARD_60` | Seek +60 s |
-| `Down` | `PLAYER_SEEK_BACKWARD_60` | Seek −60 s |
+| `Up` | `PLAYER_VOLUME_UP` | Volume +10 % |
+| `Down` | `PLAYER_VOLUME_DOWN` | Volume −10 % |
+| `Shift+Up` | `PLAYER_SEEK_FORWARD_60` | Seek +60 s |
+| `Shift+Down` | `PLAYER_SEEK_BACKWARD_60` | Seek −60 s |
 | `F` | `PLAYER_FULLSCREEN` | Enter / exit fullscreen (opens the player if closed) |
 | `A` | `PLAYER_AUDIO_NEXT` | Next audio track |
 | `Shift+A` | `PLAYER_AUDIO_PREV` | Previous audio track |
 | `V` | `PLAYER_SUBTITLE_NEXT` | Next subtitle track |
 | `Shift+V` | `PLAYER_SUBTITLE_VISIBLE` | Toggle subtitle visibility |
 | `M` | `PLAYER_MUTE` | Mute / unmute |
-| `Ctrl+Up` | `PLAYER_VOLUME_UP` | Volume +10 % |
-| `Ctrl+Down` | `PLAYER_VOLUME_DOWN` | Volume −10 % |
+| `Ctrl+Up` | `PLAYER_VOLUME_UP` | Volume +10 % (alias) |
+| `Ctrl+Down` | `PLAYER_VOLUME_DOWN` | Volume −10 % (alias) |
 | `G` | `PLAYER_SUB_DELAY_DOWN` | Subtitle delay −50 ms |
 | `H` | `PLAYER_SUB_DELAY_UP` | Subtitle delay +50 ms |
 | `Shift+H` | `PLAYER_SUB_DELAY_RESET` | Reset subtitle delay |

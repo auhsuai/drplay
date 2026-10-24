@@ -57,6 +57,9 @@ const audioMock = vi.hoisted(() => {
     _emit(event: string, payload?: unknown) {
       for (const h of handlers[event] ?? []) h(payload);
     },
+    getCurrentTime: vi.fn(() => 0),
+    getDuration: vi.fn(() => 0),
+    getCurrentTrackId: vi.fn<() => string | null>(() => null),
     playTrack: vi.fn(() => Promise.resolve()),
     // VolumeSlider reads the engine through the same facade.
     getVolume: vi.fn(() => 0.5),
@@ -918,9 +921,9 @@ describe("video mode uses the horizontal media-player layout (D3)", () => {
 // live: toggling fullscreen flipped `isFullscreen` but the measured rect stayed
 // byte-identical (x:12 y:56 w:1000 h:639) because BOTH states shared one fixed
 // class on the video column — `pt-14 px-3 pb-2` — and the bar eats the
-// remaining height. That band only reserved space for the removed video header,
-// so it is gone in BOTH states; the back button (which lived in it) goes with
-// it, and the exit toggle stays reachable.
+// remaining height. That band only reserved space for the video header, so it
+// is gone in BOTH states; the collapse chevron now floats above the picture and
+// follows the fullscreen chrome, and the exit toggle stays reachable.
 // ---------------------------------------------------------------------------
 describe("F3: fullscreen really enlarges the video surface", () => {
   /** The video column wrapper: surface -> flex area -> column. */
@@ -933,8 +936,19 @@ describe("F3: fullscreen really enlarges the video surface", () => {
     return column;
   }
 
-  function backButton(container: HTMLElement): Element | null {
-    return container.querySelector('button[aria-label="common.close"]');
+  function backButton(container: HTMLElement): HTMLElement {
+    const button = container.querySelector<HTMLElement>(
+      'button[aria-label="common.close"]',
+    );
+    if (!button) throw new Error("close button not rendered");
+    return button;
+  }
+
+  /** The positioned wrapper that owns the chevron's chrome classes. */
+  function backWrapper(container: HTMLElement): HTMLElement {
+    const wrapper = backButton(container).parentElement;
+    if (!wrapper) throw new Error("close wrapper not rendered");
+    return wrapper;
   }
 
   /** Outermost wrapper under <main> for the AUDIO branch, reached from the
@@ -946,7 +960,7 @@ describe("F3: fullscreen really enlarges the video surface", () => {
     return el as HTMLElement;
   }
 
-  it("windowed: the video column reserves no header band and the header chevron is gone", () => {
+  it("windowed: the video column reserves no header band and the close chevron is present", () => {
     const { container } = render(
       <NowPlayingView
         {...baseProps()}
@@ -960,10 +974,15 @@ describe("F3: fullscreen really enlarges the video surface", () => {
     expect(videoColumn(container).className).not.toContain("pt-14");
     expect(videoColumn(container).className).not.toContain("px-3");
     expect(videoColumn(container).className).not.toContain("pb-2");
-    expect(backButton(container)).toBeNull();
+    expect(backButton(container)).toBeTruthy();
+    // Windowed ignores chromeVisible: the chevron is always painted.
+    expect(backWrapper(container).className).toContain("opacity-100");
+    expect(backWrapper(container).className).not.toContain(
+      "pointer-events-none",
+    );
   });
 
-  it("fullscreen: the header band stays gone and the header chevron with it", () => {
+  it("fullscreen: the header band stays gone; the chevron is present and follows the chrome", () => {
     const props = baseProps();
     const { container, rerender } = render(
       <NowPlayingView
@@ -993,7 +1012,22 @@ describe("F3: fullscreen really enlarges the video surface", () => {
     expect(before).not.toContain("pt-14");
     expect(before).not.toContain("px-3");
     expect(before).not.toContain("pb-2");
-    expect(backButton(container)).toBeNull();
+    expect(backButton(container)).toBeTruthy();
+    expect(backWrapper(container).className).toContain("opacity-100");
+
+    // Hidden chrome → the SAME fade + pointer-events policy as the bar.
+    rerender(
+      <NowPlayingView
+        {...props}
+        currentTrack={VIDEO}
+        isFullscreen
+        chromeVisible={false}
+        onToggleFullscreen={vi.fn()}
+      />,
+    );
+    const wrapper = backWrapper(container);
+    expect(wrapper.className).toContain("opacity-0");
+    expect(wrapper.className).toContain("pointer-events-none");
     // …but you can still LEAVE fullscreen, from the floating bar.
     expect(
       container.querySelector(

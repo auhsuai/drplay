@@ -70,6 +70,10 @@ export interface MoreMenuProps {
   onRenamePlaylist?: (() => void) | undefined;
   onDeletePlaylist?: (() => void) | undefined;
   onTogglePinPlaylist?: (() => void) | undefined;
+  // PlayerBar variant only: the queue toggle lives inside this menu (checked
+  // row). Other variants never receive these props.
+  isQueueOpen?: boolean | undefined;
+  onToggleQueue?: (() => void) | undefined;
 }
 
 export function MoreMenu({
@@ -100,6 +104,8 @@ export function MoreMenu({
   onRenamePlaylist,
   onDeletePlaylist,
   onTogglePinPlaylist,
+  isQueueOpen,
+  onToggleQueue,
 }: MoreMenuProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -285,6 +291,8 @@ export function MoreMenu({
           handleNavigateClick={handleNavigateClick}
           setIsOpen={setIsOpen}
           t={t}
+          isQueueOpen={isQueueOpen}
+          onToggleQueue={onToggleQueue}
         />
       ) : mode === "recent" ? (
         <RecentMenuItems

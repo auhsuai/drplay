@@ -1,4 +1,4 @@
-import { Download, MapPin } from "lucide-react";
+import { Download, List, MapPin } from "lucide-react";
 import type { Track } from "../../../types";
 import { MENU_ITEM_BASE_CLASS } from "./constants";
 import { MoreMenuItem } from "./MoreMenuItem";
@@ -13,6 +13,8 @@ interface PlayerBarMenuItemsProps {
   handleNavigateClick: (e: React.MouseEvent) => void;
   setIsOpen: (open: boolean) => void;
   t: import("i18next").TFunction;
+  isQueueOpen?: boolean | undefined;
+  onToggleQueue?: (() => void) | undefined;
 }
 
 export function PlayerBarMenuItems({
@@ -21,9 +23,24 @@ export function PlayerBarMenuItems({
   handleNavigateClick,
   setIsOpen,
   t,
+  isQueueOpen,
+  onToggleQueue,
 }: PlayerBarMenuItemsProps) {
   return (
     <>
+      {onToggleQueue && (
+        <MoreMenuItem
+          icon={List}
+          label={t("queue.open")}
+          checked={isQueueOpen}
+          onClick={() => {
+            onToggleQueue();
+            setIsOpen(false);
+          }}
+          className={MENU_ITEM_BASE_CLASS}
+        />
+      )}
+
       {track && (
         <>
           <MoreMenuItem

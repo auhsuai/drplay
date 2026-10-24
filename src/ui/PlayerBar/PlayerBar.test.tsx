@@ -109,7 +109,31 @@ vi.mock("../../utils/favorites", () => ({
   FAVORITES_UPDATED_EVENT: "favorites-updated",
 }));
 
-vi.mock("../components/MoreMenu", () => ({ MoreMenu: () => null }));
+// Marker stub: the tests assert WHERE the MoreMenu renders (it moved out of
+// TrackInfo into the PlayerBar's right cluster) and that the queue action is
+// wired through it, so the mock renders a queryable element carrying the
+// props it was given.
+vi.mock("../components/MoreMenu", () => ({
+  MoreMenu: (props: {
+    track?: { id?: string };
+    isPlayerBarMode?: boolean;
+    isQueueOpen?: boolean;
+    onToggleQueue?: () => void;
+  }) => (
+    <button
+      type="button"
+      aria-label="more-menu-stub"
+      data-testid="playerbar-more-menu"
+      data-track-id={props.track?.id ?? ""}
+      data-player-bar-mode={props.isPlayerBarMode ? "true" : "false"}
+      data-queue-open={String(props.isQueueOpen)}
+      data-queue-toggle={props.onToggleQueue ? "true" : "false"}
+      onClick={() => {
+        props.onToggleQueue?.();
+      }}
+    />
+  ),
+}));
 
 // TrackInfo fetches cover metadata per track; the real module pulls heavy
 // deps (music-metadata, IndexedDB) not needed here. V_PLACEHOLDER /
@@ -1684,14 +1708,18 @@ describe("PlayerBar TrackInfo folds fetched tags into the store (tags fix)", () 
   });
 });
 
-describe("PlayerBar queue toggle (nút List)", () => {
-  it("nút List: aria-expanded theo prop isQueueOpen; click → onToggleQueue", () => {
+describe("PlayerBar queue toggle lives in the MoreMenu", () => {
+  it("forwards isQueueOpen + onToggleQueue to the MoreMenu (no standalone queue button)", () => {
     const onToggleQueue = vi.fn();
     const { rerender } = renderPlayer({ isQueueOpen: false, onToggleQueue });
 
-    const closedButton = screen.getByRole("button", { name: en.queue.open });
-    expect(closedButton.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(closedButton);
+    const more = screen.getByTestId("playerbar-more-menu");
+    expect(more.getAttribute("data-queue-open")).toBe("false");
+    expect(more.getAttribute("data-queue-toggle")).toBe("true");
+    // The "Play Queue" label lives inside the real menu, never as a bar button.
+    expect(screen.queryByRole("button", { name: en.queue.open })).toBeNull();
+
+    fireEvent.click(more);
     expect(onToggleQueue).toHaveBeenCalledTimes(1);
 
     rerender(
@@ -1710,11 +1738,7 @@ describe("PlayerBar queue toggle (nút List)", () => {
       />,
     );
 
-    expect(
-      screen
-        .getByRole("button", { name: en.queue.open })
-        .getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(more.getAttribute("data-queue-open")).toBe("true");
   });
 });
 
@@ -2046,19 +2070,20 @@ describe("PlayerBar 3-column layout (playerbar-3-column-layout)", () => {
     expect(transport.children[1]).toBe(play);
     const leftCell = transport.children[0] as HTMLElement;
     const rightCell = transport.children[2] as HTMLElement;
-    // Cell 0 = mode-wrapper then prev; cell 2 = next only.
-    expect(leftCell.children).toHaveLength(2);
-    expect((leftCell.children[0] as HTMLElement).contains(mode)).toBe(true);
-    expect(leftCell.children[1]).toBe(prev);
-    expect(rightCell.children).toHaveLength(1);
+    // Cell 0 = [breakpoint placeholder][Like wrapper][prev];
+    // cell 2 = [next][mode]. The Like slot mirrors the mode button's 40px
+    // box so both 1fr cells stay the same width.
+    expect(leftCell.lastElementChild).toBe(prev);
+    expect(rightCell.children).toHaveLength(2);
     expect(rightCell.children[0]).toBe(next);
+    expect((rightCell.children[1] as HTMLElement).contains(mode)).toBe(true);
   });
 
-  it("T3: bar root keeps exactly 3 direct children mapped to the columns in order (TrackInfo | Play | Queue)", () => {
+  it("T3: bar root keeps exactly 3 direct children mapped to the columns in order (TrackInfo | Play | Utilities)", () => {
     const { container } = renderPlayer();
     const root = container.firstElementChild as HTMLElement;
     const play = screen.getByRole("button", { name: en.player.play });
-    const queue = screen.getByRole("button", { name: en.queue.open });
+    const more = screen.getByTestId("playerbar-more-menu");
 
     // 3 columns => the root itself must own them as a grid.
     expect(root.className).toContain("grid");
@@ -2068,7 +2093,7 @@ describe("PlayerBar 3-column layout (playerbar-3-column-layout)", () => {
     const rightColumn = root.children[2] as HTMLElement;
     expect(leftColumn.contains(screen.getByText("Song"))).toBe(true);
     expect(middleColumn.contains(play)).toBe(true);
-    expect(rightColumn.contains(queue)).toBe(true);
+    expect(rightColumn.contains(more)).toBe(true);
   });
 
   it("T4: TrackInfo and VolumeSlider roots drop the old w-[30%] columns (grid tracks own the widths)", () => {
@@ -2076,8 +2101,9 @@ describe("PlayerBar 3-column layout (playerbar-3-column-layout)", () => {
     const trackInfoRoot = (
       screen.getByText("Song").closest('[role="button"]') as HTMLElement
     ).parentElement as HTMLElement;
-    const volumeRoot = screen.getByRole("button", { name: en.queue.open })
-      .parentElement as HTMLElement;
+    // The volume root is the VolumeSlider wrapper: rail → icon group → root.
+    const volumeRoot = screen.getByTestId("volume-bar").parentElement
+      ?.parentElement as HTMLElement;
 
     // Sanity: the climb landed on the real column roots before asserting widths.
     expect(trackInfoRoot.className).toContain("justify-start");
@@ -2088,33 +2114,253 @@ describe("PlayerBar 3-column layout (playerbar-3-column-layout)", () => {
 });
 
 describe("PlayerBar refinements v4 (playerbar-refinements-v4)", () => {
-  it("T8: mode button sits in the left transport cell, BEFORE prev in DOM", () => {
-    renderPlayer();
+  it("T8: play-mode button sits AFTER next inside the transport, not in the utility cluster", () => {
+    const { container } = renderPlayer();
+    const root = container.firstElementChild as HTMLElement;
+    const utilityCluster = root.children[2] as HTMLElement;
     const play = screen.getByRole("button", { name: en.player.play });
-    const prev = screen.getByRole("button", { name: en.player.prev });
     const mode = screen.getByRole("button", { name: en.player.play_mode });
+    const next = screen.getByRole("button", { name: en.player.next });
 
     const transport = play.parentElement as HTMLElement;
-    const leftCell = transport.children[0] as HTMLElement;
-    expect((leftCell.children[0] as HTMLElement).contains(mode)).toBe(true);
-    expect(leftCell.children[1]).toBe(prev);
+    expect(transport.contains(mode)).toBe(true);
+    expect(utilityCluster.contains(mode)).toBe(false);
+
+    const rightCell = transport.children[2] as HTMLElement;
+    const order = Array.from(rightCell.querySelectorAll<HTMLElement>("button"));
+    expect(order.indexOf(next)).toBeLessThan(order.indexOf(mode));
   });
 
-  it("T9: TrackInfo Like/More group is separated from the text (gap-2 + ml-4)", () => {
+  it("T9: Like moves into the transport's left cell — no TrackInfo gap-2/ml-4 group", async () => {
     renderPlayer();
-    const heart = screen.getByRole("button", { name: en.player.add_favorite });
-    const group = heart.parentElement as HTMLElement;
-    const classes = group.className.split(" ");
-    expect(classes).toContain("gap-2");
-    expect(classes).toContain("ml-4");
-    expect(classes).not.toContain("gap-1");
-    expect(classes).not.toContain("ml-2");
+    const heart = await screen.findByRole("button", {
+      name: en.player.add_favorite,
+    });
+    const wrapper = heart.parentElement as HTMLElement;
+    const leftCell = wrapper.parentElement as HTMLElement;
+    const play = screen.getByRole("button", { name: en.player.play });
+    const transport = play.parentElement as HTMLElement;
+
+    expect(leftCell).toBe(transport.children[0]);
+    expect(wrapper.className.split(" ")).toContain("w-10");
+    expect(wrapper.className.split(" ")).toContain("h-10");
+    expect(wrapper.className.split(" ")).toContain("hidden");
+    expect(wrapper.className.split(" ")).toContain("lg:flex");
+    expect(wrapper.className.split(" ")).not.toContain("ml-4");
+    expect(wrapper.className.split(" ")).not.toContain("gap-2");
+    // Both side cells use the same gap utilities, so Like→Prev gets the same
+    // 24px gap as Next→Mode (0.75rem at base, 1.5rem at sm+).
+    for (const cell of [leftCell, transport.children[2] as HTMLElement]) {
+      expect(cell.className.split(" ")).toContain("gap-3");
+      expect(cell.className.split(" ")).toContain("sm:gap-6");
+    }
+    expect(wrapper.contains(screen.getByTestId("playerbar-more-menu"))).toBe(
+      false,
+    );
   });
 
-  it("T10: volume rail is shorter (w-24, no w-32) so the icon cluster hugs the right edge", () => {
+  it("T10: PlayerBar volume rail is 125px (w-[125px], no w-24/w-32) so the icon cluster hugs the right edge", () => {
     renderPlayer();
     const bar = screen.getByTestId("volume-bar");
-    expect(bar.className).toContain("w-24");
+    expect(bar.className).toContain("w-[125px]");
+    expect(bar.className).not.toContain("w-24");
     expect(bar.className).not.toContain("w-32");
+  });
+});
+
+describe("PlayerBar right cluster (playerbar-right-cluster)", () => {
+  it("orders the utilities: volume → more (queue action lives inside the menu)", () => {
+    const { container } = renderPlayer();
+    const root = container.firstElementChild as HTMLElement;
+    const utilityCluster = root.children[2] as HTMLElement;
+    const mode = screen.getByRole("button", { name: en.player.play_mode });
+    const rail = screen.getByTestId("volume-bar");
+    const more = screen.getByTestId("playerbar-more-menu");
+
+    expect(utilityCluster.children).toHaveLength(2);
+    expect(utilityCluster.firstElementChild?.contains(rail)).toBe(true);
+    const nodes = Array.from(
+      utilityCluster.querySelectorAll("button, [data-testid='volume-bar']"),
+    );
+    expect(nodes.indexOf(rail)).toBeLessThan(nodes.indexOf(more));
+    expect(utilityCluster.lastElementChild?.contains(more)).toBe(true);
+    // The play-mode button lives in the centre transport group.
+    expect(utilityCluster.contains(mode)).toBe(false);
+    // No standalone queue button anywhere in the bar.
+    expect(screen.queryByRole("button", { name: en.queue.open })).toBeNull();
+  });
+
+  it("tightens the icon↔rail gap to 8px while the outer cluster keeps its 16px", () => {
+    renderPlayer();
+    const rail = screen.getByTestId("volume-bar");
+    const iconGroup = rail.parentElement as HTMLElement;
+    const outer = iconGroup.parentElement as HTMLElement;
+
+    expect(iconGroup.className.split(" ")).toContain("gap-2");
+    expect(iconGroup.className.split(" ")).not.toContain("gap-4");
+    expect(outer.className.split(" ")).toContain("gap-4");
+  });
+
+  it("keeps the MoreMenu outside the volume icon group (direct sibling, outermost)", () => {
+    const { container } = renderPlayer();
+    const root = container.firstElementChild as HTMLElement;
+    const utilityCluster = root.children[2] as HTMLElement;
+    const rail = screen.getByTestId("volume-bar");
+    const iconGroup = rail.parentElement as HTMLElement;
+    const more = screen.getByTestId("playerbar-more-menu");
+    const moreWrapper = more.parentElement as HTMLElement;
+
+    expect(iconGroup.contains(more)).toBe(false);
+    expect(moreWrapper.parentElement).toBe(utilityCluster);
+    expect(utilityCluster.lastElementChild).toBe(moreWrapper);
+    expect(moreWrapper.className.split(" ")).toContain("hidden");
+    expect(moreWrapper.className.split(" ")).toContain("lg:block");
+    expect(moreWrapper.className.split(" ")).toContain("shrink-0");
+  });
+
+  it("keeps the rail hidden below xl in the regular PlayerBar", () => {
+    renderPlayer();
+    const rail = screen.getByTestId("volume-bar");
+
+    expect(rail.className).toContain("hidden");
+    expect(rail.className).toContain("xl:flex");
+  });
+
+  it("renders the MoreMenu as the regular track menu", () => {
+    renderPlayer();
+    const more = screen.getByTestId("playerbar-more-menu");
+    expect(more.getAttribute("data-track-id")).toBe("track-1");
+    expect(more.getAttribute("data-player-bar-mode")).toBe("true");
+  });
+
+  it("renders neither the MoreMenu nor the Like without a current track (40px slot stays)", () => {
+    renderPlayer({ currentTrack: null });
+    expect(screen.queryByTestId("playerbar-more-menu")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: en.player.add_favorite }),
+    ).toBeNull();
+
+    // The Like wrapper keeps its 40px slot even with no track, so the left
+    // cell still mirrors the right one and Play stays centred.
+    const play = screen.getByRole("button", { name: en.player.play });
+    const transport = play.parentElement as HTMLElement;
+    const leftCell = transport.children[0] as HTMLElement;
+    const likeWrapper = leftCell.children[1] as HTMLElement;
+    expect(likeWrapper.className.split(" ")).toContain("w-10");
+    expect(likeWrapper.className.split(" ")).toContain("h-10");
+    expect(likeWrapper.children).toHaveLength(0);
+  });
+
+  it("keeps the play-mode button wired and styled for an active mode", () => {
+    const onTogglePlayMode = vi.fn();
+    renderPlayer({ playMode: "shuffle", onTogglePlayMode });
+    const mode = screen.getByRole("button", { name: en.player.play_mode });
+    expect(mode.className).toContain("text-brand-text");
+    fireEvent.click(mode);
+    expect(onTogglePlayMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves the Like out of the left column into the transport's leading cell", async () => {
+    const { container } = renderPlayer();
+    const root = container.firstElementChild as HTMLElement;
+    const leftColumn = root.children[0] as HTMLElement;
+    const middleColumn = root.children[1] as HTMLElement;
+    const heart = await screen.findByRole("button", {
+      name: en.player.add_favorite,
+    });
+
+    expect(leftColumn.contains(heart)).toBe(false);
+    expect(middleColumn.contains(heart)).toBe(true);
+    expect(leftColumn.contains(screen.getByTestId("playerbar-more-menu"))).toBe(
+      false,
+    );
+  });
+
+  it("renders exactly ONE play-mode button", () => {
+    renderPlayer();
+    expect(
+      screen.getAllByRole("button", { name: en.player.play_mode }),
+    ).toHaveLength(1);
+  });
+});
+
+describe("PlayerBar centre transport group (playerbar-transport-group)", () => {
+  it("orders the centre group: Like → prev → play → next → play mode", async () => {
+    renderPlayer();
+    const play = screen.getByRole("button", { name: en.player.play });
+    const heart = await screen.findByRole("button", {
+      name: en.player.add_favorite,
+    });
+    const transport = play.parentElement as HTMLElement;
+    const labels = Array.from(transport.querySelectorAll("button")).map((b) =>
+      b.getAttribute("aria-label"),
+    );
+    expect(labels).toEqual([
+      en.player.add_favorite,
+      en.player.prev,
+      en.player.play,
+      en.player.next,
+      en.player.play_mode,
+    ]);
+    // Like is the FIRST button in the transport (its leading cell).
+    expect(transport.querySelector("button")).toBe(heart);
+  });
+
+  it("gives Like → Prev → Play → Next → Mode the same gap utilities", async () => {
+    renderPlayer();
+    const play = screen.getByRole("button", { name: en.player.play });
+    const transport = play.parentElement as HTMLElement;
+    const leftCell = transport.children[0] as HTMLElement;
+    const rightCell = transport.children[2] as HTMLElement;
+    const prev = screen.getByRole("button", { name: en.player.prev });
+    const heart = await screen.findByRole("button", {
+      name: en.player.add_favorite,
+    });
+
+    // The grid gap and both in-cell gaps are the same utilities, so every
+    // visible gap in the group is identical (0.75rem, sm 1.5rem).
+    expect(transport.className).toContain("gap-x-3");
+    expect(transport.className).toContain("sm:gap-x-6");
+    for (const cell of [leftCell, rightCell]) {
+      expect(cell.className.split(" ")).toContain("gap-3");
+      expect(cell.className.split(" ")).toContain("sm:gap-6");
+    }
+    // Left cell: [placeholder][Like wrapper][Prev]. The Like sits in the SAME
+    // cell as Prev, so their gap is the cell's gap (no TrackInfo column away).
+    expect(leftCell.contains(heart)).toBe(true);
+    expect(leftCell.lastElementChild).toBe(prev);
+    expect(rightCell.children).toHaveLength(2);
+  });
+
+  it("keeps Play the middle cell with symmetric 1fr sides (Like slot mirrors the mode button)", async () => {
+    renderPlayer();
+    const play = screen.getByRole("button", { name: en.player.play });
+    const transport = play.parentElement as HTMLElement;
+    const leftCell = transport.children[0] as HTMLElement;
+    const rightCell = transport.children[2] as HTMLElement;
+
+    expect(transport.children[1]).toBe(play);
+    // jsdom has no layout: assert the structural symmetry instead. Below lg
+    // the heart is hidden and an invisible 40px box fills its slot; from lg
+    // the heart's wrapper is that same 40px box. The mode button is p-2 (8px)
+    // + w-6 icon (24px) + p-2 = 40px, so the two 1fr cells measure equally.
+    const placeholder = leftCell.children[0] as HTMLElement;
+    const likeWrapper = leftCell.children[1] as HTMLElement;
+    expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+    expect(placeholder.className.split(" ")).toContain("lg:hidden");
+    expect(placeholder.className.split(" ")).toContain("w-10");
+    expect(placeholder.className.split(" ")).toContain("h-10");
+    expect(placeholder.querySelector("button")).toBeNull();
+
+    await screen.findByRole("button", { name: en.player.add_favorite });
+    expect(likeWrapper.className.split(" ")).toContain("hidden");
+    expect(likeWrapper.className.split(" ")).toContain("lg:flex");
+    expect(likeWrapper.className.split(" ")).toContain("w-10");
+    expect(likeWrapper.className.split(" ")).toContain("h-10");
+    expect(likeWrapper.children).toHaveLength(1);
+
+    const mode = screen.getByRole("button", { name: en.player.play_mode });
+    expect(mode.className).toContain("p-2");
+    expect(rightCell.contains(mode)).toBe(true);
   });
 });

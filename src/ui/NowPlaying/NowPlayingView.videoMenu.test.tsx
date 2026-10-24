@@ -43,6 +43,8 @@ const audioMock = vi.hoisted(() => ({
   setVolume: vi.fn(),
   on: vi.fn(() => () => {}),
   getCurrentTime: vi.fn(() => 0),
+  getDuration: vi.fn(() => 0),
+  getCurrentTrackId: vi.fn<() => string | null>(() => null),
 }));
 vi.mock("../../lib/AudioController", () => ({
   AudioController: { getInstance: () => audioMock },

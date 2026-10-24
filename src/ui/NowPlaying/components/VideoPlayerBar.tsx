@@ -1,11 +1,12 @@
 import { Maximize, Minimize, MoreVertical } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { AudioController } from "../../../lib/AudioController";
-import type { PlayMode, Track } from "../../../types";
+import type { Track } from "../../../types";
 import { SeekBar } from "../../components/SeekBar";
 import { TransportControls } from "../../PlayerBar/TransportControls";
 import { VolumeSlider } from "../../PlayerBar/VolumeSlider";
 import type { VideoMenuAnchor } from "../../../player/useVideoMenu";
+import { VideoTimeDisplay } from "./VideoTimeDisplay";
 
 /** The sections the bar's buttons can open (a subset of the right-click menu). */
 export type VideoBarMenuSection =
@@ -21,11 +22,9 @@ export interface VideoPlayerBarProps {
   /** The current track failed; the center button becomes the retry affordance. */
   hasError: boolean;
   onRetry: () => void;
-  playMode: PlayMode;
   onTogglePlay: () => void;
   onNext: () => void;
   onPrev: () => void;
-  onTogglePlayMode: () => void;
   audio: AudioController;
   isFullscreen: boolean;
   /** Omitted => no fullscreen affordance is offered (same contract as the view). */
@@ -70,11 +69,9 @@ export function VideoPlayerBar({
   isDownloading = false,
   hasError,
   onRetry,
-  playMode,
   onTogglePlay,
   onNext,
   onPrev,
-  onTogglePlayMode,
   audio,
   isFullscreen,
   onToggleFullscreen,
@@ -118,18 +115,23 @@ export function VideoPlayerBar({
         isDownloading={isDownloading}
         hasError={hasError}
         onRetry={onRetry}
-        playMode={playMode}
         onTogglePlay={onTogglePlay}
         onPrevTrack={onPrev}
         onNextTrack={onNext}
-        onTogglePlayMode={onTogglePlayMode}
+        leading={
+          <VideoTimeDisplay
+            currentTrack={currentTrack}
+            audio={audio}
+            active={active}
+          />
+        }
       />
 
-      <div className="flex-1 min-w-0 flex items-center gap-2">
+      <div className="flex-1 min-w-0 flex items-center justify-center">
         <span
           data-testid="video-player-bar-title"
           title={currentTrack.title}
-          className="hidden md:block truncate max-w-[28ch] shrink-0 text-sm font-medium text-gray-900 dark:text-white"
+          className="hidden md:block w-full min-w-0 max-w-[45vw] xl:max-w-[560px] truncate text-center text-sm font-medium text-gray-900 dark:text-white"
         >
           {currentTrack.title}
         </span>

@@ -386,10 +386,16 @@ export function VideoSurface({
     //                             empty video rect.
     //  * host visible, frame
     //    presented           -> paint NOTHING; the DComp visual shows through.
+    //
+    // No `transition-all` here: it cross-faded the black first-frame cover into
+    // the live picture over 700ms (the box looked like it faded in) and it also
+    // animated the box's own size on a fullscreen toggle, i.e. the "the video
+    // is resizing" artefact. The overlay's slide is the only motion of an
+    // open/close; the cover/picture swap is a single frame.
     <div
       ref={boxRef}
       data-testid="video-surface"
-      className={`${sizeClasses} overflow-hidden transition-all duration-700 ${
+      className={`${sizeClasses} overflow-hidden ${
         !active
           ? "bg-gradient-to-br from-brand-primary/10 to-[#34A853]/10"
           : hasFirstFrame
