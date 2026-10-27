@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { describeError } from "../lib/mpvProtocol";
 import { captureError } from "../utils/errorLog";
 
-export const CURSOR_IDLE_HIDE_MS = 1500;
+export const CURSOR_IDLE_HIDE_MS = 2000;
 
 export interface UseAutoHideCursorParams {
   /** Cursor auto-hide is active only while the NowPlaying video overlay is open. */

@@ -86,8 +86,8 @@ describe("useAutoHideCursor: enable / auto-hide", () => {
     expect(win.setCursorVisible).toHaveBeenCalledWith(false);
   });
 
-  it("uses a 1500ms constant", () => {
-    expect(CURSOR_IDLE_HIDE_MS).toBe(1500);
+  it("uses a 2000ms constant", () => {
+    expect(CURSOR_IDLE_HIDE_MS).toBe(2000);
   });
 
   it("does nothing when disabled", () => {
