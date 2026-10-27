@@ -18,6 +18,7 @@ import { clearRestoreResume } from "../hooks/player/restoreResume";
 import { resetAdvanceGuard } from "../utils/playerError";
 import { captureError } from "../utils/errorLog";
 import { showErrorToast } from "../utils/simpleToast";
+import { teardownPipForReload } from "../lib/pipWindow";
 
 const PLAYER_RELOAD_MODULE = "playerReload";
 
@@ -77,6 +78,10 @@ export async function requestPlayerReload(
     // new play while the engine is shutting down.
     abortCurrentIntent();
     bumpSessionEpoch();
+    // The reloaded page starts with no PiP state: retarget the native surface
+    // back to main and destroy the PiP window BEFORE the engine goes away.
+    // The helper swallows/logs its own failures so teardown never blocks F5.
+    await teardownPipForReload();
     // Resolves only once the native shutdown completed.
     await AudioController.getInstance().shutdownForReload();
     // The position is re-armed by the restore on the next page load.

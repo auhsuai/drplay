@@ -197,6 +197,18 @@ export interface VideoHostVisibilityInput {
  * old hide-during-dialog term belonged to the native-child era (CSS could not
  * cover a native child HWND) and was removed with it.
  */
+export type VideoHostOwner = "main" | "pip";
+
+let videoHostOwner: VideoHostOwner = "main";
+
+export function setVideoHostOwner(owner: VideoHostOwner): void {
+  videoHostOwner = owner;
+}
+
+export function getVideoHostOwner(): VideoHostOwner {
+  return videoHostOwner;
+}
+
 export function shouldShowVideoHost(input: VideoHostVisibilityInput): boolean {
   return (
     input.hasTrack &&

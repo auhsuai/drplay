@@ -423,6 +423,10 @@ export function buildContextMenuModel(
         commandEntry(PLAYER_COMMAND_IDS.PLAYER_NEXT),
         SEPARATOR_ENTRY,
         fullscreenEntry(s),
+        menuItem({
+          id: MENU_IDS.pip,
+          label: i18next.t("player.picture_in_picture"),
+        }),
         SEPARATOR_ENTRY,
         menuItem({
           id: MENU_IDS.fullAudio,

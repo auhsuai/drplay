@@ -72,6 +72,7 @@ export interface PlayerCommandContext {
    * it, and it can never swallow or duplicate the command.
    */
   onActivity?: (() => void) | undefined;
+  enterPip?: () => void;
 }
 
 export interface PlayerCommand {

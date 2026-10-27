@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./i18n";
 import App from "./App";
+import { PipWindowView } from "./ui/PipWindowView";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { captureError, initLogger } from "./utils/errorLog";
 import { applyStoredTheme } from "./hooks/useTheme";
@@ -91,10 +92,11 @@ if (typeof document !== "undefined") {
   }
   const rootEl = document.getElementById("root");
   if (rootEl) {
+    const isPip = new URLSearchParams(window.location.search).get("pip") === "1";
     ReactDOM.createRoot(rootEl).render(
       <React.StrictMode>
         <ErrorBoundary>
-          <App />
+          {isPip ? <PipWindowView /> : <App />}
         </ErrorBoundary>
       </React.StrictMode>,
     );

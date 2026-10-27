@@ -26,6 +26,13 @@ const RENDER_READY_POLL: Duration = Duration::from_millis(10);
 pub(crate) struct RenderSurface {
     shared: Arc<SharedState>,
     thread: Mutex<Option<JoinHandle<()>>>,
+    /// HWND of the last ACKNOWLEDGED presentation target (the creation HWND
+    /// until the first successful retarget). Used only to queue a best-effort
+    /// switch back when a retarget reply times out: the timed-out request stays
+    /// queued on the render thread and may still complete, so the compensating
+    /// request is enqueued BEHIND it and restores this target. Never updated
+    /// when the render thread reports a failure: it has already rolled back.
+    target_hwnd: Mutex<Option<usize>>,
 }
 
 impl RenderSurface {
@@ -41,8 +48,11 @@ impl RenderSurface {
         hwnd: Option<usize>,
     ) -> Result<Arc<Self>, EngineError> {
         let shared = Arc::new(SharedState::new());
-        let surface =
-            Arc::new(RenderSurface { shared: Arc::clone(&shared), thread: Mutex::new(None) });
+        let surface = Arc::new(RenderSurface {
+            shared: Arc::clone(&shared),
+            thread: Mutex::new(None),
+            target_hwnd: Mutex::new(hwnd),
+        });
         let thread = {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
@@ -152,6 +162,74 @@ impl RenderSurface {
         }
         self.shared.wake.notify_all();
         Ok(())
+    }
+
+    fn enqueue_retarget(&self, hwnd: usize, reply: mpsc::Sender<Result<(), String>>) {
+        {
+            let mut inner = self.shared.lock();
+            inner.pending.push_back(Request::Retarget { hwnd, reply });
+        }
+        self.shared.wake.notify_all();
+    }
+
+    /// Retarget the presentation to a different HWND (main <-> pip).
+    /// Acknowledged: blocks (bounded) until the render thread reports
+    /// success/failure. The blocking wait must not run on the Tauri UI thread;
+    /// the commands offload it to the blocking pool.
+    ///
+    /// A timeout does NOT cancel the request: it is already in the render
+    /// thread's queue and will still run. The frontend has failed the
+    /// transition by then, so a compensating request back to the last
+    /// acknowledged target is queued behind it (best effort, no waiting and no
+    /// global timer). If the stale request never runs, the compensation is a
+    /// harmless switch to the target that is already current.
+    pub(crate) fn retarget(
+        &self,
+        hwnd: usize,
+        timeout: Duration,
+    ) -> Result<(), EngineError> {
+        if hwnd == 0 {
+            return Err(EngineError::Render {
+                message: "invalid retarget hwnd 0".to_string(),
+            });
+        }
+        let (reply, receiver) = mpsc::channel();
+        self.enqueue_retarget(hwnd, reply);
+        match receiver.recv_timeout(timeout) {
+            Ok(Ok(())) => {
+                *self
+                    .target_hwnd
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hwnd);
+                Ok(())
+            }
+            Ok(Err(message)) => Err(EngineError::Render { message }),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let previous = *self
+                    .target_hwnd
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                log::error!(
+                    "[player] retarget to hwnd {hwnd} did not complete within {timeout:?}; the request stays queued on the render thread and may still switch the presentation, so a best-effort compensating retarget back to {previous:?} was queued behind it"
+                );
+                if let Some(previous) = previous {
+                    let (compensation_reply, compensation_receiver) = mpsc::channel();
+                    self.enqueue_retarget(previous, compensation_reply);
+                    // Nothing waits for the compensation: a late reply is
+                    // simply dropped on the render thread (its `send` result is
+                    // deliberately ignored there).
+                    drop(compensation_receiver);
+                }
+                Err(EngineError::Render {
+                    message: format!(
+                        "retarget did not complete within {timeout:?}; a best-effort compensating switch back was queued"
+                    ),
+                })
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(EngineError::Render {
+                message: "retarget could not complete: the render thread stopped".to_string(),
+            }),
+        }
     }
 
     /// Frames handed to DirectComposition so far.

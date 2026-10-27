@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
+  getVideoHostOwner,
   sameRect,
   setVideoHostRect,
   setVideoHostVisible,
@@ -21,6 +22,9 @@ const TRANSITION_TRACK_CAP_MS = 1400;
  *  drop its background then — the App.css rules key on this class. This
  *  component is the only toggler because it owns host visibility. */
 const HOST_VISIBLE_ROOT_CLASS = "drplay-host-visible";
+
+export const VIDEO_HOST_OWNER_CHANGED_EVENT =
+  "drplay:video-host-owner-changed";
 
 /** S4: custom properties carrying the host rect (CSS px, relative to <main>)
  *  that the player background layer clips its transparent hole with. Left
@@ -57,6 +61,8 @@ function clearHoleRect(): void {
 }
 
 interface VideoSurfaceProps {
+  /** Which window owns the native surface. Defaults to "main". */
+  owner?: "main" | "pip";
   /**
    * Whether the native host should be SHOWN over this box. The surface itself
    * stays mounted whenever a track is loaded so the ResizeObserver keeps
@@ -116,6 +122,7 @@ interface VideoSurfaceProps {
  * box stays mpv's job — no CSS crop/zoom here.
  */
 export function VideoSurface({
+  owner = "main",
   active,
   fullscreen = false,
   fill = false,
@@ -139,6 +146,7 @@ export function VideoSurface({
     frameRef.current = null;
     const box = boxRef.current;
     if (!box) return;
+    if (owner !== getVideoHostOwner()) return;
     const domRect = box.getBoundingClientRect();
     // S4: the CSS hole follows every measured position, even one the physical
     // dedupe below would drop (e.g. a sub-pixel move).
@@ -150,7 +158,7 @@ export function VideoSurface({
     if (sameRect(lastSentRef.current, rect)) return;
     lastSentRef.current = rect;
     setVideoHostRect(rect);
-  }, []);
+  }, [owner]);
 
   const scheduleRect = useCallback(() => {
     if (frameRef.current !== null) return;
@@ -161,8 +169,28 @@ export function VideoSurface({
   // sends nothing here at all: `active` does not change, so there is no
   // hide/show flicker and no re-acquire.
   useEffect(() => {
+    if (owner !== getVideoHostOwner()) return;
     setVideoHostVisible(active);
-  }, [active]);
+  }, [active, owner]);
+
+  useEffect(() => {
+    const onOwnerChanged = (): void => {
+      if (owner !== getVideoHostOwner()) return;
+      lastSentRef.current = null;
+      sendRect();
+      setVideoHostVisible(active);
+    };
+    window.addEventListener(
+      VIDEO_HOST_OWNER_CHANGED_EVENT,
+      onOwnerChanged,
+    );
+    return () => {
+      window.removeEventListener(
+        VIDEO_HOST_OWNER_CHANGED_EVENT,
+        onOwnerChanged,
+      );
+    };
+  }, [active, owner, sendRect]);
 
   // S4: mirror `active` onto <html> for the global transparency rules
   // (App.css). Same single owner as the visibility call above, so the class
@@ -181,9 +209,9 @@ export function VideoSurface({
   // cover-art square. Hide exactly once, on the way out.
   useEffect(() => {
     return () => {
-      setVideoHostVisible(false);
+      if (owner === getVideoHostOwner()) setVideoHostVisible(false);
     };
-  }, []);
+  }, [owner]);
 
   // Rect triggers. Every path a box can move or a scale can change:
   //  1. first mount with a real size (also the react-commit measure)

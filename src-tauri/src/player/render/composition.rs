@@ -137,10 +137,12 @@ fn call<T>(
 }
 
 /// COM lifetime guard for the render thread. `CoInitializeEx` must run before
-/// the DirectComposition device is created; only an actual initialization
-/// (S_OK) is paired with `CoUninitialize` — S_FALSE means COM was already up
-/// on this thread, and RPC_E_CHANGED_MODE means another component owns a
-/// different apartment (DirectComposition does not require ours; continue).
+/// the DirectComposition device is created. BOTH S_OK (fresh initialization)
+/// and S_FALSE (already initialized on this thread) increment the per-thread
+/// COM init count, so both must be paired with `CoUninitialize`; otherwise
+/// repeated retargets leak one count each. RPC_E_CHANGED_MODE did not
+/// initialize COM (another component owns a different apartment;
+/// DirectComposition does not require ours), so it must NOT be uninitialized.
 struct ComApartment {
     uninitialize: bool,
 }
@@ -149,11 +151,8 @@ impl ComApartment {
     fn acquire() -> Result<Self, CompositionError> {
         // SAFETY: plain COM initializer; no reserved argument.
         let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        if result == S_OK {
+        if result == S_OK || result == S_FALSE {
             return Ok(Self { uninitialize: true });
-        }
-        if result == S_FALSE {
-            return Ok(Self { uninitialize: false });
         }
         if result == RPC_E_CHANGED_MODE {
             log::warn!(
@@ -543,6 +542,11 @@ impl Composition {
 
     pub(crate) fn visible(&self) -> bool {
         self.visible
+    }
+
+    /// The HWND this composition target is bound to (raw Win32 handle).
+    pub(crate) fn hwnd(&self) -> HWND {
+        self.hwnd
     }
 
     pub(crate) fn dpi_scale(&self) -> f32 {

@@ -1,5 +1,19 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, emitTo } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import i18next from "i18next";
+import { setVideoHostOwner, type VideoHostOwner } from "./lib/videoHost";
+import {
+  closePipWindow,
+  isPipWindowOpen,
+  openPipWindowAndWaitReady,
+  requestPipOwner,
+  PIP_EVENTS,
+  PIP_WINDOW_LABEL,
+  type PipActionEvent,
+  type PipStatePayload,
+} from "./lib/pipWindow";
 import { LoginGate } from "./ui/LoginGate";
 import { FolderSelectionGate } from "./ui/FolderSelectionGate";
 import { TrashGate } from "./ui/TrashGate";
@@ -34,6 +48,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useServiceWorker } from "./hooks/useServiceWorker";
 import { useAppGlobalEvents } from "./hooks/useAppGlobalEvents";
 import { useDriveStore } from "./store/driveStore";
+import { usePlayerStore } from "./store/playerStore";
 import { useLocateFile } from "./hooks/useLocateFile";
 import { useNowPlayingShortcuts } from "./ui/NowPlaying/hooks/useNowPlayingShortcuts";
 import { usePlayerCommands } from "./player/usePlayerCommands";
@@ -50,7 +65,9 @@ import { onPlayerUi } from "./player/playerUiBus";
 import type { PlayerCommandContext } from "./player/commands";
 import { MediaInfoDialog } from "./ui/NowPlaying/components/MediaInfoDialog";
 import { AudioController } from "./lib/AudioController";
+import { isForeignTrackEvent } from "./lib/audioNativeEvents";
 import { ensureVideoHostAcquired } from "./lib/videoHost";
+import { VIDEO_HOST_OWNER_CHANGED_EVENT } from "./ui/NowPlaying/components/VideoSurface";
 import { classifyMediaKind, MEDIA_KIND_VIDEO } from "./utils/mediaKind";
 import { showErrorToast, showSuccessToast } from "./utils/simpleToast";
 
@@ -72,6 +89,37 @@ import {
 } from "./utils/storageKeys";
 
 export { loadMinimizeToTrayState };
+
+const PIP_STATE_POLL_MS = 400;
+/** Liveness check for the PiP window while it is supposed to be active. */
+const PIP_WINDOW_POLL_MS = 1_000;
+
+function safePlaybackTime(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function safePlaybackVolume(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(1, Math.max(0, value));
+}
+
+function logPipError(
+  kind: string,
+  error: unknown,
+  level: "warn" | "error" = "error",
+): void {
+  void captureError({
+    level,
+    source: "App",
+    message: `${kind}: ${error instanceof Error ? error.message : String(error)}`,
+    kind,
+  });
+}
+
+function setPipHostOwner(owner: VideoHostOwner): void {
+  setVideoHostOwner(owner);
+  window.dispatchEvent(new Event(VIDEO_HOST_OWNER_CHANGED_EVENT));
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>(TABS.home);
@@ -192,6 +240,30 @@ function App() {
     loadNonce,
   } = usePlayer(accessToken);
 
+  const isVideoActive =
+    currentTrack !== null &&
+    classifyMediaKind(currentTrack.originalName ?? currentTrack.title) ===
+      MEDIA_KIND_VIDEO;
+
+  const errorInfo = usePlayerStore((state) => state.errorInfo);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [hasEnded, setHasEnded] = useState(false);
+  const [pipStateTrackId, setPipStateTrackId] = useState(currentTrack?.id);
+  const [pipStateLoadNonce, setPipStateLoadNonce] = useState(loadNonce);
+  if (
+    pipStateTrackId !== currentTrack?.id ||
+    pipStateLoadNonce !== loadNonce
+  ) {
+    setPipStateTrackId(currentTrack?.id);
+    setPipStateLoadNonce(loadNonce);
+    setIsBuffering(false);
+    setHasEnded(false);
+  }
+  const pipTransitionRef = useRef(false);
+  // Mirror of isPipActive that event listeners and async recovery reads can
+  // trust synchronously (state updates are not visible until the next render).
+  const isPipActiveRef = useRef(false);
+
   const [showFolderSelection, setShowFolderSelection] = useState(false);
   // Lazy initializer (read once on mount, no default-flash): stored state is
   // kept across launches; first launch (no key) defaults to OPEN, the opposite
@@ -212,6 +284,7 @@ function App() {
   // (applyWindowFullscreen below), so "fullscreen" means the OS window is
   // fullscreen, not just a bigger video area in the same window.
   const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
+  const [isPipActive, setIsPipActive] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [minimizeToTray, setMinimizeToTray] = useState(loadMinimizeToTrayState);
   // Media Information dialog (D2b): owned here because the player-ui bus
@@ -220,6 +293,39 @@ function App() {
   const handleCloseMediaInfo = useCallback(() => {
     setIsMediaInfoOpen(false);
   }, []);
+
+  useEffect(() => {
+    const audio = AudioController.getInstance();
+    const isForeign = (identity: { trackId?: string } | undefined): boolean =>
+      isForeignTrackEvent(identity, usePlayerStore.getState().currentTrack?.id);
+    const unsubBuffering = audio.on(
+      "buffering",
+      ({ isBuffering: buffering, ...identity }) => {
+        if (isForeign(identity)) return;
+        setIsBuffering(buffering);
+      },
+    );
+    const unsubEnded = audio.on("ended", (identity) => {
+      if (isForeign(identity)) return;
+      setHasEnded(true);
+    });
+    // A new engine `play` (auto-advance, replay, resume) starts a fresh
+    // timeline: an untagged `ended` from the previous item must not keep the
+    // video surface hidden for the next one.
+    const unsubPlay = audio.on("play", (identity) => {
+      if (isForeign(identity)) return;
+      setHasEnded(false);
+    });
+    return () => {
+      unsubBuffering();
+      unsubEnded();
+      unsubPlay();
+    };
+  }, []);
+
+  useEffect(() => {
+    isPipActiveRef.current = isPipActive;
+  }, [isPipActive]);
 
   // F1 fix — TRUE ref-delegate wrappers (pattern: usePlayer.ts
   // stableHandlePlayTrack/handlePlayTrackRef). The PlayerBar memo comparator
@@ -302,6 +408,387 @@ function App() {
   const stableHandleExitFullscreen = useCallback(() => {
     setIsPlayerFullscreen(false);
   }, []);
+
+  const publishPipState = useCallback(() => {
+    const audio = AudioController.getInstance();
+    const payload: PipStatePayload = {
+      title: currentTrack?.title ?? "",
+      isPlaying,
+      currentTime: safePlaybackTime(audio.getCurrentTime()),
+      duration: safePlaybackTime(audio.getDuration()),
+      volume: safePlaybackVolume(audio.getVolume()),
+      isMuted: audio.isMuted(),
+      hasTrack: currentTrack !== null,
+      isVideo: isVideoActive,
+      isBuffering,
+      hasError: errorInfo !== null,
+      hasEnded,
+    };
+    try {
+      void emitTo(PIP_WINDOW_LABEL, PIP_EVENTS.state, payload).catch(
+        (error: unknown) => {
+          logPipError("pip-state-publish-failed", error, "warn");
+        },
+      );
+    } catch (error) {
+      logPipError("pip-state-publish-failed", error, "warn");
+    }
+  }, [
+    currentTrack,
+    isPlaying,
+    isVideoActive,
+    isBuffering,
+    errorInfo,
+    hasEnded,
+  ]);
+
+  const publishPipStateRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    publishPipStateRef.current = publishPipState;
+  }, [publishPipState]);
+
+  // The main window can be minimized/hidden (tray) while PiP owns the video.
+  // Returning must restore it BEFORE the PiP surface is destroyed, or the
+  // retarget lands in a window nobody can see. Each step is independent:
+  // show() on a minimized window is a no-op, so unminimize() is required too.
+  const restoreMainWindowForPip = useCallback(async () => {
+    try {
+      const mainWindow = getCurrentWindow();
+      try {
+        await mainWindow.show();
+      } catch (error) {
+        logPipError("return-main-show-failed", error, "warn");
+      }
+      try {
+        await mainWindow.unminimize();
+      } catch (error) {
+        logPipError("return-main-unminimize-failed", error, "warn");
+      }
+      try {
+        await mainWindow.setFocus();
+      } catch (error) {
+        logPipError("return-main-focus-failed", error, "warn");
+      }
+    } catch (error) {
+      logPipError("return-main-window-failed", error, "warn");
+    }
+  }, []);
+
+  const enterPip = useCallback(async () => {
+    if (pipTransitionRef.current || isPipActiveRef.current) return;
+    if (!isVideoActive) {
+      showErrorToast(i18next.t("player.pip.no_video"));
+      return;
+    }
+
+    pipTransitionRef.current = true;
+    let retargetedToPip = false;
+    try {
+      await openPipWindowAndWaitReady();
+      publishPipStateRef.current();
+      await invoke("video_surface_retarget_to_pip_cmd");
+      retargetedToPip = true;
+      setPipHostOwner("pip");
+
+      let ownerSynced = await requestPipOwner("pip");
+      if (!ownerSynced) {
+        ownerSynced = await requestPipOwner("pip");
+      }
+      if (!ownerSynced) {
+        throw new Error("pip window did not acknowledge ownership");
+      }
+
+      isPipActiveRef.current = true;
+      setIsPipActive(true);
+      setIsNowPlayingOpen(false);
+      setIsPlayerFullscreen(false);
+      publishPipStateRef.current();
+    } catch (error) {
+      logPipError("enter-failed", error);
+      if (retargetedToPip) {
+        try {
+          await invoke("video_surface_retarget_to_main_cmd");
+        } catch (rollbackError) {
+          logPipError("enter-rollback-retarget-failed", rollbackError);
+          // The native target may still be the PiP window. Declaring main
+          // here would strand the picture, so keep PiP as the presentation
+          // owner (and the window alive) until a successful Return retries.
+          isPipActiveRef.current = true;
+          setIsPipActive(true);
+          setIsNowPlayingOpen(false);
+          setIsPlayerFullscreen(false);
+          setPipHostOwner("pip");
+          const resynced = await requestPipOwner("pip");
+          if (!resynced) {
+            logPipError(
+              "enter-rollback-owner-resync-failed",
+              new Error("pip window did not acknowledge ownership"),
+              "warn",
+            );
+          }
+          showErrorToast(i18next.t("player.pip.enter_error"));
+          return;
+        }
+      }
+      setPipHostOwner("main");
+      isPipActiveRef.current = false;
+      setIsPipActive(false);
+      setIsNowPlayingOpen(true);
+      showErrorToast(i18next.t("player.pip.enter_error"));
+      try {
+        await closePipWindow();
+      } catch (closeError) {
+        logPipError("enter-rollback-close-failed", closeError);
+      }
+    } finally {
+      pipTransitionRef.current = false;
+    }
+  }, [isVideoActive]);
+
+  const returnFromPip = useCallback(async () => {
+    if (!isPipActiveRef.current || pipTransitionRef.current) return;
+    pipTransitionRef.current = true;
+
+    try {
+      try {
+        await invoke("video_surface_retarget_to_main_cmd");
+      } catch (error) {
+        logPipError("return-retarget-failed", error);
+        try {
+          await emitTo(PIP_WINDOW_LABEL, PIP_EVENTS.refreshSurface);
+        } catch (refreshError) {
+          logPipError("return-refresh-failed", refreshError, "warn");
+        }
+        showErrorToast(i18next.t("player.pip.return_error"));
+        return;
+      }
+
+      // Retarget succeeded; the main window owns the surface now. Restore its
+      // visibility BEFORE tearing the PiP window down.
+      await restoreMainWindowForPip();
+
+      setPipHostOwner("main");
+      isPipActiveRef.current = false;
+      setIsPipActive(false);
+      setIsNowPlayingOpen(true);
+
+      try {
+        await closePipWindow();
+      } catch (error) {
+        logPipError("return-close-failed", error);
+      }
+    } finally {
+      pipTransitionRef.current = false;
+    }
+  }, [restoreMainWindowForPip]);
+
+  const recoverFromExternalPipClose = useCallback(async () => {
+    if (!isPipActiveRef.current || pipTransitionRef.current) return;
+    pipTransitionRef.current = true;
+    // Stop accepting PiP actions immediately: that window is gone.
+    isPipActiveRef.current = false;
+    try {
+      logPipError(
+        "pip-window-lost",
+        "pip window disappeared while active; recovering to main",
+        "warn",
+      );
+      try {
+        await invoke("video_surface_retarget_to_main_cmd");
+      } catch (error) {
+        logPipError("pip-lost-retarget-failed", error);
+      }
+      await restoreMainWindowForPip();
+      setPipHostOwner("main");
+      setIsPipActive(false);
+      setIsNowPlayingOpen(true);
+      showErrorToast(i18next.t("player.pip.return_error"));
+    } finally {
+      pipTransitionRef.current = false;
+    }
+  }, [restoreMainWindowForPip]);
+
+  // External destroy/crash: nothing in the PiP document can notify main, so
+  // the owner polls for the window's existence and recovers the UI rather
+  // than leaving isPipActive (and the hidden Now Playing overlay) latched.
+  useEffect(() => {
+    if (!isPipActive) return;
+    let disposed = false;
+    let checking = false;
+    const timer = window.setInterval(() => {
+      if (disposed || checking) return;
+      checking = true;
+      void isPipWindowOpen()
+        .then((open) => {
+          if (disposed || open || !isPipActiveRef.current) return;
+          void recoverFromExternalPipClose();
+        })
+        .catch((error: unknown) => {
+          logPipError("pip-window-poll-failed", error, "warn");
+        })
+        .finally(() => {
+          checking = false;
+        });
+    }, PIP_WINDOW_POLL_MS);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [isPipActive, recoverFromExternalPipClose]);
+
+  // Music auto-advance while PiP is up: PiP only makes sense for video, and
+  // suppressing Now Playing for audio would leave the track invisible.
+  useEffect(() => {
+    if (isPipActive && !isVideoActive) {
+      void returnFromPip();
+    }
+  }, [isPipActive, isVideoActive, returnFromPip]);
+
+  const returnFromPipRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    returnFromPipRef.current = () => {
+      void returnFromPip();
+    };
+  }, [returnFromPip]);
+
+  useEffect(() => {
+    const unsubs: Array<() => void> = [];
+    let disposed = false;
+
+    const track = (promise: Promise<() => void>, label: string): void => {
+      void promise
+        .then((unlisten) => {
+          if (disposed) {
+            unlisten();
+            return;
+          }
+          unsubs.push(unlisten);
+        })
+        .catch((error: unknown) => {
+          logPipError(`${label}-listen-failed`, error, "warn");
+        });
+    };
+
+    track(
+      listen<unknown>(PIP_EVENTS.action, (event) => {
+        const raw: unknown = event.payload;
+        if (typeof raw !== "object" || raw === null) {
+          logPipError("pip-action-invalid", "empty payload", "warn");
+          return;
+        }
+        const { action, payload } = raw as PipActionEvent;
+        if (action === undefined) {
+          logPipError("pip-action-invalid", "missing action", "warn");
+          return;
+        }
+        // A stale PiP window (failed teardown, post-reload page, or after main
+        // already returned) must not drive playback. Return is gated too; its
+        // own handler is a no-op when PiP is not active.
+        if (!isPipActiveRef.current) {
+          logPipError("pip-action-ignored", action, "warn");
+          return;
+        }
+        const audio = AudioController.getInstance();
+
+        switch (action) {
+          case "togglePlay":
+            void handleTogglePlayRef.current?.();
+            break;
+          case "prev":
+            handlePrevTrackRef.current?.();
+            break;
+          case "next":
+            handleNextTrackRef.current?.();
+            break;
+          case "seek": {
+            const seekPayload = payload;
+            if (
+              typeof seekPayload !== "number" ||
+              !Number.isFinite(seekPayload)
+            ) {
+              logPipError("pip-action-invalid", "invalid seek payload", "warn");
+              break;
+            }
+            const duration = safePlaybackTime(audio.getDuration());
+            const target =
+              duration > 0
+                ? Math.min(Math.max(0, seekPayload), duration)
+                : Math.max(0, seekPayload);
+            audio.seek(target);
+            break;
+          }
+          case "setVolume": {
+            const volumePayload = payload;
+            if (
+              typeof volumePayload !== "number" ||
+              !Number.isFinite(volumePayload)
+            ) {
+              logPipError(
+                "pip-action-invalid",
+                "invalid setVolume payload",
+                "warn",
+              );
+              break;
+            }
+            const volume = Math.min(1, Math.max(0, volumePayload));
+            if (volume > 0 && audio.isMuted()) {
+              audio.toggleMute();
+            }
+            audio.setVolume(volume);
+            break;
+          }
+          case "toggleMute":
+            audio.toggleMute();
+            break;
+          case "return":
+            returnFromPipRef.current();
+            break;
+          default:
+            logPipError("pip-action-unknown", action, "warn");
+            break;
+        }
+
+        if (action !== "seek" && action !== "return") {
+          window.setTimeout(() => {
+            publishPipStateRef.current();
+          }, 0);
+        }
+      }),
+      "pip-action",
+    );
+
+    track(
+      listen(PIP_EVENTS.closeRequested, () => {
+        if (!isPipActiveRef.current) return;
+        returnFromPipRef.current();
+      }),
+      "pip-close-requested",
+    );
+
+    track(
+      listen(PIP_EVENTS.ready, () => {
+        publishPipStateRef.current();
+      }),
+      "pip-ready",
+    );
+
+    return () => {
+      disposed = true;
+      unsubs.forEach((unlisten) => {
+        unlisten();
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isPipActive) return;
+    publishPipState();
+    const timer = window.setInterval(publishPipState, PIP_STATE_POLL_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isPipActive, publishPipState]);
+
   // Queue drawer state lives at App level: the pane is docked in AppShell's
   // content row, not inside the memoized PlayerBar. Both wrappers keep a
   // stable identity (empty-dep useCallback + functional update), so the bar
@@ -405,6 +892,9 @@ function App() {
     // once and only reveals as a side effect — no second keydown listener and
     // no redefined shortcut.
     onActivity: combinedActivity,
+    enterPip: () => {
+      void enterPip();
+    },
   };
   usePlayerCommands(playerCommandContext);
 
@@ -413,11 +903,8 @@ function App() {
   // host is never created (video_host_acquire short-circuits), so the event
   // cannot fire there — this is the legacy path, kept untouched. The current
   // renderer's right-click is the React handler in NowPlayingView.
-  const isVideoActive =
-    currentTrack !== null &&
-    classifyMediaKind(currentTrack.originalName ?? currentTrack.title) ===
-      MEDIA_KIND_VIDEO;
   useVideoContextMenu({ ctx: playerCommandContext, isVideoActive });
+
 
   // Slice 2: the DrPlay video menu. ONE hook owns BOTH entry points (the bar's
   // More button and right-click on the video area), so the entries, the icons,
@@ -640,7 +1127,7 @@ function App() {
 
       {/* Now Playing Full Screen Overlay */}
       <NowPlayingOverlay
-        isOpen={isNowPlayingOpen}
+        isOpen={isNowPlayingOpen && !isPipActive}
         currentTrack={currentTrack}
         isPlaying={isPlaying}
         onTogglePlay={stableHandleTogglePlay}

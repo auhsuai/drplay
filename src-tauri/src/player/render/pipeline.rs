@@ -10,11 +10,18 @@ use super::interop::{InteropApi, InteropDevice, InteropObject};
 /// texture), the interop device and the D3D11/DirectComposition stack. All
 /// four live on the render thread.
 ///
-/// Field order is load-bearing for teardown: the interop object is
+/// Field order is load-bearing for teardown (Rust drops struct fields in
+/// declaration order, after any explicit `Drop::drop`): the interop object is
 /// unregistered first (while the GL context is still current and the device
-/// handle alive), then the device closes, then the composition releases its
-/// D3D/DComp objects. The GL context itself is dropped after all of this
-/// (RenderThreadState field order).
+/// handle alive), then the interop device closes (`wglDXCloseDeviceNV`), then
+/// the composition releases its D3D11 device/context and DComp
+/// target/visual/surface and finally uninitializes COM. The GL context itself
+/// is dropped after all of this (RenderThreadState field order).
+///
+/// `apply_retarget` depends on this exact order: it drops the whole old
+/// pipeline before creating the new one, so the old visual can never remain
+/// rooted in the old DComp target while the new pipeline is being created.
+/// Do not reorder these fields or move teardown into a constructor path.
 pub(super) struct PresentPipeline {
     object: Option<InteropObject>,
     device: InteropDevice,

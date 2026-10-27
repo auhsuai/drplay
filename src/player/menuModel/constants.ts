@@ -29,6 +29,7 @@ export const MENU_IDS = {
   setB: "menu:ab:b",
   clearAb: "menu:ab:clear",
   repeat: "menu:repeat",
+  pip: "menu:pip",
 } as const;
 
 export const MENU_PREFIXES = {

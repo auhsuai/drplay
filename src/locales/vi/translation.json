@@ -181,7 +181,21 @@
     "play_mode": "Chế độ phát",
     "fullscreen": "Xem toàn màn hình",
     "exit_fullscreen": "Thoát toàn màn hình",
+    "picture_in_picture": "Picture in Picture",
     "more": "Tùy chọn khác",
+    "pip": {
+      "close": "Đóng",
+      "enter_error": "Không thể mở Hình trong hình. Vui lòng thử lại.",
+      "mute": "Tắt tiếng",
+      "no_video": "Hình trong hình chỉ dùng được cho video.",
+      "playback_error": "Không thể phát video này. Quay lại trình phát để thử lại.",
+      "return_error": "Không thể đưa video về trình phát. Vui lòng thử lại.",
+      "return_to_player": "Quay lại trình phát",
+      "seek": "Tua",
+      "unmute": "Bật tiếng",
+      "video_ended": "Video đã kết thúc",
+      "volume": "Âm lượng"
+    },
     "command": {
       "play_pause": "Phát / Tạm dừng",
       "stop": "Dừng",

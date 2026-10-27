@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -427,6 +428,9 @@ pub(super) fn render_thread_main(
                 Request::SetVisible { visible } => {
                     apply_set_visible(&mut state, visible);
                 }
+                Request::Retarget { hwnd, reply } => {
+                    apply_retarget(&mut state, hwnd, reply, &shared);
+                }
             }
         }
 
@@ -525,5 +529,122 @@ fn apply_set_visible(state: &mut RenderThreadState, visible: bool) {
     };
     if let Err(message) = present.set_visible(visible) {
         log::error!("[player] composition visible={visible} failed: {message}");
+    }
+    if visible {
+        // Defensive and shared with the retarget path: `SetContent` only marks
+        // the surface as presentable — it does not itself force a render when
+        // playback is paused and no update flag follows. Re-arming the repaint
+        // makes the next pump redraw the preserved FBO frame instead of
+        // leaving the just-shown surface empty. Harmless on a normal frame
+        // (the update flag already drives that pump).
+        state.needs_repaint = true;
+    }
+}
+
+/// Reset the shared presentation diagnostics that describe the live pipeline's
+/// last applied geometry. A retarget drops that pipeline and both outcomes
+/// (success and rollback) restart hidden at rect 0,0,0,0, so the old numbers
+/// must not survive either branch and describe a tree that no longer exists.
+fn clear_present_diagnostics(shared: &SharedState) {
+    let mut inner = shared.lock();
+    inner.present_surface_size = None;
+    inner.present_scale = None;
+    inner.present_visual_rect_dip = None;
+}
+
+/// Retarget the presentation to a different HWND on the render thread.
+///
+/// Transaction (the order is load-bearing):
+/// 1. Take the old pipeline out of `state` and DROP it completely before
+///    creating anything for the new HWND. `PresentPipeline` drops its fields in
+///    declaration order: the interop object is unregistered first (while the
+///    GL context is still current), then `wglDXCloseDeviceNV` closes the
+///    interop device, then `Composition` releases the old D3D11 device/context,
+///    DComp target/visual/surface and finally uninitializes COM. Nothing of
+///    the old tree survives this `drop`, so the visual is never rooted in two
+///    DComp target trees at once and repeated main <-> pip switches cannot
+///    leak D3D/DComp/interop objects.
+/// 2. Create the new pipeline for `hwnd`, start it hidden at rect 0,0,0,0 and
+///    clear the shared diagnostics (the old geometry is gone in every
+///    outcome).
+/// 3. If creation fails, recreate a pipeline for the old HWND (rollback). That
+///    tree was emptied in step 1 too, so the rollback never adds a second
+///    visual: it either restores exactly one target or leaves none.
+///
+/// `needs_repaint` is armed on success AND on a successful rollback: the new
+/// DComp surface carries no frame. While the pipeline is hidden the pump keeps
+/// the flag armed; the first pump after the new owner makes the content
+/// visible then redraws the last FBO frame even when playback is paused.
+fn apply_retarget(
+    state: &mut RenderThreadState,
+    hwnd: usize,
+    reply: mpsc::Sender<Result<(), String>>,
+    shared: &SharedState,
+) {
+    let gl_width = state.gl_context.width();
+    let gl_height = state.gl_context.height();
+
+    // Capture everything needed from the old pipeline BEFORE dropping it.
+    let old_present = state.present.take();
+    let old_hwnd = old_present.as_ref().map(|p| p.composition.hwnd().0 as usize).unwrap_or(0);
+    let old_size = old_present.as_ref().map(|p| p.composition.size()).unwrap_or((gl_width, gl_height));
+    // Full, synchronous teardown (unregister -> close device -> release the old
+    // target/visual/surface -> CoUninitialize). Only a fully released old tree
+    // may be followed by a new pipeline; otherwise both targets would exist.
+    drop(old_present);
+    // The dropped pipeline's geometry no longer describes anything on screen.
+    // Both the success and the rollback branch restart hidden at 0,0,0,0, so
+    // this single reset covers both exactly like the former success-only one.
+    clear_present_diagnostics(shared);
+
+    let width = if old_size.0 > 0 { old_size.0 } else { gl_width.max(1) };
+    let height = if old_size.1 > 0 { old_size.1 } else { gl_height.max(1) };
+
+    match PresentPipeline::new(hwnd, &state.gl_context, width, height) {
+        Ok(mut new_present) => {
+            // Reset geometry/visibility: hidden until the new owner supplies a rect.
+            let _ = new_present.set_visible(false);
+            let _ = new_present.set_rect(0, 0, 0, 0);
+            state.present = Some(new_present);
+            // Fresh DComp surface with no content: keep the repaint armed so
+            // the last frame is redrawn after the new owner shows it.
+            state.needs_repaint = true;
+            log::info!("[player] presentation retargeted to hwnd {hwnd}");
+            let _ = reply.send(Ok(()));
+        }
+        Err(create_error) => {
+            log::error!("[player] retarget to {hwnd} failed: {create_error}; attempting rollback to {old_hwnd}");
+            if old_hwnd != 0 {
+                match PresentPipeline::new(old_hwnd, &state.gl_context, width, height) {
+                    Ok(mut rolled_back) => {
+                        let _ = rolled_back.set_visible(false);
+                        let _ = rolled_back.set_rect(0, 0, 0, 0);
+                        state.present = Some(rolled_back);
+                        // Same contract as the success path: the rolled-back
+                        // surface is a fresh, empty one. Arm the repaint so the
+                        // replayed geometry/visibility (player/mod.rs restores
+                        // them on failure) shows the last frame even if paused.
+                        state.needs_repaint = true;
+                        log::info!(
+                            "[player] presentation rolled back to hwnd {old_hwnd}; the restored surface repaints on the next visible pump"
+                        );
+                        let _ = reply.send(Err(create_error));
+                    }
+                    Err(rollback_error) => {
+                        log::error!(
+                            "[player] LOUD: retarget to {hwnd} failed AND rollback to {old_hwnd} failed: {rollback_error}; presentation is detached (state.present = None), playback continues without video output"
+                        );
+                        state.present = None;
+                        let _ = reply.send(Err(format!("{create_error}; rollback failed: {rollback_error}")));
+                    }
+                }
+            } else {
+                log::error!(
+                    "[player] LOUD: retarget to {hwnd} failed with no previous target to roll back to: {create_error}; presentation stays detached (state.present = None)"
+                );
+                state.present = None;
+                let _ = reply.send(Err(create_error));
+            }
+        }
     }
 }

@@ -27,6 +27,7 @@ mod video_host;
 mod context_menu;
 #[cfg(windows)]
 mod webview_keys;
+mod pip_window;
 mod stream_proxy;
 mod path_scope;
 
@@ -41,10 +42,57 @@ use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
 use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY, restore_main_window};
 #[cfg(windows)]
 use video_host::{video_host_acquire, video_host_first_frame_presented, video_host_set_rect, video_host_set_visible};
+
 #[cfg(windows)]
 use context_menu::show_context_menu;
+#[cfg(windows)]
+use pip_window::{close_pip_window, pip_window_hwnd};
 
 pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+#[cfg(windows)]
+#[tauri::command]
+fn pip_window_hwnd_cmd(app: tauri::AppHandle) -> i64 {
+    pip_window_hwnd(&app).map(|h| h as i64).unwrap_or(0)
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn pip_window_close_cmd(app: tauri::AppHandle) {
+    close_pip_window(&app);
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn video_surface_retarget_to_pip_cmd(app: tauri::AppHandle) -> Result<(), String> {
+    // The HWND can only come from the Tauri-managed webview window with the
+    // "pip" label — never from a frontend-supplied value.
+    let hwnd = pip_window_hwnd(&app)?;
+    // The retarget waits for an acknowledged switch on the render thread;
+    // keep that blocking work off the Tauri UI/main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::player::video_surface_retarget(hwnd, "pip")
+    })
+    .await
+    .map_err(|join_error| format!("pip retarget task failed: {join_error}"))?
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn video_surface_retarget_to_main_cmd(app: tauri::AppHandle) -> Result<(), String> {
+    // Only the Tauri-managed webview window with the "main" label can be a
+    // retarget destination.
+    let hwnd = crate::video_host::main_window_hwnd(&app)
+        .map_err(|window_error| window_error.to_string())?;
+    let hwnd = hwnd as usize;
+    // Same as to-pip: the acknowledged switch blocks, so run it on the
+    // blocking pool instead of the UI/main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::player::video_surface_retarget(hwnd, "main")
+    })
+    .await
+    .map_err(|join_error| format!("main retarget task failed: {join_error}"))?
+}
 
 #[tauri::command(async)]
 fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -61,6 +109,11 @@ fn register_download_path(app: tauri::AppHandle, path: String) -> Result<(), Str
 }
 
 fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivityEvent) {
+    // Only the main window owns the WebView2 activity state. PiP focus,
+    // resize or minimize events must never pause/trim the main player.
+    if window.label() != "main" {
+        return;
+    }
     if let Some(webview_window) = window.get_webview_window("main") {
         apply_window_activity(&webview_window, event);
     }
@@ -160,7 +213,13 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
-                if !IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst) && MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst) {
+                // Minimize-to-tray applies to the main window only. The PiP
+                // window must stay closable: hiding it here would leave a
+                // live native surface with no visible window.
+                if window.label() == "main"
+                    && !IS_QUITTING.load(std::sync::atomic::Ordering::SeqCst)
+                    && MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::SeqCst)
+                {
                     let _ = window.hide();
                     apply_window_activity_for_window(window, WindowActivityEvent::HiddenToTray);
                     api.prevent_close();
@@ -177,6 +236,14 @@ pub fn run() {
                     WindowActivityEvent::ResizedToNormal
                 };
                 apply_window_activity_for_window(window, event);
+            }
+            tauri::WindowEvent::Destroyed => {
+                // With minimize-to-tray disabled, closing the main window must
+                // not leave a lone PiP window as the only video surface: tear
+                // it down deterministically. A no-op when no PiP exists.
+                if window.label() == "main" {
+                    crate::pip_window::close_pip_window(window.app_handle());
+                }
             }
             _ => {}
         })
@@ -204,6 +271,10 @@ pub fn run() {
             #[cfg(windows)] video_host_set_visible,
             #[cfg(windows)] video_host_first_frame_presented,
             #[cfg(windows)] show_context_menu,
+            #[cfg(windows)] pip_window_hwnd_cmd,
+            #[cfg(windows)] pip_window_close_cmd,
+            #[cfg(windows)] video_surface_retarget_to_pip_cmd,
+            #[cfg(windows)] video_surface_retarget_to_main_cmd,
         ])
         .build(tauri::generate_context!());
 

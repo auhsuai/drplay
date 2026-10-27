@@ -165,11 +165,21 @@ pub fn video_host_acquire(app: tauri::AppHandle) -> i64 {
 /// as reported by the frontend (`getBoundingClientRect`). Re-raises the host so
 /// it keeps painting above the WebView2 child window.
 #[tauri::command]
-pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
+pub fn video_host_set_rect(window: tauri::WebviewWindow, x: i64, y: i64, w: i64, h: i64) {
+    video_host_set_rect_for(window.label(), x, y, w, h);
+}
+
+pub(crate) fn video_host_set_rect_for(owner: &str, x: i64, y: i64, w: i64, h: i64) {
     if crate::player::is_libmpv_active() {
         // S3: forward to the DirectComposition visual rect (physical px,
-        // client area). Clamping happens inside the player path.
-        crate::player::video_surface_set_rect(x, y, w, h);
+        // client area). The player rejects requests from a non-owner window.
+        crate::player::video_surface_set_rect_from(owner, x, y, w, h);
+        return;
+    }
+    if owner != MAIN_WINDOW_LABEL {
+        log::debug!(
+            "[video-host] set_rect from '{owner}' rejected: legacy host is owned by '{MAIN_WINDOW_LABEL}'"
+        );
         return;
     }
     let Some(hwnd) = current_hwnd() else {
@@ -195,11 +205,29 @@ pub fn video_host_set_rect(x: i64, y: i64, w: i64, h: i64) {
 /// (mpv's child if it attached by now, the host otherwise) and keyboard focus
 /// on the WebView.
 #[tauri::command]
-pub fn video_host_set_visible(app: tauri::AppHandle, visible: bool) {
+pub fn video_host_set_visible(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    visible: bool,
+) {
+    video_host_set_visible_for(window.label(), &app, visible);
+}
+
+pub(crate) fn video_host_set_visible_for(
+    owner: &str,
+    app: &tauri::AppHandle,
+    visible: bool,
+) {
     if crate::player::is_libmpv_active() {
         // S3: forward to the DirectComposition visual (SetContent surface/null
         // on the render thread). Nothing is created or shown natively here.
-        crate::player::video_surface_set_visible(visible);
+        crate::player::video_surface_set_visible_from(owner, visible);
+        return;
+    }
+    if owner != MAIN_WINDOW_LABEL {
+        log::debug!(
+            "[video-host] set_visible({visible}) from '{owner}' rejected: legacy host is owned by '{MAIN_WINDOW_LABEL}'"
+        );
         return;
     }
     let Some(hwnd) = current_hwnd() else {
@@ -245,7 +273,7 @@ pub fn video_host_set_visible(app: tauri::AppHandle, visible: bool) {
     // from the WebView — but a WebView that was never focused reports
     // document.hasFocus() === false and every keyboard shortcut is dead. Give it
     // the focus explicitly, once, as the player surface opens.
-    match main_window_hwnd(&app) {
+    match main_window_hwnd(app) {
         Ok(parent) => focus_webview(parent),
         Err(window_error) => log::debug!("[video-input] focus skipped: {window_error}"),
     }

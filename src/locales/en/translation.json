@@ -181,7 +181,21 @@
     "play_mode": "Playback mode",
     "fullscreen": "Fullscreen video",
     "exit_fullscreen": "Exit fullscreen",
+    "picture_in_picture": "Picture in Picture",
     "more": "More options",
+    "pip": {
+      "close": "Close",
+      "enter_error": "Couldn't open Picture in Picture. Try again.",
+      "mute": "Mute",
+      "no_video": "Picture in Picture is only available for video.",
+      "playback_error": "This video couldn't be played. Return to the player to retry.",
+      "return_error": "Couldn't return the video to the player. Try again.",
+      "return_to_player": "Return to Player",
+      "seek": "Seek",
+      "unmute": "Unmute",
+      "video_ended": "Video ended",
+      "volume": "Volume"
+    },
     "command": {
       "play_pause": "Play / Pause",
       "stop": "Stop",

@@ -342,6 +342,10 @@ export async function runMenuEntry(
     selectQueuedTrack(id.slice(MENU_PREFIXES.queue.length), ctx, s);
     return;
   }
+  if (id === MENU_IDS.pip) {
+    ctx.enterPip?.();
+    return;
+  }
 
   throw new Error(`Unknown menu entry id: ${id}`);
 }

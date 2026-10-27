@@ -20,6 +20,12 @@ pub(super) enum Request {
     SetRect { x: i32, y: i32, w: u32, h: u32 },
     /// Show/hide the composition content (`SetContent(surface | null)`).
     SetVisible { visible: bool },
+    /// Retarget the composition presentation to a different HWND (pip <-> main).
+    /// Replaces the whole present pipeline on the render thread; replies with
+    /// success/failure for an acknowledged switch. A queued request is never
+    /// cancelled: a caller that timed out may enqueue a compensating retarget
+    /// behind it, and an undeliverable reply is ignored by the render thread.
+    Retarget { hwnd: usize, reply: mpsc::Sender<Result<(), String>> },
 }
 
 /// One frame read back from the FBO by the render thread (RGBA8; GL row

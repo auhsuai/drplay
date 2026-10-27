@@ -16,7 +16,8 @@ mod render;
 mod tests;
 
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
@@ -154,6 +155,10 @@ fn engine_slot() -> &'static EngineSlot {
 // S3 video-surface requests (video_host_* commands in libmpv mode)
 // ---------------------------------------------------------------------------
 
+/// Tauri labels of the two windows that can own the composition surface.
+const MAIN_WINDOW_LABEL: &str = "main";
+const PIP_WINDOW_LABEL: &str = "pip";
+
 /// Latest rect/visibility the frontend asked for, as the source of truth for
 /// engines created AFTER the request (the frontend acquires and sizes the
 /// surface before spawning). Recorded in PHYSICAL client-area px.
@@ -169,10 +174,31 @@ static SURFACE_REQUESTS: StdMutex<SurfaceRequests> =
 /// The render surface of the running engine, so the synchronous
 /// `video_host_set_rect/set_visible` commands can forward WITHOUT touching
 /// the async engine slot. Published after `create` replayed the stored
-/// requests; cleared before teardown. The requests lock is always taken
-/// first (SURFACE_REQUESTS -> ACTIVE_SURFACE) to keep the publish atomic
-/// against concurrent set_* calls.
+/// requests; cleared before teardown. Lock order is SURFACE_OWNER ->
+/// SURFACE_REQUESTS -> ACTIVE_SURFACE, keeping the publish atomic against
+/// concurrent set_* calls.
 static ACTIVE_SURFACE: StdMutex<Option<Arc<render::RenderSurface>>> = StdMutex::new(None);
+
+/// Which webview window may mutate the active surface. The label is the Tauri
+/// window label of the caller (never a frontend-supplied owner). During a
+/// main <-> pip retarget BOTH sides are rejected until the switch settles.
+struct SurfaceOwner {
+    label: String,
+    transitioning: bool,
+}
+
+static SURFACE_OWNER: LazyLock<StdMutex<SurfaceOwner>> = LazyLock::new(|| {
+    StdMutex::new(SurfaceOwner {
+        label: MAIN_WINDOW_LABEL.to_string(),
+        transitioning: false,
+    })
+});
+
+/// Bound for the acknowledged main <-> pip presentation switch. The render
+/// thread drops the old D3D/DComp pipeline and builds a new one inside this
+/// window; the retarget commands wait on the blocking pool, so this never
+/// stalls the Tauri UI thread.
+const RETARGET_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn lock_surface_requests() -> std::sync::MutexGuard<'static, SurfaceRequests> {
     SURFACE_REQUESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -180,6 +206,16 @@ fn lock_surface_requests() -> std::sync::MutexGuard<'static, SurfaceRequests> {
 
 fn lock_active_surface() -> std::sync::MutexGuard<'static, Option<Arc<render::RenderSurface>>> {
     ACTIVE_SURFACE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn lock_surface_owner() -> std::sync::MutexGuard<'static, SurfaceOwner> {
+    SURFACE_OWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn reset_surface_owner() {
+    let mut owner = lock_surface_owner();
+    owner.label = MAIN_WINDOW_LABEL.to_string();
+    owner.transitioning = false;
 }
 
 /// After a libmpv spawn failure the legacy sidecar takes over, but the native
@@ -201,10 +237,20 @@ pub(crate) async fn replay_surface_after_fallback(app: &tauri::AppHandle) {
             log::error!("[player] fallback: legacy video host could not be acquired");
         } else {
             if let Some((x, y, w, h)) = request.rect {
-                crate::video_host::video_host_set_rect(x as i64, y as i64, w as i64, h as i64);
+                crate::video_host::video_host_set_rect_for(
+                    MAIN_WINDOW_LABEL,
+                    x as i64,
+                    y as i64,
+                    w as i64,
+                    h as i64,
+                );
             }
             if request.visible {
-                crate::video_host::video_host_set_visible(app_for_main, true);
+                crate::video_host::video_host_set_visible_for(
+                    MAIN_WINDOW_LABEL,
+                    &app_for_main,
+                    true,
+                );
             }
         }
         let _ = done_tx.send(());
@@ -242,9 +288,20 @@ pub(crate) fn video_surface_acquire(app: &tauri::AppHandle) -> i64 {
     }
 }
 
-/// `video_host_set_rect` in libmpv mode: record + forward to the live surface.
-pub(crate) fn video_surface_set_rect(x: i64, y: i64, w: i64, h: i64) {
+/// `video_host_set_rect` in libmpv mode: reject non-owner callers, then record
+/// and forward to the live surface. The owner lock is held through the forward
+/// so a retarget cannot clear/switch the surface underneath an accepted request.
+pub(crate) fn video_surface_set_rect_from(owner: &str, x: i64, y: i64, w: i64, h: i64) {
     let (x, y, w, h) = crate::video_host::clamp_rect(x, y, w, h);
+    let owner_guard = lock_surface_owner();
+    if owner_guard.transitioning || owner_guard.label != owner {
+        log::debug!(
+            "[player] surface set_rect from '{owner}' rejected: current owner '{}', transitioning={}",
+            owner_guard.label,
+            owner_guard.transitioning
+        );
+        return;
+    }
     let surface = {
         let mut requests = lock_surface_requests();
         requests.rect = Some((x, y, w as u32, h as u32));
@@ -257,8 +314,17 @@ pub(crate) fn video_surface_set_rect(x: i64, y: i64, w: i64, h: i64) {
     }
 }
 
-/// `video_host_set_visible` in libmpv mode: record + forward.
-pub(crate) fn video_surface_set_visible(visible: bool) {
+/// `video_host_set_visible` in libmpv mode: same owner gate, record + forward.
+pub(crate) fn video_surface_set_visible_from(owner: &str, visible: bool) {
+    let owner_guard = lock_surface_owner();
+    if owner_guard.transitioning || owner_guard.label != owner {
+        log::debug!(
+            "[player] surface set_visible({visible}) from '{owner}' rejected: current owner '{}', transitioning={}",
+            owner_guard.label,
+            owner_guard.transitioning
+        );
+        return;
+    }
     let surface = {
         let mut requests = lock_surface_requests();
         requests.visible = visible;
@@ -267,6 +333,87 @@ pub(crate) fn video_surface_set_visible(visible: bool) {
     if let Some(surface) = surface {
         if let Err(visible_error) = surface.set_visible(visible) {
             log::warn!("[player] surface set_visible({visible}) failed: {visible_error}");
+        }
+    }
+}
+
+/// Retarget the composition presentation to a different window's HWND (main <-> pip).
+/// Resets stored geometry/visibility; caller must supply new geometry afterwards.
+/// Blocks for the acknowledged switch: the command wrappers call this on the
+/// blocking pool, never on the Tauri UI thread. `destination` is the Tauri
+/// window label that will own the surface; only "main" and "pip" are valid.
+pub(crate) fn video_surface_retarget(hwnd: usize, destination: &str) -> Result<(), String> {
+    let destination = match destination {
+        MAIN_WINDOW_LABEL => MAIN_WINDOW_LABEL,
+        PIP_WINDOW_LABEL => PIP_WINDOW_LABEL,
+        other => {
+            log::warn!("[player] retarget rejected: unsupported destination '{other}'");
+            return Err(format!("unsupported retarget destination: {other}"));
+        }
+    };
+    let surface = lock_active_surface().clone().ok_or_else(|| {
+        "no active render surface to retarget".to_string()
+    })?;
+    // Capture the last accepted requests BEFORE clearing them. Clear before the
+    // request is sent so stale main-window geometry can never be applied to the
+    // new (pip) target, but restore them if the switch fails: the render thread
+    // rolls back to a freshly created, hidden surface, and a stored "none /
+    // false" would otherwise leave it hidden until something else speaks.
+    // The owner lock is held while transitioning is raised and requests are
+    // cleared: an accepted set_* holds it through its forward, so nothing can
+    // slip between the gate check and the switch.
+    let (previous_label, previous) = {
+        let mut owner = lock_surface_owner();
+        if owner.transitioning {
+            log::warn!(
+                "[player] retarget to '{destination}' rejected: a surface retarget is already in progress"
+            );
+            return Err("a surface retarget is already in progress".to_string());
+        }
+        let previous_label = owner.label.clone();
+        owner.transitioning = true;
+        let mut requests = lock_surface_requests();
+        let previous = *requests;
+        requests.rect = None;
+        requests.visible = false;
+        (previous_label, previous)
+    };
+    match surface.retarget(hwnd, RETARGET_TIMEOUT) {
+        Ok(()) => {
+            let mut owner = lock_surface_owner();
+            owner.label = destination.to_string();
+            owner.transitioning = false;
+            log::info!("[player] video surface owner is now '{destination}'");
+            Ok(())
+        }
+        Err(error) => {
+            let mut owner = lock_surface_owner();
+            owner.label = previous_label;
+            owner.transitioning = false;
+            {
+                let mut requests = lock_surface_requests();
+                *requests = previous;
+            }
+            // Best-effort replay onto the rolled-back pipeline. The frontend
+            // also re-sends when it reverts the surface owner, but this closes
+            // the gap (and covers a lost owner-changed event). On a timeout the
+            // render surface has already queued a compensating retarget BEHIND
+            // the stale switch, so these requests land after it in queue order.
+            // The owner lock stays held so a newer accepted request cannot be
+            // overwritten by this older stored one.
+            if let Some((x, y, w, h)) = previous.rect {
+                if let Err(rect_error) = surface.set_rect(x, y, w, h) {
+                    log::warn!("[player] restoring the pre-retarget rect failed: {rect_error}");
+                }
+            }
+            if previous.visible {
+                if let Err(visible_error) = surface.set_visible(true) {
+                    log::warn!(
+                        "[player] restoring the pre-retarget visibility failed: {visible_error}"
+                    );
+                }
+            }
+            Err(error.to_string())
         }
     }
 }
@@ -348,6 +495,7 @@ async fn shutdown_slot(slot: &EngineSlot, gate: &Mutex<()>) -> Result<(), String
     };
     // Stop forwarding surface requests before the render thread goes down.
     *lock_active_surface() = None;
+    reset_surface_owner();
     let worker = Arc::clone(&engine);
     let destroyed = tokio::task::spawn_blocking(move || worker.destroy(true))
         .await
@@ -406,6 +554,7 @@ pub(crate) fn teardown_for_exit() {
     };
     drop(guard);
     *lock_active_surface() = None;
+    reset_surface_owner();
     if let Err(teardown_error) = engine.destroy(true) {
         log::warn!("[player] exit teardown failed: {teardown_error}");
     }
@@ -465,6 +614,7 @@ pub(crate) async fn ensure_spawned_with_window(
     }
     if let Some(dead) = guard.take() {
         *lock_active_surface() = None;
+        reset_surface_owner();
         let worker = Arc::clone(&dead);
         let destroyed = tokio::task::spawn_blocking(move || worker.destroy(false))
             .await
@@ -486,6 +636,8 @@ pub(crate) async fn ensure_spawned_with_window(
             .map_err(|join_error| format!("mpv engine spawn task failed: {join_error}"))?
             .map_err(|engine_error| engine_error.to_string())?;
     let conn = engine.conn();
+    // A newly created engine always targets the main window.
+    reset_surface_owner();
     // Replay the latest frontend requests onto the new surface and publish it.
     // The requests lock is held across the publish so a concurrent set_rect
     // cannot slip between "request stored" and "surface published" and get

@@ -266,6 +266,7 @@ describe("buildContextMenuModel — full menu skeleton", () => {
       PLAYER_COMMAND_IDS.PLAYER_NEXT,
       "---",
       PLAYER_COMMAND_IDS.PLAYER_FULLSCREEN,
+      MENU_IDS.pip,
       "---",
       MENU_IDS.fullAudio,
       MENU_IDS.fullVideo,
