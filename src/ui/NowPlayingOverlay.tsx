@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useInsertionEffect, useLayoutEffect, useRef } from "react";
 import { NowPlayingView } from "./NowPlaying/NowPlayingView";
 import type { PlayMode, Track } from "../types";
 import type { MenuSection } from "../player/menuModel";
@@ -68,7 +68,7 @@ export function NowPlayingOverlay({
   // `useLayoutEffect` (not `useEffect`) so the animation is installed BEFORE
   // the browser paints the class flip; otherwise the open frame would flash at
   // its final position for one frame before the slide starts.
-  useLayoutEffect(() => {
+  useInsertionEffect(() => {
     // The initial state is already correct in the resting className — do not
     // animate mounting (the ref is written here, in the effect, never during
     // render: `react-hooks/refs`).
