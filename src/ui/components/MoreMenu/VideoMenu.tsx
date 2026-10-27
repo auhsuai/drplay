@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -70,6 +70,7 @@ export function VideoMenu({
 }: VideoMenuProps) {
   const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
+  const closeSubmenuTimerRef = useRef<number | null>(null);
   // The click-outside exclusion has to see the CURRENT trigger; the mirror runs
   // in an effect because the ref is only ever read from a listener.
   const triggerRef = useRef<HTMLElement | null>(trigger);
@@ -86,6 +87,26 @@ export function VideoMenu({
     openSubmenu,
     handleKeyDown,
   } = useVideoMenuFlyouts({ isOpen, menuRef });
+
+  const clearCloseSubmenuTimer = useCallback(() => {
+    if (closeSubmenuTimerRef.current === null) return;
+    window.clearTimeout(closeSubmenuTimerRef.current);
+    closeSubmenuTimerRef.current = null;
+  }, []);
+  const scheduleCloseSubmenu = useCallback(() => {
+    if (openChain.length === 0) return;
+    clearCloseSubmenuTimer();
+    closeSubmenuTimerRef.current = window.setTimeout(() => {
+      closeSubmenuTimerRef.current = null;
+      closeSubmenu();
+    }, 200);
+  }, [openChain.length, closeSubmenu, clearCloseSubmenuTimer]);
+
+  useEffect(() => {
+    return () => {
+      clearCloseSubmenuTimer();
+    };
+  }, [clearCloseSubmenuTimer]);
 
   const { closeMenu } = useMoreMenuEvents({
     isMenuOpen: isOpen,
@@ -251,11 +272,12 @@ export function VideoMenu({
           // boundary — the flyout cannot close halfway through the move. A
           // disabled parent stays shut, matching APG (aria-disabled items do
           // not activate) and the click path, which MoreMenuItem blocks too.
-          hoverOpensSubmenu && !disabled
-            ? () => {
-                openSubmenu(entry.id, chain);
-              }
-            : undefined
+           hoverOpensSubmenu && !disabled
+             ? () => {
+                 clearCloseSubmenuTimer();
+                 openSubmenu(entry.id, chain);
+               }
+             : undefined
         }
       >
         <MoreMenuItem
@@ -287,10 +309,14 @@ export function VideoMenu({
           // this panel needs no handler of its own — and a role="menu" element
           // with a click handler would be an a11y violation anyway.
           <div
-            role="menu"
-            data-submenu="true"
-            aria-label={entry.label}
-            // Position is measured, not declared: see positionFlyout. It runs on
+             role="menu"
+             data-submenu="true"
+             aria-label={entry.label}
+             tabIndex={-1}
+             onMouseEnter={() => {
+               clearCloseSubmenuTimer();
+             }}
+             // Position is measured, not declared: see positionFlyout. It runs on
             // every commit (ref callbacks re-fire when their identity changes)
             // and is idempotent, so a re-render re-writes the same two values.
             ref={(panel) => {
@@ -316,15 +342,14 @@ export function VideoMenu({
       onClick={(e) => {
         e.stopPropagation();
       }}
+      onMouseEnter={() => {
+        clearCloseSubmenuTimer();
+      }}
       onMouseLeave={() => {
-        // Leaving the whole menu (panel AND every flyout — the flyouts are
-        // DOM descendants of this panel, so React's leave only fires once the
-        // pointer is outside the entire subtree) collapses the chain, so no
-        // flyout is ever left hanging over the video. The menu itself stays:
-        // closing it is the outside-mousedown path's job. Moving from one
-        // parent row to another never reaches here (both are inside), which is
-        // what makes the swap instant instead of close-then-reopen (no flicker).
-        if (openChain.length > 0) closeSubmenu();
+        // Delay closing the submenu so a 12px gap between the parent row and its
+        // flyout does not collapse it instantly. Cancelled as soon as the pointer
+        // re-enters the menu or the flyout.
+        scheduleCloseSubmenu();
       }}
       onKeyDown={(e) => {
         handleKeyDown(e, closeMenu);

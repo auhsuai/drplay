@@ -1,10 +1,11 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 /**
  * RED tests for the DrPlay-rendered video menu. ONE renderer serves both entry
  * points (More button / right-click); only the anchor differs. The native
  * Win32 popup and any Tauri invoke must be unreachable from this component.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -116,7 +117,7 @@ function rootMenu(): HTMLElement {
 
 /**
  * Every row of a panel. Checkable rows are `menuitemcheckbox` (APG: aria-checked
- * is only valid there), so both roles are collected — the same selector the
+ * is only valid there), so both roles are collected � the same selector the
  * shared roving-focus helper uses.
  */
 function rows(menu: HTMLElement): HTMLElement[] {
@@ -138,7 +139,7 @@ function rowByLabel(menu: HTMLElement, name: RegExp): HTMLElement {
 }
 
 /**
- * The `relative` wrapper that holds a parent row TOGETHER WITH its flyout — the
+ * The `relative` wrapper that holds a parent row TOGETHER WITH its flyout � the
  * hover boundary. React builds onMouseEnter/onMouseLeave from mouseover/mouseout
  * (a raw `mouseenter` event never reaches the handler), so the tests drive the
  * bubbling pair instead.
@@ -213,7 +214,7 @@ describe("VideoMenu rendering (DrPlay design system)", () => {
     expect(menu.className).toContain("rounded-xl");
     expect(menu.className).toContain("w-60");
     // The trigger belongs to the video bar; the menu renders no trigger of its
-    // own (MoreMenu's own trigger would add a second ⋯ button here).
+    // own (MoreMenu's own trigger would add a second ? button here).
     expect(container.querySelector("button")).toBeNull();
     expect(document.body.querySelector(".lucide-ellipsis")).toBeNull();
     expect(
@@ -322,7 +323,7 @@ describe("VideoMenu submenus (DrPlay style, APG)", () => {
     // Only ONE positioning utility may live in a panel's class: `fixed` and
     // `absolute` are the same specificity, so whichever Tailwind emits later in
     // the stylesheet wins. Merged into one constant, `fixed` won on the flyout
-    // — which then had no inline style, so `left-full`/`right-full` resolved
+    // � which then had no inline style, so `left-full`/`right-full` resolved
     // against the VIEWPORT and pushed the whole submenu off-screen.
     const root = rootMenu();
     expect(root.className).toContain("fixed");
@@ -414,7 +415,7 @@ describe("VideoMenu row density (compact, video menu only)", () => {
     renderMenu();
 
     // MENU_ITEM_BASE_CLASS still backs every OTHER menu (queue, playlist,
-    // sidebar, player bar, recent) — it must keep its own rhythm.
+    // sidebar, player bar, recent) � it must keep its own rhythm.
     expect(MENU_ITEM_BASE_CLASS).toContain("py-2");
     expect(MENU_ITEM_BASE_CLASS).not.toContain("py-1.5");
   });
@@ -490,7 +491,7 @@ describe("VideoMenu hover opens submenus (pointer devices)", () => {
 
     expect(audio).toHaveAttribute("aria-expanded", "false");
     expect(video).toHaveAttribute("aria-expanded", "true");
-    // Exactly one flyout — the sibling was replaced, not stacked.
+    // Exactly one flyout � the sibling was replaced, not stacked.
     expect(flyouts()).toHaveLength(1);
     expect(itemLabels(flyouts()[0] as HTMLElement)).toEqual(["Video track"]);
   });
@@ -551,6 +552,7 @@ describe("VideoMenu hover opens submenus (pointer devices)", () => {
   });
 
   it("leaving the whole menu collapses every flyout instead of hanging one over the video", () => {
+    vi.useFakeTimers();
     renderMenu({ entries: NESTED_ENTRIES });
 
     const root = rootMenu();
@@ -564,10 +566,16 @@ describe("VideoMenu hover opens submenus (pointer devices)", () => {
       relatedTarget: document.body,
     });
 
+    // The collapse is delayed so a 12px gap does not close the submenu instantly.
+    expect(flyouts()).toHaveLength(2);
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(flyouts()).toHaveLength(0);
     expect(rowByLabel(root, /Audio/)).toHaveAttribute("aria-expanded", "false");
-    // The menu itself survives — dismissal stays the outside-mousedown path's job.
+    // The menu itself survives � dismissal stays the outside-mousedown path's job.
     expect(document.body.contains(root)).toBe(true);
+    vi.useRealTimers();
   });
 
   it("does not open the submenu of a disabled parent", () => {
@@ -660,7 +668,7 @@ describe("VideoMenu queue list is not a wall of repeated icons", () => {
     const menu = rootMenu();
     const one = rowByLabel(menu, /^38\./);
     const toggle = rowByLabel(menu, /Toggle queue/);
-    // The glyph is present but invisible — no more 50 repeated ListMusic icons.
+    // The glyph is present but invisible � no more 50 repeated ListMusic icons.
     const glyph = one.querySelector("svg");
     expect(glyph).not.toBeNull();
     expect(glyph).toHaveClass("opacity-0");
@@ -687,7 +695,7 @@ describe("VideoMenu queue list is not a wall of repeated icons", () => {
 
     const menu = rootMenu();
     const current = rowByLabel(menu, /^39\./);
-    // No checkmark anywhere on the row — the queue icon column stays blank.
+    // No checkmark anywhere on the row � the queue icon column stays blank.
     expect(current.querySelector(".lucide-check")).toBeNull();
     expect(current.querySelector("svg")).toHaveClass("opacity-0");
     // The brand highlight replaces it: blue text on a subtle blue wash.
@@ -744,7 +752,7 @@ describe("VideoMenu queue list is not a wall of repeated icons", () => {
     ).not.toBeNull();
   });
 
-  it("moves the highlight when the playing track changes — it is never remembered", () => {
+  it("moves the highlight when the playing track changes � it is never remembered", () => {
     const base = {
       isOpen: true,
       anchorPoint: { x: 100, y: 100 },
@@ -810,8 +818,8 @@ const PANEL_H = 200;
 /**
  * jsdom implements no layout: `offsetParent` is always null and the offsets are
  * 0, so the flyout's own collision measurement could never run. They are
- * supplied file-wide — `offsetParent` is the `relative` wrapper, which is
- * exactly what it is for this panel — because correct placement is a core
+ * supplied file-wide � `offsetParent` is the `relative` wrapper, which is
+ * exactly what it is for this panel � because correct placement is a core
  * behaviour, not something only the positioning tests may observe.
  */
 beforeAll(() => {
@@ -942,7 +950,7 @@ describe("VideoMenu flyout is placed against the viewport, not just the row", ()
 
   it("keeps cascading LEFT once the first flyout went left", () => {
     // The bug: level 2 measured on its own, saw room on the right (it now sits
-    // at the far LEFT of the screen) and flipped back — zig-zagging and landing
+    // at the far LEFT of the screen) and flipped back � zig-zagging and landing
     // on top of the root panel. The cascade direction is inherited instead.
     renderMenu({ entries: NESTED_ENTRIES });
 
@@ -956,7 +964,7 @@ describe("VideoMenu flyout is placed against the viewport, not just the row", ()
     const level1 = flyouts()[0] as HTMLElement;
     expect(level1.style.right).toBe(`calc(100% + ${String(GAP)}px)`);
 
-    // Its child now sits around x=470, where the right side looks wide open —
+    // Its child now sits around x=470, where the right side looks wide open �
     // it must not take the bait.
     const childRow = rowByLabel(level1, /Audio track/);
     hoverArea(childRow).getBoundingClientRect = () =>
@@ -1110,7 +1118,7 @@ describe("VideoMenu queue list is bounded and scrolled to the current track", ()
     expect(box).not.toBeNull();
     expect(box?.className).toContain("max-h-");
     expect(box?.className).toContain("overflow-y-auto");
-    // All 50 rows are still rendered — the box scrolls, nothing is dropped.
+    // All 50 rows are still rendered � the box scrolls, nothing is dropped.
     expect(box?.querySelectorAll('[role="menuitem"]').length).toBe(50);
     // The command rows below the queue stay OUT of the scroll box.
     expect(box?.textContent ?? "").not.toContain("Toggle queue");
@@ -1147,17 +1155,17 @@ describe("VideoMenu queue list is bounded and scrolled to the current track", ()
         {
           kind: "item",
           id: "menu:queue:a",
-          label: "38. [AEQG][1080p] Dragon B…",
+          label: "38. [AEQG][1080p] Dragon B�",
           detail: "038",
         },
       ],
     });
 
     const row = rowByLabel(rootMenu(), /Dragon B/);
-    // The label itself is untouched — the badge is a sibling, so truncation of
+    // The label itself is untouched � the badge is a sibling, so truncation of
     // the name can never eat the number.
     expect(row.querySelector("span.truncate")?.textContent).toBe(
-      "38. [AEQG][1080p] Dragon B…",
+      "38. [AEQG][1080p] Dragon B�",
     );
     const badge = row.querySelector("span.ml-auto");
     expect(badge?.textContent).toBe("038");
@@ -1317,19 +1325,19 @@ describe("VideoMenu positioning", () => {
 
     const menu = rootMenu();
     // Right-aligned to the trigger (which touches the right edge here) and
-    // opened upwards, 8px above it — the bar's More button lives at the bottom.
+    // opened upwards, 8px above it � the bar's More button lives at the bottom.
     expect(menu.style.right).toBe("0px");
     expect(menu.style.bottom).toBe("108px");
   });
 
-  it("a submenu from that right-edge button opens LEFT — there is no room right", () => {
+  it("a submenu from that right-edge button opens LEFT � there is no room right", () => {
     setViewport(1280, 800);
     renderMenu({ anchorPoint: null, buttonRect: RECT });
 
     // Tie the two halves together: read where the panel actually landed, then
     // feed the row the geometry it really has there. The panel is flush against
     // the right edge (right: 0), so its rows have zero clearance on the right
-    // and the submenu cascades LEFT — which is the native Windows/macOS rule
+    // and the submenu cascades LEFT � which is the native Windows/macOS rule
     // and the wanted behaviour. The panel itself must NOT move to make room:
     // it stays anchored to the button that opened it.
     const panelRight = 1280 - Number.parseFloat(rootMenu().style.right);
@@ -1388,5 +1396,37 @@ describe("VideoMenu i18n label", () => {
       rootMenu(),
     );
     expect(en.player.menu.video_menu).toBeTruthy();
+  });
+});
+
+describe("VideoMenu submenu close delay", () => {
+  it("delays closing the submenu on root mouse leave and cancels on submenu enter", () => {
+    stubPointer(true);
+    const { unmount } = renderMenu();
+    const audio = rowByLabel(rootMenu(), /Audio/);
+    expect(audio).toHaveAttribute("aria-expanded", "false");
+    fireEvent.mouseOver(hoverArea(audio));
+    expect(audio).toHaveAttribute("aria-expanded", "true");
+    expect(flyouts()).toHaveLength(1);
+
+    vi.useFakeTimers();
+    fireEvent.mouseLeave(rootMenu());
+
+    // Still open immediately after leaving.
+    expect(flyouts()).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(flyouts()).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(flyouts()).toHaveLength(0);
+
+    unmount();
+    Reflect.deleteProperty(window, "matchMedia");
+    vi.useRealTimers();
   });
 });
