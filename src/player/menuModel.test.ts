@@ -424,10 +424,10 @@ describe("buildContextMenuModel — audio section", () => {
     const entries = buildContextMenuModel("full", snapshot({ isMuted: true }));
     expect(item(entries, PLAYER_COMMAND_IDS.PLAYER_MUTE).checked).toBe(true);
     expect(item(entries, PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP).shortcut).toBe(
-      "Ctrl+Up",
+      "\u2191 / Ctrl+\u2191",
     );
     expect(item(entries, PLAYER_COMMAND_IDS.PLAYER_VOLUME_DOWN).shortcut).toBe(
-      "Ctrl+Down",
+      "\u2193 / Ctrl+\u2193",
     );
   });
 
