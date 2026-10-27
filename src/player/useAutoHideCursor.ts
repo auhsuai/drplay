@@ -17,6 +17,8 @@ export interface UseAutoHideCursorResult {
   revealCursor: () => void;
 }
 
+const CURSOR_HIDDEN_CLASS = "drplay-cursor-hidden";
+
 export function useAutoHideCursor({
   enabled,
   suspended,
@@ -24,6 +26,7 @@ export function useAutoHideCursor({
   const enabledRef = useRef(enabled);
   const suspendedRef = useRef(suspended);
   const desiredVisibleRef = useRef(true);
+  const visibilityRequestRef = useRef(0);
   const hideTimerRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
 
@@ -42,26 +45,53 @@ export function useAutoHideCursor({
   }, []);
 
   const applyVisibility = useCallback((visible: boolean) => {
+    // Keep the CSS state in sync even for no-op native calls.
+    document.documentElement.classList.toggle(CURSOR_HIDDEN_CLASS, !visible);
+
     if (desiredVisibleRef.current === visible) return;
+
+    const previousVisible = desiredVisibleRef.current;
     desiredVisibleRef.current = visible;
+    const requestId = ++visibilityRequestRef.current;
+
+    let win: ReturnType<typeof getCurrentWindow>;
     try {
-      const win = getCurrentWindow();
-      void win.setCursorVisible(visible).catch((e: unknown) => {
-        void captureError({
-          level: "warn",
-          source: "useAutoHideCursor",
-          message: `set-cursor-visible-failed: ${describeError(e)}`,
-          kind: "set-cursor-visible-failed",
-        });
-      });
+      win = getCurrentWindow();
     } catch (e: unknown) {
+      if (requestId !== visibilityRequestRef.current) return;
       void captureError({
         level: "warn",
         source: "useAutoHideCursor",
         message: `set-cursor-visible-failed: ${describeError(e)}`,
         kind: "set-cursor-visible-failed",
       });
+      desiredVisibleRef.current = previousVisible;
+      document.documentElement.classList.toggle(
+        CURSOR_HIDDEN_CLASS,
+        !previousVisible,
+      );
+      return;
     }
+
+    void win.setCursorVisible(visible).then(
+      () => {
+        // Success: a newer request supersedes this one; do nothing stale.
+      },
+      (e: unknown) => {
+        if (requestId !== visibilityRequestRef.current) return;
+        void captureError({
+          level: "warn",
+          source: "useAutoHideCursor",
+          message: `set-cursor-visible-failed: ${describeError(e)}`,
+          kind: "set-cursor-visible-failed",
+        });
+        desiredVisibleRef.current = previousVisible;
+        document.documentElement.classList.toggle(
+          CURSOR_HIDDEN_CLASS,
+          !previousVisible,
+        );
+      },
+    );
   }, []);
 
   const armTimer = useCallback(() => {
@@ -74,12 +104,8 @@ export function useAutoHideCursor({
   }, [clearHideTimer, applyVisibility]);
 
   const revealCursor = useCallback(() => {
-    if (!enabledRef.current) {
-      applyVisibility(true);
-      return;
-    }
     applyVisibility(true);
-    armTimer();
+    if (enabledRef.current) armTimer();
   }, [applyVisibility, armTimer]);
 
   // enabled transitions

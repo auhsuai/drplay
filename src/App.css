@@ -209,3 +209,9 @@ html.drplay-host-visible #content-area * {
     transform: translateY(0) scale(1);
   }
 }
+
+/* Cursor auto-hide (Now Playing video): WebView2 cannot always drop the OS cursor, so mirror the hidden state with a CSS class. */
+html.drplay-cursor-hidden,
+html.drplay-cursor-hidden * {
+  cursor: none !important;
+}

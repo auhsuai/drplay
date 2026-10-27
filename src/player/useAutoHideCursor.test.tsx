@@ -68,6 +68,7 @@ beforeEach(() => {
   win.setCursorVisible.mockReset().mockResolvedValue(undefined);
   vi.useFakeTimers(FAKE_TIMERS);
   document.body.innerHTML = "";
+  document.documentElement.classList.remove("drplay-cursor-hidden");
 });
 
 afterEach(() => {
@@ -227,5 +228,170 @@ describe("useAutoHideCursor: cleanup / blur", () => {
     ).length;
     expect(pointerRemoves).toBeGreaterThanOrEqual(pointerAdds);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("useAutoHideCursor: CSS hidden state", () => {
+  it("applies drplay-cursor-hidden when the idle deadline expires", () => {
+    render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+  });
+
+  it("removes the class on pointer activity and restarts the countdown", () => {
+    render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pointermove"));
+    });
+    frame();
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+
+    advance(CURSOR_IDLE_HIDE_MS - 500);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+    advance(1000);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+  });
+
+  it("pointer activity works while the cursor is hidden", () => {
+    render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pointermove"));
+    });
+    frame();
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+  });
+
+  it("disabling removes the class and clears timers", () => {
+    const { rerender } = render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+
+    rerender(<Harness enabled={false} suspended={false} />);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+    advance(CURSOR_IDLE_HIDE_MS * 10);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("suspension removes the class", () => {
+    const { rerender } = render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+
+    rerender(<Harness enabled suspended />);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+  });
+
+  it("blur removes the class and clears timers", () => {
+    render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+    advance(CURSOR_IDLE_HIDE_MS * 10);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("unmount removes the class and leaves no timer", () => {
+    const { unmount } = render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+
+    unmount();
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("useAutoHideCursor: native failure handling", () => {
+  it("a rejected hide does not leave state stuck and allows retry", async () => {
+    win.setCursorVisible.mockRejectedValueOnce(new Error("boom"));
+    render(<Harness enabled suspended={false} />);
+    await act(async () => {
+      vi.advanceTimersByTime(CURSOR_IDLE_HIDE_MS);
+      await Promise.resolve();
+    });
+    // The CSS class is applied optimistically, then reverted on failure.
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
+
+    // Retry should issue another hide request.
+    win.setCursorVisible.mockResolvedValueOnce(undefined);
+    act(() => {
+      window.dispatchEvent(new Event("pointermove"));
+    });
+    frame();
+    advance(CURSOR_IDLE_HIDE_MS);
+    expect(win.setCursorVisible).toHaveBeenLastCalledWith(false);
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      true,
+    );
+  });
+
+  it("rapid hide/show cannot apply stale state", async () => {
+    let resolveHide: (() => void) | null = null;
+    win.setCursorVisible.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveHide = resolve;
+        }),
+    );
+
+    render(<Harness enabled suspended={false} />);
+    advance(CURSOR_IDLE_HIDE_MS); // starts hide (pending)
+    // show before hide resolves
+    act(() => {
+      window.dispatchEvent(new Event("pointermove"));
+    });
+    frame(); // reveal -> show request
+
+    // resolve stale hide
+    await act(async () => {
+      resolveHide?.();
+      await Promise.resolve();
+    });
+
+    expect(document.documentElement.classList.contains("drplay-cursor-hidden")).toBe(
+      false,
+    );
   });
 });
