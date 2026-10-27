@@ -203,7 +203,16 @@ export async function openPipWindow(
     minHeight: 200,
     resizable: true,
     alwaysOnTop: true,
-    decorations: true,
+    decorations: false,
+    // Must stay false for a borderless window to be resizable on ALL edges.
+    // tao defaults this to true; with it, tauri-runtime-wry's
+    // `undecorated_resizing` builds a top-edge-only region (`only_top`) and
+    // `WM_NCHITTEST` returns HTTOP unconditionally, leaving left/right/bottom
+    // with no native resize target. With `false` it installs the full
+    // four-sided ring (and its corners), which is what we want here. Visual
+    // cost is only the 1px white border / Win11 rounded corners that
+    // `shadow:true` would otherwise add - both unwanted on a PIP video window.
+    shadow: false,
     transparent: true,
     backgroundColor: [0, 0, 0, 0],
     noRedirectionBitmap: true,

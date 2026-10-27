@@ -30,6 +30,9 @@ import { captureError } from "../utils/errorLog";
 import { formatTime } from "../utils/formatTime";
 
 const CONTROLS_HIDE_MS = 2_500;
+/** Below this viewport height the fixed-px overlays would cover most of the
+ *  picture, so the PiP chrome switches to a single compact row. */
+const COMPACT_HEIGHT_PX = 340;
 const MAIN_WINDOW_LABEL = "main";
 /** If main never answers a close request (crashed/hung/reloaded), the PiP
  *  window must still be able to close itself after this bounded wait. */
@@ -62,6 +65,9 @@ export function PipWindowView() {
   const [state, setState] = useState<Partial<PipStatePayload>>({});
   const [ownerActive, setOwnerActive] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [compact, setCompact] = useState(
+    () => window.innerHeight <= COMPACT_HEIGHT_PX,
+  );
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const [surfaceGeneration, setSurfaceGeneration] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -130,6 +136,16 @@ export function PipWindowView() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [revealControls]);
+
+  useEffect(() => {
+    const onResize = (): void => {
+      setCompact(window.innerHeight <= COMPACT_HEIGHT_PX);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
 
   const sendAction = useCallback(
     (action: PipActionName, payload?: unknown) => {
@@ -366,8 +382,17 @@ export function PipWindowView() {
         />
       </div>
 
+      {/* Opaque black cover for the (deliberately transparent) PiP page. The
+          DComp video composites BELOW the webview, and the owner/first-frame
+          state for THIS media load only reaches the main window — there is no
+          PiP-side signal without a new event protocol, so `hasFirstFrame` stays
+          true. This layer is therefore removed exactly when the host is really
+          ours and playing (`hostActive`); it must never stay over a live video.
+          A surface rebuild keeps `hostActive` true, so it cannot cover that
+          gap; the cheaper protection there is that the render side keeps the
+          previous surface bound until the replacement has a frame. */}
       {!hostActive && (
-        <div className="absolute inset-0 bg-black" aria-hidden="true" />
+        <div className="absolute inset-0 z-[1] bg-black" aria-hidden="true" />
       )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4 text-center">
@@ -393,20 +418,38 @@ export function PipWindowView() {
         )}
       </div>
 
+      {/* Always-present drag strip: the top bar below hides with the
+          controls, so without this the window could not be moved once the
+          auto-hide timer fires. It is 12px tall, transparent, and sits under
+          the controls overlay (z-10 < z-20) so it never covers the bar or its
+          buttons. Resizing is fully native (shadow:false in pipWindow.ts), so
+          no JS resize zones are needed here. */}
       <div
-        className={`pointer-events-none absolute inset-0 z-20 transition-opacity duration-200 ${
-          controlsVisible ? "opacity-100" : "opacity-0"
-        }`}
+        className="absolute inset-x-0 top-0 z-10 h-3"
+        data-tauri-drag-region
+        aria-hidden="true"
+      />
+
+      <div
+        className={`pointer-events-none absolute inset-0 z-20 ${
+          compact ? "transition-none" : "transition-opacity duration-200"
+        } ${controlsVisible ? "opacity-100" : "opacity-0"}`}
         aria-hidden={!controlsVisible}
         inert={!controlsVisible}
       >
         <div
-          className="pointer-events-auto absolute inset-x-0 top-0 flex items-center gap-1.5 bg-gradient-to-b from-black/85 via-black/55 to-transparent px-2 pb-4 pt-2 sm:gap-2 sm:px-3"
+          className={`pointer-events-auto absolute inset-x-0 top-0 flex items-center gap-1.5 bg-gradient-to-b px-2 ${
+            compact
+              ? "from-black/70 via-black/30 to-transparent pb-2 pt-1"
+              : "from-black/85 via-black/55 to-transparent pb-4 pt-2"
+          } sm:gap-2 sm:px-3`}
+          data-tauri-drag-region
           onPointerEnter={cancelHide}
           onPointerLeave={scheduleHide}
         >
           <span
             className="min-w-0 flex-1 truncate text-xs font-medium text-white/90 sm:text-sm"
+            data-tauri-drag-region
             title={displayTitle}
           >
             {displayTitle}
@@ -436,36 +479,46 @@ export function PipWindowView() {
         </div>
 
         <div
-          className="pointer-events-auto absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-2 pb-2 pt-8 sm:px-3 sm:pb-3"
+          className={`pointer-events-auto absolute inset-x-0 bottom-0 bg-gradient-to-t px-2 ${
+            compact
+              ? "from-black/70 via-black/35 to-transparent pb-1 pt-1"
+              : "from-black/95 via-black/75 to-transparent pb-2 pt-8 sm:pb-3"
+          } sm:px-3`}
           onPointerEnter={cancelHide}
           onPointerLeave={scheduleHide}
         >
-          <div className="flex items-center gap-2">
-            <span className="w-12 shrink-0 text-right text-[11px] tabular-nums text-white/80 sm:w-14 sm:text-xs">
-              {formatTime(shownTime)}
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={seekMax}
-              step={1}
-              value={seekValue}
-              disabled={duration <= 0 || hasEnded || hasError}
-              aria-label={t("player.pip.seek")}
-              onChange={(event) => {
-                handleSeekChange(Number(event.currentTarget.value));
-              }}
-              onPointerUp={commitSeek}
-              onKeyUp={commitSeek}
-              onBlur={commitSeek}
-              className={`${sliderClass} flex-1`}
-            />
-            <span className="w-12 shrink-0 text-[11px] tabular-nums text-white/80 sm:w-14 sm:text-xs">
-              {duration > 0 ? formatTime(duration) : "--:--"}
-            </span>
-          </div>
+          {!compact && (
+            <div className="flex items-center gap-2">
+              <span className="w-12 shrink-0 text-right text-[11px] tabular-nums text-white/80 sm:w-14 sm:text-xs">
+                {formatTime(shownTime)}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={seekMax}
+                step={1}
+                value={seekValue}
+                disabled={duration <= 0 || hasEnded || hasError}
+                aria-label={t("player.pip.seek")}
+                onChange={(event) => {
+                  handleSeekChange(Number(event.currentTarget.value));
+                }}
+                onPointerUp={commitSeek}
+                onKeyUp={commitSeek}
+                onBlur={commitSeek}
+                className={`${sliderClass} flex-1`}
+              />
+              <span className="w-12 shrink-0 text-[11px] tabular-nums text-white/80 sm:w-14 sm:text-xs">
+                {duration > 0 ? formatTime(duration) : "--:--"}
+              </span>
+            </div>
+          )}
 
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:gap-2">
+          <div
+            className={`flex flex-nowrap items-center gap-1.5 ${
+              compact ? "" : "mt-2 sm:gap-2"
+            }`}
+          >
             <button
               type="button"
               onClick={() => {
@@ -507,6 +560,25 @@ export function PipWindowView() {
               <SkipForward className="h-4 w-4" />
             </button>
 
+            {compact && (
+              <input
+                type="range"
+                min={0}
+                max={seekMax}
+                step={1}
+                value={seekValue}
+                disabled={duration <= 0 || hasEnded || hasError}
+                aria-label={t("player.pip.seek")}
+                onChange={(event) => {
+                  handleSeekChange(Number(event.currentTarget.value));
+                }}
+                onPointerUp={commitSeek}
+                onKeyUp={commitSeek}
+                onBlur={commitSeek}
+                className={`${sliderClass} min-w-0 flex-1`}
+              />
+            )}
+
             <div className="ml-auto flex min-w-0 items-center gap-1.5 sm:gap-2">
               <button
                 type="button"
@@ -529,7 +601,7 @@ export function PipWindowView() {
                 onChange={(event) => {
                   handleVolumeChange(Number(event.currentTarget.value));
                 }}
-                className={`${sliderClass} w-20 sm:w-28`}
+                className={`${sliderClass} ${compact ? "hidden" : "w-20 sm:w-28"}`}
               />
             </div>
           </div>

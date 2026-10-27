@@ -197,6 +197,12 @@ pub(crate) struct Composition {
     dpi_scale: f32,
     offset_dip: (f32, f32),
     visible: bool,
+    /// Set by `recreate_surface` when it replaced `surface` while the visual
+    /// was visible. The OLD surface stays bound as the visual's content (so the
+    /// last real frame keeps showing instead of an empty surface), and the next
+    /// `present` binds the new surface only after it has drawn into it. A
+    /// `Cell` because `present` takes `&self`.
+    pending_content_surface: Cell<bool>,
     /// MIGRATION-ONLY latch for the empty-overlap warning in `present`: a
     /// `Cell` because `present` takes `&self`. The two sizes are fixed for the
     /// life of the texture pair, so a per-frame warning would be one line per
@@ -299,6 +305,7 @@ impl Composition {
             dpi_scale: window_dpi_scale(hwnd),
             offset_dip: (0.0, 0.0),
             visible: false,
+            pending_content_surface: Cell::new(false),
             copy_overlap_empty_logged: Cell::new(false),
         })
     }
@@ -405,18 +412,36 @@ impl Composition {
         // The top-left region both textures actually have. An empty
         // intersection is NOT handed to D3D: `right == left` /
         // `bottom == top` is not a box the runtime accepts.
-        let width = source_description.Width.min(destination_description.Width);
-        let height = source_description.Height.min(destination_description.Height);
+        //
+        // HONOR `update_offset`: DComp's BeginDraw contract (Microsoft Learn,
+        // IDCompositionSurface::BeginDraw remarks) says the retrieved offset is
+        // not necessarily the update rectangle's top-left and "the application
+        // must transform its rendering primitives to draw within a rectangle of
+        // the same width and height as the input rectangle, but at the given
+        // offset". Atlas packing can therefore hand back a non-zero offset;
+        // copying to (0,0) would misplace (or clip away) the frame on small
+        // surfaces.
+        let offset_x = update_offset.x.max(0) as u32;
+        let offset_y = update_offset.y.max(0) as u32;
+        let width = source_description
+            .Width
+            .min(destination_description.Width.saturating_sub(offset_x));
+        let height = source_description
+            .Height
+            .min(destination_description.Height.saturating_sub(offset_y));
         if width == 0 || height == 0 {
             if !self.copy_overlap_empty_logged.get() {
                 self.copy_overlap_empty_logged.set(true);
                 log::warn!(
-                    "[player] interop/surface overlap is empty; skipping the frame copy \
-                     (interop {}x{}, surface {}x{})",
+                     "[player] interop/surface overlap is empty; skipping the frame copy \
+                     (interop {}x{}, surface {}x{}, offset {},{})",
+
                     source_description.Width,
                     source_description.Height,
                     destination_description.Width,
                     destination_description.Height,
+                    offset_x,
+                    offset_y,
                 );
             }
         } else {
@@ -434,15 +459,18 @@ impl Composition {
             };
             // SAFETY: both textures are live ID3D11 textures owned by this
             // render thread with the same format; the box is non-empty and
-            // inside both extents; subresource 0 is the whole texture of
-            // each (MipLevels = 1, ArraySize = 1); `region` is a live local
-            // borrowed for the duration of the call.
+            // inside both extents; the destination (offset_x, offset_y) plus
+            // the box size is inside the update texture by the min() above (the
+            // offset comes from DComp and is honored as its contract requires);
+            // subresource 0 is the whole texture of each (MipLevels = 1,
+            // ArraySize = 1); `region` is a live local borrowed for the
+            // duration of the call.
             unsafe {
                 self.context.CopySubresourceRegion(
                     &update_texture,
                     0,
-                    0,
-                    0,
+                    offset_x,
+                    offset_y,
                     0,
                     source,
                     0,
@@ -451,6 +479,18 @@ impl Composition {
             };
         }
         call("EndDraw", unsafe { self.surface.EndDraw() })?;
+        // Deferred content swap after a resize: the visual still points at the
+        // previous surface (holding the last real frame) until this first draw
+        // into the replacement completed. Binding an EMPTY surface + Commit
+        // before any present is what produced the transparent/black flash.
+        if self.pending_content_surface.get() {
+            call("SetContent(surface after present)", unsafe {
+                self.visual.SetContent(&self.surface)
+            })?;
+            // Only cleared on success: a failed swap must be retried by the
+            // next present instead of leaving the old surface bound forever.
+            self.pending_content_surface.set(false);
+        }
         call("Commit", unsafe { self.device2.Commit() })?;
         Ok(())
     }
@@ -502,6 +542,10 @@ impl Composition {
         } else {
             call("SetContent(null)", unsafe { self.visual.SetContent(None::<&IUnknown>) })?;
         }
+        // Either branch has just decided what the visual shows, so a deferred
+        // resize swap is moot; the next present draws into `self.surface`
+        // regardless.
+        self.pending_content_surface.set(false);
         call("Commit", unsafe { self.device2.Commit() })?;
         self.visible = visible;
         log::info!("[player] composition content visible={visible}");
@@ -521,8 +565,16 @@ impl Composition {
             },
         )?;
         if self.visible {
-            call("SetContent(surface)", unsafe { self.visual.SetContent(&surface) })?;
-            call("Commit", unsafe { self.device2.Commit() })?;
+            // Deliberately NOT `SetContent(new)+Commit` here: the new surface
+            // is still EMPTY, and binding it now would blank the video for at
+            // least one composition frame (the transparent/black flash seen at
+            // small sizes during drags). Keep the old surface bound — it still
+            // holds the last presented frame — and let `present` bind the
+            // replacement after its first draw.
+            self.pending_content_surface.set(true);
+        } else {
+            // Nothing is on screen; the surface is bound by `set_visible`.
+            self.pending_content_surface.set(false);
         }
         self.surface = surface;
         self.size = (width, height);
