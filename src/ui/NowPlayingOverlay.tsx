@@ -103,7 +103,7 @@ export function NowPlayingOverlay({
           : "0 0";
     const to = isOpen ? "0 0" : "0 100%";
 
-    inFlight?.cancel();
+    inFlight?.oncancel?.(undefined as unknown as AnimationPlaybackEvent);
 
     const anim = el.animate([{ translate: from }, { translate: to }], {
       duration: 280,
@@ -112,18 +112,38 @@ export function NowPlayingOverlay({
         : "cubic-bezier(0.4, 0, 1, 1)",
       fill: "both",
     });
-    const release = () => {
+    let finished = false;
+    const finish = (type: "transitionend" | "transitioncancel") => {
+      if (finished) return;
+      finished = true;
+      window.dispatchEvent(
+        new TransitionEvent(type, { propertyName: "translate", bubbles: true }),
+      );
       anim.cancel();
       if (animRef.current === anim) animRef.current = null;
     };
-    anim.onfinish = release;
-    anim.oncancel = release;
+    anim.onfinish = () => {
+      finish("transitionend");
+    };
+    anim.oncancel = () => {
+      finish("transitioncancel");
+    };
     animRef.current = anim;
+    // VideoSurface tracks the native host rect off CSS transition events; the
+    // overlay now drives the slide through WAAPI, so mirror the lifecycle onto
+    // window events it already listens for. Dispatching after the animation is
+    // registered keeps the start frame from being missed.
+    window.dispatchEvent(
+      new TransitionEvent("transitionrun", {
+        propertyName: "translate",
+        bubbles: true,
+      }),
+    );
   }, [isOpen]);
 
   useLayoutEffect(
     () => () => {
-      animRef.current?.cancel();
+      animRef.current?.oncancel?.(undefined as unknown as AnimationPlaybackEvent);
       animRef.current = null;
     },
     [],

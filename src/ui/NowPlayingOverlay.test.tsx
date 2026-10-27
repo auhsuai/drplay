@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NowPlayingOverlay } from "./NowPlayingOverlay";
 
@@ -242,5 +242,56 @@ describe("collapse/expand transition (Web Animations API)", () => {
 
     addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+});
+
+describe("overlay -> VideoSurface rect sync bridge", () => {
+  it("emits transitionrun on open and transitionend when the animation finishes", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const { rerender } = render(<NowPlayingOverlay {...baseProps()} />);
+    rerender(<NowPlayingOverlay {...baseProps()} isOpen />);
+
+    const runEvents = dispatchSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event instanceof TransitionEvent && event.type === "transitionrun",
+      );
+    expect(runEvents).toHaveLength(1);
+    expect((runEvents[0] as TransitionEvent).propertyName).toBe("translate");
+
+    const animation = animations[0];
+    if (!animation) throw new Error("no animation");
+    act(() => {
+      animation.onfinish?.();
+    });
+
+    const endEvents = dispatchSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event instanceof TransitionEvent && event.type === "transitionend",
+      );
+    expect(endEvents).toHaveLength(1);
+    expect((endEvents[0] as TransitionEvent).propertyName).toBe("translate");
+
+    dispatchSpy.mockRestore();
+  });
+
+  it("emits transitioncancel when an in-flight animation is cancelled", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const { rerender } = render(<NowPlayingOverlay {...baseProps()} />);
+    rerender(<NowPlayingOverlay {...baseProps()} isOpen />);
+    rerender(<NowPlayingOverlay {...baseProps()} />);
+
+    const cancelEvents = dispatchSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event instanceof TransitionEvent && event.type === "transitioncancel",
+      );
+    expect(cancelEvents.length).toBeGreaterThanOrEqual(1);
+
+    dispatchSpy.mockRestore();
   });
 });
