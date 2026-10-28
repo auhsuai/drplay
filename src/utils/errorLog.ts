@@ -149,6 +149,30 @@ export const initLogger = () => {
 
 export const ERROR_LOG_MAX = 100;
 
+// `ts` is a plain (non-unique) index, and IndexedDB breaks index-key ties by
+// primary key — here a random UUID — so two entries captured in the same
+// millisecond have an arbitrary relative order. The prune deletes the lowest
+// `ts`, which would then sometimes discard a newer log and keep an older one.
+// Making each capture strictly later than the previous one removes the ties
+// entirely, without touching the schema or the prune query.
+//
+// Staying on the wall clock matters (report lines print `ts`): adding 1
+// unconditionally would push a burst of N captures ~N ms into the future and
+// that drift would accumulate on every burst. So only a tie pays +1.
+//
+// Clock-skew caveat: if the system clock jumps backwards, this deliberately
+// keeps emitting `lastTs + 1` instead of following the clock back down, so
+// entries captured after the jump still sort after the ones before it
+// (ordering must never invert in a log). The extra drift is bounded by the
+// number of captures made while the clock stays behind `lastTs`.
+let lastTs = 0;
+
+function nextTimestamp(): number {
+  const now = Date.now();
+  lastTs = now > lastTs ? now : lastTs + 1;
+  return lastTs;
+}
+
 export type { ErrorLogEntry };
 
 export async function captureError(input: {
@@ -161,7 +185,7 @@ export async function captureError(input: {
   try {
     const entry: ErrorLogEntry = {
       id: crypto.randomUUID(),
-      ts: Date.now(),
+      ts: nextTimestamp(),
       level: input.level ?? "error",
       source: input.source,
       message: sanitizeString(input.message),

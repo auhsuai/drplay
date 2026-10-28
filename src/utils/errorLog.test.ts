@@ -66,6 +66,70 @@ describe("captureError", () => {
     expect(minTs).toBeGreaterThan(0);
   });
 
+  it("assigns strictly increasing ts when captures share one millisecond", async () => {
+    const frozenMs = new Date(2023, 10, 1, 10, 0, 0).getTime();
+    // Only Date is faked: faking setTimeout/setImmediate would also stall
+    // Dexie's own transaction scheduling, and the awaits below would hang.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(frozenMs);
+      for (let i = 0; i < 5; i++) {
+        await captureError({
+          source: "same-ms",
+          message: `burst-${String(i)}`,
+          kind: "seq",
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const logs = await getErrorLogs();
+    const tsByMessage = new Map(logs.map((e) => [e.message, e.ts]));
+    const ordered: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const ts = tsByMessage.get(`burst-${String(i)}`);
+      if (ts === undefined) throw new Error(`missing burst-${String(i)}`);
+      ordered.push(ts);
+    }
+
+    // Ties are what let the ts-indexed prune delete a newer log, so only a
+    // strict ordering (not merely a non-decreasing one) satisfies the contract.
+    expect(new Set(ordered).size).toBe(ordered.length);
+    for (let i = 1; i < ordered.length; i++) {
+      const prev = ordered[i - 1];
+      const cur = ordered[i];
+      if (prev === undefined || cur === undefined) {
+        throw new Error("expected burst timestamps");
+      }
+      expect(cur).toBeGreaterThan(prev);
+    }
+  });
+
+  it("drops the oldest entry when every capture shares one millisecond", async () => {
+    const frozenMs = new Date(2023, 10, 1, 10, 0, 0).getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(frozenMs);
+      for (let i = 0; i < ERROR_LOG_MAX + 1; i++) {
+        await captureError({
+          source: "frozen-cap",
+          message: `frozen-${String(i)}`,
+          kind: "seq",
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const logs = await getErrorLogs();
+    expect(logs).toHaveLength(ERROR_LOG_MAX);
+    // Same contract as the racy cap test, but deterministic: a frozen clock
+    // makes every entry tie on ts, so this fails whenever ties are possible.
+    expect(logs.some((e) => e.message === "frozen-0")).toBe(false);
+    expect(logs[0]?.message).toBe(`frozen-${String(ERROR_LOG_MAX)}`);
+  });
+
   it("returns newest-first from getErrorLogs", async () => {
     await captureError({ source: "s", message: "old", kind: "k" });
     await new Promise((r) => setTimeout(r, 5));
