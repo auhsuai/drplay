@@ -1,5 +1,6 @@
 import { join, pictureDir } from "@tauri-apps/api/path";
 import { asNumber, asString, MPV_BOOL } from "../mpvProtocol";
+import { captureError } from "../../utils/errorLog";
 import { ASPECT_AUTO, ASPECT_NO, SPEED_NORMAL } from "./calculations";
 import {
   getProperty,
@@ -15,6 +16,18 @@ export interface AbLoopPoints {
   b: number | null;
 }
 
+const ASPECT_LOG_SOURCE = "mpvControl/videoControls";
+
+/** Report one failed step of the aspect ladder without ever rethrowing. */
+function logAspectFailure(kind: string, error: unknown): void {
+  void captureError({
+    level: "warn",
+    source: ASPECT_LOG_SOURCE,
+    message: `${kind} failed: ${error instanceof Error ? error.message : String(error)}`,
+    kind,
+  });
+}
+
 /** Video frame dimensions; 0 = unknown (no video / property unavailable). */
 export async function getVideoDimensions(): Promise<{
   width: number;
@@ -25,6 +38,63 @@ export async function getVideoDimensions(): Promise<{
     getProperty(MPV_CONTROL_PROPERTIES.height),
   ]);
   return { width: asNumber(rawWidth) ?? 0, height: asNumber(rawHeight) ?? 0 };
+}
+
+/** A positive finite `width / height`, or 0 when either side is unusable. */
+function ratioOrZero(width: number | null, height: number | null): number {
+  if (width === null || height === null || width <= 0 || height <= 0) return 0;
+  const ratio = width / height;
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
+}
+
+/**
+ * Read one property as a number, degrading to `null` on ANY failure.
+ *
+ * WHY not `getProperty`'s throw-through contract: the only consumer is the PiP
+ * window-resize path, which must never break playback. A failing read therefore
+ * falls through to the next fallback step (see `getVideoAspect`) and is reported
+ * with context instead of being rethrown.
+ */
+async function readNumberProperty(
+  kind: string,
+  name: string,
+): Promise<number | null> {
+  try {
+    return asNumber(await getProperty(name));
+  } catch (error) {
+    logAspectFailure(kind, error);
+    return null;
+  }
+}
+
+/** Positive display aspect ratio (`width / height`); 0 = unknown. */
+export async function getVideoAspect(): Promise<number> {
+  // The order is a correctness ladder, not a preference. `video-params/aspect`
+  // is the ratio mpv actually draws, with anamorphic/PAR correction already
+  // folded in, so a window sized to it shows no letterbox. `dwidth`/`dheight`
+  // are the post-scale display size (same idea, but absent on some hardware
+  // paths), and raw `width`/`height` are the DECODED size — for an anamorphic
+  // source those differ from what is on screen, which is why they come last.
+  const reported = await readNumberProperty(
+    "video-params/aspect",
+    MPV_CONTROL_PROPERTIES.videoParamsAspect,
+  );
+  if (reported !== null && Number.isFinite(reported) && reported > 0) {
+    return reported;
+  }
+
+  const [dwidth, dheight] = await Promise.all([
+    readNumberProperty("dwidth", MPV_CONTROL_PROPERTIES.dwidth),
+    readNumberProperty("dheight", MPV_CONTROL_PROPERTIES.dheight),
+  ]);
+  const displayRatio = ratioOrZero(dwidth, dheight);
+  if (displayRatio > 0) return displayRatio;
+
+  const [width, height] = await Promise.all([
+    readNumberProperty("width", MPV_CONTROL_PROPERTIES.width),
+    readNumberProperty("height", MPV_CONTROL_PROPERTIES.height),
+  ]);
+  return ratioOrZero(width, height);
 }
 
 export async function getSpeed(): Promise<number> {

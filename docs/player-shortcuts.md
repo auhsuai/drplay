@@ -41,6 +41,7 @@ player bar and the keyboard can never drift apart.
 | `R` | `PLAYER_ASPECT_CYCLE` | Cycle aspect ratio (auto → 16:9 → 4:3 → 21:9 → 1:1) |
 | `D` | `PLAYER_DEINTERLACE_CYCLE` | Cycle deinterlace (off → auto → on) |
 | `Ctrl+0` | `PLAYER_FIT_WINDOW` | Fit to window (reset zoom + pan) |
+| `Ctrl+P` | `PLAYER_PIP_TOGGLE` | Toggle Picture-in-Picture (video only) |
 | `Ctrl+=` | `PLAYER_ZOOM_IN` | Zoom in |
 | `Ctrl+-` | `PLAYER_ZOOM_OUT` | Zoom out |
 | `Ctrl+S` | `PLAYER_SNAPSHOT` | Take screenshot (saved to your Pictures folder) |
@@ -55,8 +56,8 @@ Notes:
 - Shortcuts are ignored while a text field has focus (search boxes, rename inputs).
 - Seek, volume, speed, subtitle delay and zoom repeat when the key is held; the
   other commands act once.
-- The browser's own `Ctrl+S` / `Ctrl+0` / `Ctrl+±` / `Ctrl+Arrow` defaults are
-  suppressed so they reach the player.
+- The browser's own `Ctrl+S` / `Ctrl+0` / `Ctrl+±` / `Ctrl+Arrow` / `Ctrl+P`
+  defaults are suppressed so they reach the player.
 - Nothing here is bound inside mpv: the sidecar starts with
   `--input-default-bindings=no` and `--input-vo-keyboard=no`, so there is exactly
   one command path per action.

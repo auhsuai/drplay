@@ -33,7 +33,10 @@ export type PipActionName =
   | "seek"
   | "setVolume"
   | "toggleMute"
-  | "return";
+  | "retry"
+  | "return"
+  /** Hand the video back and disappear WITHOUT bringing the app forward. */
+  | "closePip";
 
 export interface PipWindowOptions {
   width?: number;
@@ -43,6 +46,20 @@ export interface PipWindowOptions {
 export interface PipActionEvent {
   action?: string;
   payload?: unknown;
+}
+
+/**
+ * One buffered segment, as PLAIN data.
+ *
+ * Why not ship the engine's `TimeRanges` directly: `AudioController.getBuffered`
+ * returns an object whose `start`/`end` are closures (see `toTimeRanges` in
+ * mpvProtocol.ts). Closures are not structured-cloneable, so Tauri's IPC would
+ * drop or corrupt them. The main window therefore flattens the ranges once and
+ * the PiP window only ever sees `{start,end}` numbers.
+ */
+export interface BufferedRangePayload {
+  start: number;
+  end: number;
 }
 
 export interface PipStatePayload {
@@ -57,6 +74,11 @@ export interface PipStatePayload {
   isBuffering: boolean;
   hasError: boolean;
   hasEnded: boolean;
+  /** Buffered segments for the PiP seekbar's buffer fill. Empty when unknown. */
+  buffered: BufferedRangePayload[];
+  /** "Preparing to play" intent window — gates the PiP spinner exactly like
+   *  the fullscreen transport surfaces (isDownloading || isBuffering). */
+  isDownloading: boolean;
 }
 
 interface OwnerPayload {
@@ -154,9 +176,7 @@ async function armEvent(
 
   lifecycle.timer = window.setTimeout(() => {
     fail(
-      new Error(
-        `Timed out after ${String(timeoutMs)}ms waiting for ${event}`,
-      ),
+      new Error(`Timed out after ${String(timeoutMs)}ms waiting for ${event}`),
     );
   }, timeoutMs);
 

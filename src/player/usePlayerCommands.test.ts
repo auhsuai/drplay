@@ -213,6 +213,23 @@ describe("usePlayerCommands", () => {
     expect(low._audio.setVolume).toHaveBeenCalledWith(0);
   });
 
+  it("wires Ctrl+P to the PiP toggle and keeps plain P on previous", () => {
+    const ctx = makeCtx({ togglePip: vi.fn() });
+    renderHook(() => {
+      usePlayerCommands(ctx);
+    });
+
+    const event = pressKey("p", { ctrlKey: true });
+    expect(ctx.togglePip).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+    // Plain P is still "previous" — the two chords never overlap.
+    expect(ctx.previous).not.toHaveBeenCalled();
+
+    pressKey("p");
+    expect(ctx.previous).toHaveBeenCalledTimes(1);
+    expect(ctx.togglePip).toHaveBeenCalledTimes(1);
+  });
+
   it("wires Ctrl+Shift+S to shuffle and F8 to the queue toggle", () => {
     const ctx = makeCtx();
     renderHook(() => {

@@ -91,6 +91,17 @@ interface NowPlayingViewProps {
    * simply never auto-hides then).
    */
   onRevealChrome?: (() => void) | undefined;
+  /**
+   * The PiP window currently OWNS the native video surface. This window then
+   * has nothing to measure or show: the picture lives in another window, and
+   * mounting a second `VideoSurface` here would toggle the global
+   * `html.drplay-host-visible` class (that component has no owner guard on the
+   * root class), which App.css turns into "hide the sidebar and the content
+   * area" — the shell would ghost out behind an overlay that is only a
+   * placeholder. So the view paints a black panel instead of the surface and
+   * never punches the host hole in its background layer.
+   */
+  isPipActive?: boolean;
 }
 
 export const NowPlayingView = memo(function NowPlayingView({
@@ -111,6 +122,7 @@ export const NowPlayingView = memo(function NowPlayingView({
   onOpenVideoMenuAt,
   chromeVisible = true,
   onRevealChrome,
+  isPipActive = false,
 }: NowPlayingViewProps) {
   const { t } = useTranslation();
 
@@ -162,14 +174,15 @@ export const NowPlayingView = memo(function NowPlayingView({
     setIsEnded(false);
   }, [currentTrackId]);
 
-  const showVideoHost = shouldShowVideoHost({
-    hasTrack: currentTrack !== null,
-    isVideo: isVideoTrack,
-    isOpen,
-    isShellLocked,
-    hasError: errorInfo !== null,
-    hasEnded: isEnded,
-  });
+  const showVideoHost =
+    shouldShowVideoHost({
+      hasTrack: currentTrack !== null,
+      isVideo: isVideoTrack,
+      isOpen,
+      isShellLocked,
+      hasError: errorInfo !== null,
+      hasEnded: isEnded,
+    }) && !isPipActive;
 
   // Has the render thread presented a frame of THIS media load yet? Host
   // visibility cannot answer that — it flips when a track is SELECTED, which is
@@ -400,24 +413,38 @@ export const NowPlayingView = memo(function NowPlayingView({
               so the bar and the audio layout are untouched. */}
           <div
             data-testid="video-area"
-            className="flex-1 min-h-0 w-full flex items-center justify-center"
+            className={`flex-1 min-h-0 w-full flex items-center justify-center${
+              isPipActive ? " bg-black" : ""
+            }`}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              // While PiP owns the surface there is no picture in this window,
+              // so a video menu anchored here would act on nothing.
+              if (isPipActive) return;
               onOpenVideoMenuAt?.(e.clientX, e.clientY);
             }}
           >
-            <VideoSurface
-              fill
-              active={showVideoHost}
-              hasFirstFrame={hasVideoFrame}
-              fullscreen={isFullscreen}
-              isPlaying={isPlaying}
-              isBuffering={isBuffering}
-              isDownloading={isDownloading}
-              hasError={errorInfo !== null}
-              isEnded={isEnded}
-            />
+            {isPipActive ? (
+              /* The picture is in the PiP window; this window only gets a
+                 neutral placeholder. No VideoSurface: a second instance would
+                 flip the global host-visible class and blank the shell. */
+              <p className="max-w-xs px-4 text-center text-[22px] text-white/80">
+                {t("player.pip.playing_in_pip")}
+              </p>
+            ) : (
+              <VideoSurface
+                fill
+                active={showVideoHost}
+                hasFirstFrame={hasVideoFrame}
+                fullscreen={isFullscreen}
+                isPlaying={isPlaying}
+                isBuffering={isBuffering}
+                isDownloading={isDownloading}
+                hasError={errorInfo !== null}
+                isEnded={isEnded}
+              />
+            )}
           </div>
           <VideoPlayerBar
             currentTrack={currentTrack}

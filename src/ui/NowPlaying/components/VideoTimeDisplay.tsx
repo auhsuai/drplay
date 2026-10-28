@@ -124,7 +124,7 @@ export function VideoTimeDisplay({
   return (
     <span
       data-testid="video-time-display"
-      className="text-xs text-gray-500 tabular-nums whitespace-nowrap shrink-0"
+      className="text-[14px] text-gray-500 tabular-nums whitespace-nowrap shrink-0"
     >
       {formatTime(clock.currentTime)} /{" "}
       {clock.duration > 0 ? formatTime(clock.duration) : "--:--"}

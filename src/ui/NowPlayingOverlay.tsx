@@ -28,6 +28,8 @@ interface NowPlayingOverlayProps {
   chromeVisible?: boolean | undefined;
   /** Player activity inside the video area reveals the chrome. */
   onRevealChrome?: (() => void) | undefined;
+  /** The PiP window owns the native video surface (see NowPlayingView). */
+  isPipActive?: boolean;
 }
 
 export function NowPlayingOverlay({
@@ -48,6 +50,7 @@ export function NowPlayingOverlay({
   onOpenVideoMenuAt,
   chromeVisible,
   onRevealChrome,
+  isPipActive = false,
 }: NowPlayingOverlayProps) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const animRef = useRef<Animation | null>(null);
@@ -143,7 +146,9 @@ export function NowPlayingOverlay({
 
   useLayoutEffect(
     () => () => {
-      animRef.current?.oncancel?.(undefined as unknown as AnimationPlaybackEvent);
+      animRef.current?.oncancel?.(
+        undefined as unknown as AnimationPlaybackEvent,
+      );
       animRef.current = null;
     },
     [],
@@ -183,6 +188,7 @@ export function NowPlayingOverlay({
         onOpenVideoMenuAt={onOpenVideoMenuAt}
         chromeVisible={chromeVisible}
         onRevealChrome={onRevealChrome}
+        isPipActive={isPipActive}
       />
     </div>
   );

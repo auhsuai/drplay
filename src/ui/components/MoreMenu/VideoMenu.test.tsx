@@ -35,6 +35,7 @@ vi.mock("react-i18next", () => ({
 
 import { VideoMenu } from "./VideoMenu";
 import { MENU_ITEM_BASE_CLASS } from "./constants";
+import { MENU_IDS } from "../../../player/menuModel";
 
 /**
  * jsdom implements no matchMedia, so the video menu reads it once to decide
@@ -256,6 +257,26 @@ describe("VideoMenu rendering (DrPlay design system)", () => {
     // Play (a PLAYER_* command id) and Audio (a section id) are not.
     expect(iconOf(/Play/)).toContain("lucide-play");
     expect(iconOf(/Audio/)).toContain("lucide-volume-2");
+  });
+
+  it("gives the PiP row its own glyph, not the default circle", () => {
+    // The row's id is the MENU-owned `menu:pip`, not the PLAYER_PIP_TOGGLE
+    // command id: mapping only the command left this row on the default
+    // `Circle`, which reads as an empty bullet next to real icons.
+    renderMenu({
+      entries: [
+        { kind: "item", id: MENU_IDS.pip, label: "Picture in Picture" },
+      ],
+    });
+
+    const icon = rowByLabel(rootMenu(), /Picture in Picture/).querySelector(
+      "svg",
+    );
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute("class")).toContain(
+      "lucide-picture-in-picture-2",
+    );
+    expect(icon?.getAttribute("class")).not.toContain("lucide-circle");
   });
 
   it("falls back to a default icon for an id the map does not know", () => {

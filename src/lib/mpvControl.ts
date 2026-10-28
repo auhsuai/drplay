@@ -55,6 +55,7 @@ export {
   getDeinterlace,
   getSpeed,
   getSubDelay,
+  getVideoAspect,
   getVideoDimensions,
   getVideoZoom,
   resetAudioDelay,

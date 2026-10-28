@@ -8,8 +8,14 @@ vi.mock("react-i18next", () => ({
 }));
 
 // The view drags AudioController/store/metadata fetching — out of scope here.
+const viewMocks = vi.hoisted(() => ({
+  props: { value: null as Record<string, unknown> | null },
+}));
 vi.mock("./NowPlaying/NowPlayingView", () => ({
-  NowPlayingView: () => <div data-testid="now-playing-view-stub" />,
+  NowPlayingView: (props: Record<string, unknown>) => {
+    viewMocks.props.value = props;
+    return <div data-testid="now-playing-view-stub" />;
+  },
 }));
 
 function baseProps() {
@@ -293,5 +299,19 @@ describe("overlay -> VideoSurface rect sync bridge", () => {
     expect(cancelEvents.length).toBeGreaterThanOrEqual(1);
 
     dispatchSpy.mockRestore();
+  });
+});
+
+describe("NowPlayingOverlay forwards the PiP surface ownership", () => {
+  it("passes isPipActive down to NowPlayingView", () => {
+    render(<NowPlayingOverlay {...baseProps()} isOpen isPipActive />);
+
+    expect(viewMocks.props.value?.["isPipActive"]).toBe(true);
+  });
+
+  it("defaults isPipActive to false when the caller omits it", () => {
+    render(<NowPlayingOverlay {...baseProps()} isOpen />);
+
+    expect(viewMocks.props.value?.["isPipActive"]).toBe(false);
   });
 });

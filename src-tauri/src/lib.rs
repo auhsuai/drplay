@@ -28,6 +28,7 @@ mod context_menu;
 #[cfg(windows)]
 mod webview_keys;
 mod pip_window;
+mod pip_window_aspect;
 mod stream_proxy;
 mod path_scope;
 
@@ -60,6 +61,38 @@ fn pip_window_hwnd_cmd(app: tauri::AppHandle) -> i64 {
 #[tauri::command]
 fn pip_window_close_cmd(app: tauri::AppHandle) {
     close_pip_window(&app);
+}
+
+/// Install the native keyboard policy (browser-accelerator off + per-key
+/// lever) on the PiP webview. Called once by `PipWindowView` when it mounts,
+/// because that window is created from JS and never passes through `setup`.
+///
+/// Without it the PiP webview keeps WebView2's default accelerator set: Ctrl+P
+/// there opens the PRINT DIALOG before the page ever sees the key.
+#[cfg(windows)]
+#[tauri::command]
+fn pip_install_keys_cmd(app: tauri::AppHandle) {
+    pip_window::install_pip_keys(&app);
+}
+
+/// Lock the PiP client area to a video aspect ratio (`width / height`).
+///
+/// There is no `setAspectRatio` in Tauri 2.12.4 nor in `@tauri-apps/api`, so the
+/// constraint lives in a `WM_SIZING` subclass on the top-level PiP HWND (see
+/// `pip_window_aspect`). Called by the PiP view whenever the loaded video's
+/// dimensions are known, and again when the video changes — repeating the call
+/// only updates the ratio, it never chains a second WndProc.
+#[cfg(windows)]
+#[tauri::command]
+fn pip_set_aspect_cmd(app: tauri::AppHandle, aspect: f64) -> Result<(), String> {
+    pip_window_aspect::install(&app, aspect)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+#[allow(dead_code)]
+fn pip_set_aspect_cmd(app: tauri::AppHandle, aspect: f64) -> Result<(), String> {
+    pip_window_aspect::install(&app, aspect)
 }
 
 #[cfg(windows)]
@@ -238,6 +271,18 @@ pub fn run() {
                 apply_window_activity_for_window(window, event);
             }
             tauri::WindowEvent::Destroyed => {
+                // The PiP webview owns its own accelerator handler; its token
+                // is useless once the window is gone, and dropping the slot is
+                // what lets a RE-CREATED PiP window install cleanly.
+                #[cfg(windows)]
+                if window.label() == "pip" {
+                    crate::webview_keys::uninstall_for(window.app_handle(), "pip");
+                    // Same lifecycle for the aspect lock: the ratio is stored per
+                    // window, so it must not leak into a re-created PiP window,
+                    // and putting the original WndProc back keeps the slot clean
+                    // for the next install.
+                    crate::pip_window_aspect::restore(window.app_handle());
+                }
                 // With minimize-to-tray disabled, closing the main window must
                 // not leave a lone PiP window as the only video surface: tear
                 // it down deterministically. A no-op when no PiP exists.
@@ -273,6 +318,8 @@ pub fn run() {
             #[cfg(windows)] show_context_menu,
             #[cfg(windows)] pip_window_hwnd_cmd,
             #[cfg(windows)] pip_window_close_cmd,
+            #[cfg(windows)] pip_install_keys_cmd,
+            #[cfg(windows)] pip_set_aspect_cmd,
             #[cfg(windows)] video_surface_retarget_to_pip_cmd,
             #[cfg(windows)] video_surface_retarget_to_main_cmd,
         ])
@@ -295,11 +342,11 @@ pub fn run() {
                 // this handler entirely are still covered by KILL_ON_JOB_CLOSE.
                 #[cfg(windows)]
                 mpv_kill_sync_best_effort(app_handle);
-                // Drop the native keyboard handler while the WebView still
-                // exists; the controller releases it on teardown anyway, but
-                // an explicit unsubscribe keeps one owner of the registration.
+                // Drop the native keyboard handlers while the WebViews still
+                // exist; the controllers release them on teardown anyway, but
+                // an explicit unsubscribe keeps one owner of each registration.
                 #[cfg(windows)]
-                webview_keys::uninstall(app_handle);
+                webview_keys::uninstall_all(app_handle);
                 // In-process engine counterpart: ordered destroy (event thread
                 // join + mpv_destroy). No-op when no engine was spawned.
                 #[cfg(windows)]

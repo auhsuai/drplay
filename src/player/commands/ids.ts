@@ -38,6 +38,7 @@ export const PLAYER_COMMAND_IDS = {
   PLAYER_MEDIA_INFO: "PLAYER_MEDIA_INFO",
   PLAYER_AB_LOOP: "PLAYER_AB_LOOP",
   PLAYER_QUEUE_TOGGLE: "PLAYER_QUEUE_TOGGLE",
+  PLAYER_PIP_TOGGLE: "PLAYER_PIP_TOGGLE",
   PLAYER_PLAYMODE_CYCLE: "PLAYER_PLAYMODE_CYCLE",
   PLAYER_SHUFFLE: "PLAYER_SHUFFLE",
 } as const;
@@ -73,6 +74,13 @@ export interface PlayerCommandContext {
    */
   onActivity?: (() => void) | undefined;
   enterPip?: () => void;
+  /**
+   * One chord, two directions (Ctrl+P): enters PiP when no PiP window owns the
+   * video, returns from it otherwise. Optional for the same reason as the rest
+   * of the surface — a test or a menu-only caller may have no PiP at all, and
+   * the command must then be a no-op instead of throwing.
+   */
+  togglePip?: () => void;
 }
 
 export interface PlayerCommand {

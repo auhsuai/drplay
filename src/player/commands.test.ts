@@ -107,6 +107,7 @@ describe("commands — shortcut map", () => {
     ["s", {}, PLAYER_COMMAND_IDS.PLAYER_STOP],
     ["S", {}, PLAYER_COMMAND_IDS.PLAYER_STOP],
     ["p", {}, PLAYER_COMMAND_IDS.PLAYER_PREVIOUS],
+    ["p", { ctrlKey: true }, PLAYER_COMMAND_IDS.PLAYER_PIP_TOGGLE],
     ["n", {}, PLAYER_COMMAND_IDS.PLAYER_NEXT],
     ["ArrowLeft", {}, PLAYER_COMMAND_IDS.PLAYER_SEEK_BACKWARD_5],
     [
@@ -122,11 +123,7 @@ describe("commands — shortcut map", () => {
     ],
     ["ArrowUp", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP],
     ["ArrowDown", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_DOWN],
-    [
-      "ArrowUp",
-      { shiftKey: true },
-      PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60,
-    ],
+    ["ArrowUp", { shiftKey: true }, PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60],
     [
       "ArrowDown",
       { shiftKey: true },
@@ -179,10 +176,16 @@ describe("commands — shortcut map", () => {
   });
 
   it("resolves every arrow chord to exactly one command at most", () => {
-    const chords: Array<[string, KeyboardEventInit, PlayerCommandId | undefined]> = [
+    const chords: Array<
+      [string, KeyboardEventInit, PlayerCommandId | undefined]
+    > = [
       ["ArrowUp", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP],
       ["ArrowUp", { ctrlKey: true }, PLAYER_COMMAND_IDS.PLAYER_VOLUME_UP],
-      ["ArrowUp", { shiftKey: true }, PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60],
+      [
+        "ArrowUp",
+        { shiftKey: true },
+        PLAYER_COMMAND_IDS.PLAYER_SEEK_FORWARD_60,
+      ],
       ["ArrowUp", { ctrlKey: true, shiftKey: true }, undefined],
       ["ArrowUp", { ctrlKey: true, altKey: true }, undefined],
       ["ArrowDown", {}, PLAYER_COMMAND_IDS.PLAYER_VOLUME_DOWN],
@@ -198,8 +201,16 @@ describe("commands — shortcut map", () => {
         { ctrlKey: true, altKey: true },
         PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_RESET,
       ],
-      ["ArrowLeft", { ctrlKey: true, altKey: true }, PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_DOWN],
-      ["ArrowRight", { ctrlKey: true, altKey: true }, PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_UP],
+      [
+        "ArrowLeft",
+        { ctrlKey: true, altKey: true },
+        PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_DOWN,
+      ],
+      [
+        "ArrowRight",
+        { ctrlKey: true, altKey: true },
+        PLAYER_COMMAND_IDS.PLAYER_AUDIO_DELAY_UP,
+      ],
     ];
 
     for (const [key, init, expected] of chords) {
@@ -230,6 +241,23 @@ describe("commands — shortcut map", () => {
     expect(idFor("s", { ctrlKey: true, shiftKey: true })).toBe(
       PLAYER_COMMAND_IDS.PLAYER_SHUFFLE,
     );
+  });
+
+  it("distinguishes Ctrl+P (PiP toggle) from plain P (previous) and keeps Meta+P unbound", () => {
+    expect(idFor("p", { ctrlKey: true })).toBe(
+      PLAYER_COMMAND_IDS.PLAYER_PIP_TOGGLE,
+    );
+    expect(idFor("p")).toBe(PLAYER_COMMAND_IDS.PLAYER_PREVIOUS);
+    // Both matchers must stay disjoint: noModifiers rejects Ctrl, and the
+    // PiP matcher rejects Shift/Meta/Alt (Meta+P must stay unbound — the
+    // contract `commandModifier` would have broken by accepting metaKey).
+    expect(idFor("p", { ctrlKey: true, shiftKey: true })).toBeUndefined();
+    expect(idFor("p", { metaKey: true })).toBeUndefined();
+    expect(
+      PLAYER_COMMANDS.filter((command) =>
+        command.match(keyEvent("p", { ctrlKey: true })),
+      ),
+    ).toHaveLength(1);
   });
 
   it("leaves PLAYER_PLAYMODE_CYCLE without a keyboard binding (spec: F8 = queue)", () => {
@@ -332,6 +360,7 @@ describe("commands — shortcut map", () => {
     );
     expect(shortcutFor(PLAYER_COMMAND_IDS.PLAYER_QUEUE_TOGGLE)).toBe("F8");
     expect(shortcutFor(PLAYER_COMMAND_IDS.PLAYER_SHUFFLE)).toBe("Ctrl+Shift+S");
+    expect(shortcutFor(PLAYER_COMMAND_IDS.PLAYER_PIP_TOGGLE)).toBe("Ctrl+P");
   });
 });
 
@@ -420,6 +449,21 @@ describe("commands — run() behavior", () => {
 
     await runCommand(PLAYER_COMMAND_IDS.PLAYER_PLAYMODE_CYCLE, ctx);
     expect(ctx.togglePlayMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("PIP_TOGGLE delegates to ctx.togglePip and tolerates a context without it", async () => {
+    const ctx = makeCtx();
+    const togglePip = vi.fn();
+    await runCommand(PLAYER_COMMAND_IDS.PLAYER_PIP_TOGGLE, {
+      ...ctx,
+      togglePip,
+    });
+    expect(togglePip).toHaveBeenCalledTimes(1);
+
+    // The field is optional: surfaces/tests that never wire PiP must not throw.
+    await expect(
+      runCommand(PLAYER_COMMAND_IDS.PLAYER_PIP_TOGGLE, makeCtx()),
+    ).resolves.toBeUndefined();
   });
 
   it("SHUFFLE toggles playMode between shuffle and normal via ctx.setPlayMode", async () => {

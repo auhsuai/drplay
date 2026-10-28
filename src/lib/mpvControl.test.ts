@@ -6,10 +6,23 @@ const tauriMocks = vi.hoisted(() => ({
   join: vi.fn(),
 }));
 
+// `getVideoAspect` degrades instead of throwing, so its only signal that a rung
+// failed is this warn. Mocked (not silenced) so the failure path is ASSERTED:
+// the real `captureError` writes to Dexie, which jsdom has no IndexedDB for.
+const errorLogMocks = vi.hoisted(() => ({
+  captureError: vi.fn((...args: [unknown]) => {
+    void args;
+    return Promise.resolve();
+  }),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
 vi.mock("@tauri-apps/api/path", () => ({
   pictureDir: tauriMocks.pictureDir,
   join: tauriMocks.join,
+}));
+vi.mock("../utils/errorLog", () => ({
+  captureError: errorLogMocks.captureError,
 }));
 
 import {
@@ -35,6 +48,7 @@ import {
   getSubDelay,
   getSubtitleVisibility,
   getTrackList,
+  getVideoAspect,
   getVideoDimensions,
   nextTrackId,
   resetSubDelay,
@@ -75,6 +89,16 @@ function lastMpvCommand(): unknown {
   return mpvCalls[mpvCalls.length - 1]?.[1]?.cmd;
 }
 
+/** Property names requested through `mpv_get_property`, in call order. */
+function requestedProperties(): string[] {
+  const calls = tauriMocks.invoke.mock.calls as unknown as Array<
+    [string, { prop?: string } | undefined]
+  >;
+  return calls
+    .filter((call) => call[0] === "mpv_get_property")
+    .map((call) => call[1]?.prop ?? "");
+}
+
 function audioTrack(overrides: Partial<MpvTrack> = {}): MpvTrack {
   return {
     id: 1,
@@ -91,6 +115,7 @@ beforeEach(() => {
   tauriMocks.invoke.mockReset();
   tauriMocks.pictureDir.mockReset();
   tauriMocks.join.mockReset();
+  errorLogMocks.captureError.mockClear();
   mockPropertyGet({});
 });
 
@@ -288,6 +313,115 @@ describe("mpvControl — property/command facade", () => {
 
     mockPropertyGet({});
     expect(await getVideoDimensions()).toEqual({ width: 0, height: 0 });
+  });
+
+  /**
+   * `getVideoAspect` feeds the PiP window-resize path, so it is a ladder:
+   * `video-params/aspect` -> `dwidth`/`dheight` -> `width`/`height` -> 0. These
+   * tests pin each rung AND that the ladder short-circuits, because a getter
+   * that always read everything would work but would burn three extra IPC
+   * round-trips on the hot path.
+   *
+   * `mockPropertyGet` RESOLVES `null` for a key that is not in the object (it
+   * does not reject), so "absent" here means "mpv has no value", which is
+   * exactly the real missing-property shape.
+   */
+  describe("getVideoAspect fallback ladder", () => {
+    it("prefers video-params/aspect and stops there", async () => {
+      mockPropertyGet({ "video-params/aspect": 1.85 });
+
+      expect(await getVideoAspect()).toBe(1.85);
+      // The proof that it short-circuits: no dwidth/dheight/width/height read.
+      expect(requestedProperties()).toEqual(["video-params/aspect"]);
+    });
+
+    it("falls back to dwidth/dheight when the aspect is absent", async () => {
+      mockPropertyGet({ dwidth: 1920, dheight: 800 });
+
+      expect(await getVideoAspect()).toBe(2.4);
+      expect(requestedProperties()).toEqual([
+        "video-params/aspect",
+        "dwidth",
+        "dheight",
+      ]);
+      expect(requestedProperties()).not.toContain("width");
+      expect(requestedProperties()).not.toContain("height");
+    });
+
+    it("falls back to the raw pair when the display pair is absent", async () => {
+      mockPropertyGet({ width: 1920, height: 1080 });
+
+      expect(await getVideoAspect()).toBe(16 / 9);
+      expect(requestedProperties()).toEqual([
+        "video-params/aspect",
+        "dwidth",
+        "dheight",
+        "width",
+        "height",
+      ]);
+    });
+
+    it("ignores an unusable video-params/aspect and moves down the ladder", async () => {
+      // mpv reports "no" for an unset property; 0 / negative / NaN are the
+      // other shapes a double can arrive in. None may be returned as-is.
+      for (const bad of [0, -1.85, Number.NaN, "1.85", true]) {
+        tauriMocks.invoke.mockClear();
+        errorLogMocks.captureError.mockClear();
+        mockPropertyGet({
+          "video-params/aspect": bad,
+          dwidth: 1920,
+          dheight: 800,
+        });
+
+        expect(await getVideoAspect()).toBe(2.4);
+      }
+    });
+
+    it("uses the display size for an anamorphic source, not the raw size", async () => {
+      // THIS is the whole reason the ladder is ordered this way: a 1440x1080
+      // 4:3 STORAGE frame that is displayed as 1920x1080. Sizing the PiP window
+      // from the raw pair would give 4:3 and mpv would letterbox a 16:9 picture.
+      mockPropertyGet({
+        "video-params/aspect": null,
+        dwidth: 1920,
+        dheight: 1080,
+        width: 1440,
+        height: 1080,
+      });
+
+      expect(await getVideoAspect()).toBe(16 / 9);
+    });
+
+    it("returns 0 when nothing is known", async () => {
+      mockPropertyGet({});
+
+      const aspect = await getVideoAspect();
+      // 0, not NaN: the caller's guard is `finite && > 0`, and NaN would make
+      // every comparison false while still looking like a number to a log.
+      expect(aspect).toBe(0);
+      expect(Number.isNaN(aspect)).toBe(false);
+    });
+
+    it("skips a rung whose height is 0 instead of dividing by it", async () => {
+      mockPropertyGet({ dwidth: 1920, dheight: 0, width: 1920, height: 1080 });
+
+      expect(await getVideoAspect()).toBe(16 / 9);
+    });
+
+    it("never rethrows when a property read rejects", async () => {
+      // The caller is a window-resize path inside a video player: a dead mpv
+      // bridge must degrade the ratio, never break PiP.
+      tauriMocks.invoke.mockRejectedValue(new Error("ipc down"));
+
+      await expect(getVideoAspect()).resolves.toBe(0);
+      // The degrade is reported, not swallowed silently (Luật 4).
+      expect(errorLogMocks.captureError).toHaveBeenCalled();
+      const first = errorLogMocks.captureError.mock.calls[0]?.[0] as
+        { level?: string; kind?: string; source?: string } | undefined;
+      expect(first?.level).toBe("warn");
+      expect(first?.kind).toBe("video-params/aspect");
+      expect(first?.source).toBe("mpvControl/videoControls");
+    });
   });
 
   it("getSubtitleVisibility reads sub-visibility, defaulting to false", async () => {

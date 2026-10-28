@@ -14,6 +14,7 @@ import {
   ListVideo,
   Maximize,
   MonitorPlay,
+  PictureInPicture2,
   Play,
   Ratio,
   Repeat,
@@ -64,11 +65,17 @@ const ICONS_BY_ID: Readonly<Record<string, LucideIcon>> = {
   [MENU_IDS.setB]: Flag,
   [MENU_IDS.clearAb]: Flag,
   [MENU_IDS.repeat]: Repeat,
+  // The context menu's PiP row is `menu:pip`, NOT the PLAYER_PIP_TOGGLE
+  // command id: `builders.ts` emits a menu-owned item and `dispatch.ts` routes
+  // it to `ctx.enterPip`. Without this entry the row falls through to the
+  // default glyph, which is why it used to render as an empty circle.
+  [MENU_IDS.pip]: PictureInPicture2,
   PLAYER_PLAY_PAUSE: Play,
   PLAYER_STOP: Square,
   PLAYER_NEXT: SkipForward,
   PLAYER_PREVIOUS: SkipBack,
   PLAYER_FULLSCREEN: Maximize,
+  PLAYER_PIP_TOGGLE: PictureInPicture2,
   PLAYER_MUTE: VolumeX,
   PLAYER_VOLUME_UP: Volume2,
   PLAYER_VOLUME_DOWN: Volume2,
