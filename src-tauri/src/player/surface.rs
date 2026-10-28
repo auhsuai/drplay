@@ -19,6 +19,23 @@ use super::render;
 const MAIN_WINDOW_LABEL: &str = "main";
 const PIP_WINDOW_LABEL: &str = "pip";
 
+/// Wire contract of the two retarget commands. [`RetargetOutcome::Retargeted`]
+/// is the ONLY value that may let the frontend treat the hand-off as done.
+///
+/// The render thread has three native end states, not two: the new target was
+/// built, the old target was rebuilt after a failed switch (`RolledBack`), or
+/// no target exists at all (`Detached`). The last two both leave the native
+/// owner on the PREVIOUS window, so they are not successes — but collapsing
+/// them into one opaque error hides which failure the frontend is recovering
+/// from (and `Detached` means there is no video output at all).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RetargetOutcome {
+    Retargeted,
+    RolledBack,
+    Detached,
+}
+
 /// Latest rect/visibility the frontend asked for, as the source of truth for
 /// engines created AFTER the request (the frontend acquires and sizes the
 /// surface before spawning). Recorded in PHYSICAL client-area px.
@@ -242,7 +259,10 @@ pub(crate) fn video_surface_set_visible_from(owner: &str, visible: bool) {
 /// Blocks for the acknowledged switch: the command wrappers call this on the
 /// blocking pool, never on the Tauri UI thread. `destination` is the Tauri
 /// window label that will own the surface; only "main" and "pip" are valid.
-pub(crate) fn video_surface_retarget(hwnd: usize, destination: &str) -> Result<(), String> {
+pub(crate) fn video_surface_retarget(
+    hwnd: usize,
+    destination: &str,
+) -> Result<RetargetOutcome, String> {
     let destination = match destination {
         MAIN_WINDOW_LABEL => MAIN_WINDOW_LABEL,
         PIP_WINDOW_LABEL => PIP_WINDOW_LABEL,
@@ -281,41 +301,62 @@ pub(crate) fn video_surface_retarget(hwnd: usize, destination: &str) -> Result<(
         (previous_label, previous)
     };
     match surface.retarget(hwnd, RETARGET_TIMEOUT) {
-        Ok(()) => {
+        Ok(RetargetOutcome::Retargeted) => {
             let mut owner = lock_surface_owner();
             owner.label = destination.to_string();
             owner.transitioning = false;
             log::info!("[player] video surface owner is now '{destination}'");
-            Ok(())
+            Ok(RetargetOutcome::Retargeted)
+        }
+        Ok(outcome) => {
+            // Rolled back or detached: the native owner stays the PREVIOUS
+            // window (a rebuilt target, or none at all), so the frontend keeps
+            // ownership where it is and gets to see WHICH failure this was.
+            restore_after_failed_retarget(&surface, previous_label, previous);
+            Ok(outcome)
         }
         Err(error) => {
-            let mut owner = lock_surface_owner();
-            owner.label = previous_label;
-            owner.transitioning = false;
-            {
-                let mut requests = lock_surface_requests();
-                *requests = previous;
-            }
-            // Best-effort replay onto the rolled-back pipeline. The frontend
-            // also re-sends when it reverts the surface owner, but this closes
-            // the gap (and covers a lost owner-changed event). On a timeout the
-            // render surface has already queued a compensating retarget BEHIND
-            // the stale switch, so these requests land after it in queue order.
-            // The owner lock stays held so a newer accepted request cannot be
-            // overwritten by this older stored one.
-            if let Some((x, y, w, h)) = previous.rect {
-                if let Err(rect_error) = surface.set_rect(x, y, w, h) {
-                    log::warn!("[player] restoring the pre-retarget rect failed: {rect_error}");
-                }
-            }
-            if previous.visible {
-                if let Err(visible_error) = surface.set_visible(true) {
-                    log::warn!(
-                        "[player] restoring the pre-retarget visibility failed: {visible_error}"
-                    );
-                }
-            }
+            // Timeout / disconnected: UNRESOLVED, never success. Same recovery
+            // as a typed failure, but the frontend gets the error instead.
+            restore_after_failed_retarget(&surface, previous_label, previous);
             Err(error.to_string())
+        }
+    }
+}
+
+/// Undo a retarget that did not land: put the owner back on the previous
+/// window, restore the stored requests and replay them onto the pipeline the
+/// render thread left behind. Shared by the two failure replies (typed outcome
+/// and `Err`) so the recovery cannot drift between them.
+///
+/// Best-effort replay: the frontend also re-sends when it reverts the surface
+/// owner, but this closes the gap (and covers a lost owner-changed event). On a
+/// timeout the render surface has already queued a compensating retarget BEHIND
+/// the stale switch, so these requests land after it in queue order. The owner
+/// lock stays held so a newer accepted request cannot be overwritten by this
+/// older stored one.
+fn restore_after_failed_retarget(
+    surface: &render::RenderSurface,
+    previous_label: String,
+    previous: SurfaceRequests,
+) {
+    let mut owner = lock_surface_owner();
+    owner.label = previous_label;
+    owner.transitioning = false;
+    {
+        let mut requests = lock_surface_requests();
+        *requests = previous;
+    }
+    if let Some((x, y, w, h)) = previous.rect {
+        if let Err(rect_error) = surface.set_rect(x, y, w, h) {
+            log::warn!("[player] restoring the pre-retarget rect failed: {rect_error}");
+        }
+    }
+    if previous.visible {
+        if let Err(visible_error) = surface.set_visible(true) {
+            log::warn!(
+                "[player] restoring the pre-retarget visibility failed: {visible_error}"
+            );
         }
     }
 }

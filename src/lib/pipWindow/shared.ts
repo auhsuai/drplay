@@ -76,6 +76,17 @@ export interface PipStatePayload {
   /** "Preparing to play" intent window — gates the PiP spinner exactly like
    *  the fullscreen transport surfaces (isDownloading || isBuffering). */
   isDownloading: boolean;
+  /**
+   * Stable identity of the current media (`Track.id`), `null` when no track is
+   * selected. Optional so every partial publish stays type-safe under
+   * `exactOptionalPropertyTypes`; the PiP view treats a missing field as
+   * "no identity", exactly like `null`.
+   *
+   * WHY it is here at all: the PiP window keys its aspect-ratio re-apply on the
+   * media identity, and title+duration cannot distinguish two different items
+   * that happen to share both.
+   */
+  trackId?: string | null;
 }
 
 export function describeError(error: unknown): string {

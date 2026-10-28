@@ -21,7 +21,34 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { PIP_EVENTS, type PipStatePayload } from "./lib/pipWindow";
+import {
+  getVideoHostOwner,
+  getVideoPresentationStatus,
+  setVideoHostOwner,
+  setVideoPresentationStatus,
+} from "./lib/videoHost";
 import { usePlayerStore } from "./store/playerStore";
+
+const RETARGET_TO_MAIN = "video_surface_retarget_to_main_cmd";
+const RETARGET_TO_PIP = "video_surface_retarget_to_pip_cmd";
+
+interface FakeTrack {
+  id: string;
+  title: string;
+  artist: string;
+  streamUrl: string;
+  originalName: string;
+}
+
+function fakeVideo(id = "video-1"): FakeTrack {
+  return {
+    id,
+    title: "Video",
+    artist: "Artist",
+    streamUrl: "stream",
+    originalName: "movie.mkv",
+  };
+}
 
 interface FakeTimeRanges {
   length: number;
@@ -56,22 +83,69 @@ const mocks = vi.hoisted(() => {
   // landed — and the player-ui bus must announce the latter.
   const engine = { volume: 0.5, muted: false };
 
+  // The ONE default IPC behaviour shared by every describe. Both surface
+  // hand-offs RESOLVE `"retargeted"` because that is the only success the new
+  // contract has: a bare `undefined` (the old default) is now an UNRESOLVED
+  // outcome, which would send every pre-existing test down the failure path.
+  // Everything else still resolves `undefined`, exactly as before.
+  const defaultInvoke = (command: string): Promise<unknown> => {
+    // Literals, not the module-scope constants: `vi.hoisted` runs before the
+    // module body, so anything declared below it would be in TDZ here.
+    return Promise.resolve<unknown>(
+      command === "video_surface_retarget_to_main_cmd" ||
+        command === "video_surface_retarget_to_pip_cmd"
+        ? "retargeted"
+        : undefined,
+    );
+  };
+
+  // Typed with the real call shape so `mock.calls[i][0]` is the command name:
+  // the PiP entry tests assert invocation ORDER across several `invoke` calls
+  // (mpv_spawn before the retarget), which requires reading the tuple.
+  const invoke = vi.fn((...args: [command: string, args?: unknown]) =>
+    defaultInvoke(args[0]),
+  );
+
+  // Mutable per-test player values: `isDownloading` is what the payload must
+  // mirror, the track must be a VIDEO so enterPip's guard lets us in, and
+  // `isPlaying` decides whether enterPip has to resume before handing over.
+  // `currentTrack` is explicitly nullable: "no track selected" is a real state
+  // the publisher has to represent (`trackId: null`).
+  const initialPlayer: {
+    isDownloading: boolean;
+    isPlaying: boolean;
+    currentTrack: {
+      id: string;
+      title: string;
+      artist: string;
+      streamUrl: string;
+      originalName: string;
+    } | null;
+  } = {
+    isDownloading: false,
+    isPlaying: true,
+    currentTrack: {
+      id: "video-1",
+      title: "Video",
+      artist: "Artist",
+      streamUrl: "stream",
+      originalName: "movie.mkv",
+    },
+  };
+
   return {
-    // Mutable per-test player values: `isDownloading` is what the payload must
-    // mirror, the track must be a VIDEO so enterPip's guard lets us in, and
-    // `isPlaying` decides whether enterPip has to resume before handing over.
+    defaultInvoke,
+    // Any describe that needs a clean slate uses this instead of `mockReset`,
+    // so a per-test `mockImplementation` cannot leak while the default keeps
+    // answering `"retargeted"` for the hand-offs.
+    resetInvoke: (): void => {
+      invoke.mockReset();
+      invoke.mockImplementation((...args: [command: string]) =>
+        defaultInvoke(args[0]),
+      );
+    },
     player: {
-      value: {
-        isDownloading: false,
-        isPlaying: true,
-        currentTrack: {
-          id: "video-1",
-          title: "Video",
-          artist: "Artist",
-          streamUrl: "stream",
-          originalName: "movie.mkv",
-        },
-      },
+      value: initialPlayer,
     },
     // Hoisted so a test can assert enterPip's resume decision; an inline vi.fn()
     // in the mock factory would be a fresh function on every render.
@@ -108,13 +182,7 @@ const mocks = vi.hoisted(() => {
       return Promise.resolve();
     }),
     listenHandlers: new Map<string, CapturedListen>(),
-    // Typed with the real call shape so `mock.calls[i][0]` is the command name:
-    // the PiP entry tests assert invocation ORDER across several `invoke` calls
-    // (mpv_spawn before the retarget), which requires reading the tuple.
-    invoke: vi.fn((...args: [command: string, args?: unknown]) => {
-      void args;
-      return Promise.resolve<unknown>(undefined);
-    }),
+    invoke,
     retryCurrentTrack: vi.fn(),
     // PlayerCommandContext is the only public seam that reaches enterPip; the
     // hook is stubbed to capture it (the real one only attaches keydown).
@@ -130,6 +198,10 @@ const mocks = vi.hoisted(() => {
       unminimize: vi.fn(() => Promise.resolve()),
       setFocus: vi.fn(() => Promise.resolve()),
     },
+    // Hoisted (not inline in the `./lib/pipWindow` factory) so a test can make
+    // the liveness poller believe the PiP window vanished and drive the REAL
+    // external-close recovery instead of a copy of it.
+    isPipWindowOpen: vi.fn(() => Promise.resolve(true)),
   };
 });
 
@@ -157,7 +229,7 @@ vi.mock("./lib/pipWindow", async (importOriginal) => {
     openPipWindowAndWaitReady: mocks.openPip,
     requestPipOwner: mocks.requestOwner,
     closePipWindow: mocks.closePip,
-    isPipWindowOpen: vi.fn(() => Promise.resolve(true)),
+    isPipWindowOpen: mocks.isPipWindowOpen,
     releasePipWindow: vi.fn(() => Promise.resolve(true)),
   };
 });
@@ -664,11 +736,357 @@ describe("pip-action closePip (background close)", () => {
 });
 
 /**
- * Ctrl+P is ONE chord with TWO directions. The command itself only calls
- * `ctx.togglePip`; the direction is decided in App from the same ref the
- * enter/return guards read. `enterPip` must stay "enter only" (the menu and
- * this same suite call it directly), so the toggle must not be folded into it.
+ * The native hand-off is not best-effort any more. Both Close and Return used
+ * to commit their end state (pause, owner → main, destroy the PiP window) even
+ * when the retarget had FAILED, which stranded the surface in a window that no
+ * longer existed: the user lost the picture and had nothing left to click.
+ *
+ * These tests pin the contract of the three resolved outcomes plus a rejection,
+ * and — most importantly — that a failed hand-off keeps a recovery surface AND
+ * releases the transition guard so the user can simply try again.
  */
+describe("PiP surface hand-off outcomes", () => {
+  /** What the mock answers for the to-main command. Mutable per attempt. */
+  let toMainOutcome: "retargeted" | "rolled_back" | "detached" | Error =
+    "retargeted";
+
+  function useHandoffMock(): void {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === RETARGET_TO_MAIN) {
+        return toMainOutcome instanceof Error
+          ? Promise.reject(toMainOutcome)
+          : Promise.resolve<unknown>(toMainOutcome);
+      }
+      return mocks.defaultInvoke(command);
+    });
+  }
+
+  beforeEach(() => {
+    mocks.emitTo.mockClear();
+    mocks.retryCurrentTrack.mockClear();
+    mocks.openPip.mockClear();
+    mocks.requestOwner.mockClear();
+    mocks.closePip.mockClear();
+    mocks.mainWindow.show.mockClear();
+    mocks.mainWindow.unminimize.mockClear();
+    mocks.mainWindow.setFocus.mockClear();
+    mocks.audio.pause.mockClear();
+    mocks.handleTogglePlay.mockClear();
+    mocks.listenHandlers.clear();
+    mocks.isPipWindowOpen.mockReset();
+    mocks.isPipWindowOpen.mockResolvedValue(true);
+    mocks.commandContext.value = null;
+    // Module-level mirrors are process-global process state — start each case
+    // from the same place enterPip leaves them.
+    setVideoHostOwner("main");
+    setVideoPresentationStatus("healthy");
+    usePlayerStore.setState({ isPlaying: true });
+    toMainOutcome = "retargeted";
+    mocks.resetInvoke();
+    useHandoffMock();
+    mocks.player.value = {
+      isDownloading: false,
+      isPlaying: true,
+      currentTrack: fakeVideo(),
+    };
+    mocks.audio.getBufferedImpl = () => bufferedRanges([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePlayerStore.setState({ isPlaying: false });
+  });
+
+  async function fireAction(action: string): Promise<void> {
+    const handler = mocks.listenHandlers.get(PIP_EVENTS.action);
+    if (handler === undefined) throw new Error("expected a pip-action handler");
+    await act(async () => {
+      handler({ payload: { action } });
+      await Promise.resolve();
+    });
+  }
+
+  function retargetOrder(): number | undefined {
+    const index = mocks.invoke.mock.calls.findIndex(
+      (call) => call[0] === RETARGET_TO_MAIN,
+    );
+    if (index < 0) return undefined;
+    return mocks.invoke.mock.invocationCallOrder[index];
+  }
+
+  it("A: a successful close retargets BEFORE pausing, then commits main", async () => {
+    toMainOutcome = "retargeted";
+    await activatePip();
+
+    await fireAction("closePip");
+    await waitFor(() => {
+      expect(mocks.closePip).toHaveBeenCalledTimes(1);
+    });
+
+    const handoffOrder = retargetOrder();
+    const pauseOrder = mocks.audio.pause.mock.invocationCallOrder[0];
+    if (handoffOrder === undefined || pauseOrder === undefined) {
+      throw new Error("expected both the hand-off and the pause to have run");
+    }
+    // The whole fix in one assertion: nothing is committed, stopped or torn
+    // down before the native side confirmed the switch.
+    expect(handoffOrder).toBeLessThan(pauseOrder);
+    expect(mocks.audio.pause).toHaveBeenCalledTimes(1);
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    expect(getVideoHostOwner()).toBe("main");
+    expect(getVideoPresentationStatus()).toBe("healthy");
+    // Close still leaves the main window exactly where the user left it.
+    expect(mocks.mainWindow.show).not.toHaveBeenCalled();
+    expect(mocks.mainWindow.unminimize).not.toHaveBeenCalled();
+    expect(mocks.mainWindow.setFocus).not.toHaveBeenCalled();
+  });
+
+  it("B: rolled back keeps the PiP window, playback and a healthy pipeline", async () => {
+    toMainOutcome = "rolled_back";
+    await activatePip();
+
+    await fireAction("closePip");
+    // Give the whole (failed) transaction a chance to run to completion.
+    await waitFor(() => {
+      expect(mocks.emitTo).toHaveBeenCalledWith("pip", "pip-surface-refresh");
+    });
+
+    expect(mocks.audio.pause).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(mocks.closePip).not.toHaveBeenCalled();
+    // The native side recreated the previous (PiP) target: still ours.
+    expect(getVideoHostOwner()).toBe("pip");
+    expect(getVideoPresentationStatus()).toBe("healthy");
+
+    // Guard released: the retry reaches the hand-off again and succeeds.
+    toMainOutcome = "retargeted";
+    await fireAction("closePip");
+    await waitFor(() => {
+      expect(mocks.closePip).toHaveBeenCalledTimes(1);
+    });
+    expect(getVideoHostOwner()).toBe("main");
+    expect(mocks.audio.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it("C: detached keeps the last confirmed owner and a retry recreates the hand-off", async () => {
+    toMainOutcome = "detached";
+    await activatePip();
+
+    await fireAction("closePip");
+    await waitFor(() => {
+      expect(getVideoPresentationStatus()).toBe("detached");
+    });
+
+    expect(getVideoHostOwner()).toBe("pip");
+    expect(mocks.closePip).not.toHaveBeenCalled();
+    expect(mocks.audio.pause).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+
+    toMainOutcome = "retargeted";
+    await fireAction("closePip");
+    await waitFor(() => {
+      expect(mocks.closePip).toHaveBeenCalledTimes(1);
+    });
+    expect(getVideoHostOwner()).toBe("main");
+    expect(getVideoPresentationStatus()).toBe("healthy");
+    expect(mocks.audio.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it("D: a REJECTED retarget is unresolved, and the next close retries", async () => {
+    toMainOutcome = new Error("retarget timed out after 5s");
+    await activatePip();
+
+    await fireAction("closePip");
+    await waitFor(() => {
+      expect(getVideoPresentationStatus()).toBe("unresolved");
+    });
+
+    // A rejection says nothing about who owns the surface, so nothing may be
+    // declared: no owner change, no teardown, no pause.
+    expect(getVideoHostOwner()).toBe("pip");
+    expect(mocks.closePip).not.toHaveBeenCalled();
+    expect(mocks.audio.pause).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+
+    toMainOutcome = "retargeted";
+    await fireAction("closePip");
+    await waitFor(() => {
+      expect(mocks.closePip).toHaveBeenCalledTimes(1);
+    });
+    expect(getVideoHostOwner()).toBe("main");
+  });
+
+  it("E: a failed return leaves the app in the background and retries cleanly", async () => {
+    toMainOutcome = new Error("render thread stopped");
+    await activatePip();
+
+    await fireAction("return");
+    await waitFor(() => {
+      expect(getVideoPresentationStatus()).toBe("unresolved");
+    });
+
+    // Bringing forward a window with no picture would be worse than staying.
+    expect(mocks.mainWindow.show).not.toHaveBeenCalled();
+    expect(mocks.mainWindow.unminimize).not.toHaveBeenCalled();
+    expect(mocks.mainWindow.setFocus).not.toHaveBeenCalled();
+    expect(mocks.closePip).not.toHaveBeenCalled();
+    expect(mocks.audio.pause).not.toHaveBeenCalled();
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+    expect(getVideoHostOwner()).toBe("pip");
+
+    toMainOutcome = "retargeted";
+    await fireAction("return");
+    await waitFor(() => {
+      expect(mocks.closePip).toHaveBeenCalledTimes(1);
+    });
+    expect(getVideoHostOwner()).toBe("main");
+    expect(getVideoPresentationStatus()).toBe("healthy");
+    expect(mocks.mainWindow.show).toHaveBeenCalledTimes(1);
+    expect(mocks.mainWindow.unminimize).toHaveBeenCalledTimes(1);
+    expect(mocks.mainWindow.setFocus).toHaveBeenCalledTimes(1);
+    // Return never pauses: the picture follows the user into the app.
+    expect(mocks.audio.pause).not.toHaveBeenCalled();
+  });
+
+  /**
+   * External close (the PiP window vanished: crash, Alt+F4 with a dead main,
+   * task manager). The liveness poller runs the recovery, which is the ONE
+   * hand-off whose `rolled_back` must NOT be reported as healthy: the native
+   * side recreated the PREVIOUS target, and that target is the PiP window that
+   * just disappeared — a surface presenting into a destroyed HWND works for
+   * nobody, exactly like `detached`. Reporting `healthy` there would claim a
+   * picture the user does not have.
+   *
+   * Driven through the real poller (`PIP_WINDOW_POLL_MS` = 1000ms) rather than
+   * a copy of the logic: only `isPipWindowOpen` is flipped to false.
+   */
+  it("external close: rolled_back reports as unresolved and never pauses", async () => {
+    toMainOutcome = "rolled_back";
+    await activatePip();
+
+    // The window is GONE from this point on; every poll tick sees it.
+    mocks.isPipWindowOpen.mockResolvedValue(false);
+
+    await waitFor(
+      () => {
+        expect(getVideoPresentationStatus()).toBe("unresolved");
+      },
+      { timeout: 3_000 },
+    );
+
+    // Recovery already runs with the window destroyed: nothing to pause, and
+    // nothing to close (the close path is for a window that still exists).
+    expect(mocks.closePip).not.toHaveBeenCalled();
+    expect(mocks.audio.pause).not.toHaveBeenCalled();
+    // The user is brought back to the app so the missing picture is visible
+    // there, and the owner is main (the recovery's existing behaviour).
+    expect(getVideoHostOwner()).toBe("main");
+    expect(mocks.mainWindow.show).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The PiP window keys its aspect re-apply on the media identity, so the
+ * publisher has to carry the STABLE id. Title+duration cannot tell two
+ * different items apart when they happen to match (same movie, two cuts).
+ */
+describe("publishPipState — trackId", () => {
+  const TRACK_ID_EVENT = PIP_EVENTS.state;
+
+  beforeEach(() => {
+    mocks.emitTo.mockClear();
+    mocks.retryCurrentTrack.mockClear();
+    mocks.openPip.mockClear();
+    mocks.requestOwner.mockClear();
+    mocks.closePip.mockClear();
+    mocks.listenHandlers.clear();
+    mocks.commandContext.value = null;
+    usePlayerStore.setState({ isPlaying: true });
+    mocks.resetInvoke();
+    mocks.player.value = {
+      isDownloading: false,
+      isPlaying: true,
+      currentTrack: fakeVideo("video-1"),
+    };
+    mocks.audio.getBufferedImpl = () => bufferedRanges([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePlayerStore.setState({ isPlaying: false });
+  });
+
+  function payloads(): PipStatePayload[] {
+    return mocks.emitTo.mock.calls
+      .filter((call) => call[0] === "pip" && call[1] === TRACK_ID_EVENT)
+      .map((call) => call[2] as PipStatePayload);
+  }
+
+  it("forwards the current track id", async () => {
+    await activatePip();
+    await waitFor(() => {
+      expect(lastStatePayload().trackId).toBe("video-1");
+    });
+  });
+
+  it("carries the NEW id after the current track changes", async () => {
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(mocks.commandContext.value).not.toBeNull();
+    });
+    const context = mocks.commandContext.value;
+    if (context === null) throw new Error("expected player command context");
+    await act(async () => {
+      (context["enterPip"] as () => void)();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(payloads().length).toBeGreaterThan(0);
+    });
+
+    mocks.player.value.currentTrack = fakeVideo("video-2");
+    act(() => {
+      view.rerender(<App />);
+    });
+
+    // The hook republishes because `publishPipState`'s identity changes with
+    // `currentTrack`; real timers, so `waitFor` is the right gate.
+    await waitFor(() => {
+      expect(lastStatePayload().trackId).toBe("video-2");
+    });
+  });
+
+  it("publishes trackId: null when no track is selected", async () => {
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(mocks.commandContext.value).not.toBeNull();
+    });
+    const context = mocks.commandContext.value;
+    if (context === null) throw new Error("expected player command context");
+    await act(async () => {
+      (context["enterPip"] as () => void)();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(lastStatePayload().trackId).toBe("video-1");
+    });
+
+    mocks.player.value.currentTrack = null;
+    // The mock is only an input to `usePlayer`, so the OLD track keeps being
+    // published until App actually re-renders with the new value. Firing the
+    // listener without this rerender would assert against a stale payload.
+    act(() => {
+      view.rerender(<App />);
+    });
+
+    await waitFor(() => {
+      const nullPayload = payloads().find((entry) => entry.trackId === null);
+      expect(nullPayload).toBeDefined();
+      expect(nullPayload?.hasTrack).toBe(false);
+    });
+  });
+});
+
 describe("Ctrl+P togglePip (player command context)", () => {
   beforeEach(() => {
     mocks.emitTo.mockClear();
@@ -756,9 +1174,9 @@ describe("enterPip spawns the engine before retargeting", () => {
     mocks.requestOwner.mockClear();
     mocks.closePip.mockClear();
     // mockReset (not mockClear) so a per-test mockImplementation — including a
-    // rejecting one — can never leak into the next test.
-    mocks.invoke.mockReset();
-    mocks.invoke.mockImplementation(() => Promise.resolve<unknown>(undefined));
+    // rejecting one — can never leak into the next test; the reset restores the
+    // shared default, which resolves the hand-offs to `"retargeted"`.
+    mocks.resetInvoke();
     mocks.listenHandlers.clear();
     mocks.commandContext.value = null;
     mocks.handleTogglePlay.mockClear();
@@ -800,7 +1218,7 @@ describe("enterPip spawns the engine before retargeting", () => {
     await callEnterPip();
 
     const spawnOrder = orderOf("mpv_spawn");
-    const retargetOrder = orderOf("video_surface_retarget_to_pip_cmd");
+    const retargetOrder = orderOf(RETARGET_TO_PIP);
     if (spawnOrder === undefined) {
       throw new Error(
         "expected enterPip to spawn the engine before retargeting",
@@ -828,7 +1246,7 @@ describe("enterPip spawns the engine before retargeting", () => {
       if (command === "mpv_spawn") {
         return Promise.reject(new Error("engine boot refused"));
       }
-      return Promise.resolve<unknown>(undefined);
+      return mocks.defaultInvoke(command);
     });
 
     // Must not throw out of enterPip.
@@ -839,7 +1257,7 @@ describe("enterPip spawns the engine before retargeting", () => {
     await waitFor(() => {
       expect(mocks.openPip).toHaveBeenCalledTimes(1);
     });
-    expect(orderOf("video_surface_retarget_to_pip_cmd")).toBeDefined();
+    expect(orderOf(RETARGET_TO_PIP)).toBeDefined();
     expect(mocks.closePip).not.toHaveBeenCalled();
   });
 });

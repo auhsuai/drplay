@@ -443,7 +443,7 @@ export function usePipWindowBridge(): PipWindowBridge {
 export interface PipAspectLockInput {
   hasTrack: boolean;
   isVideo: boolean;
-  /** Media identity approximation: title + duration + the two gates. */
+  /** Media identity: stable track id + title + duration + the two gates. */
   aspectKey: string;
 }
 

@@ -31,6 +31,7 @@ pub(crate) use surface::{
     replay_surface_after_fallback, video_surface_acquire, video_surface_first_frame_presented,
     video_surface_retarget, video_surface_set_rect_from, video_surface_set_visible_from,
 };
+pub(crate) use surface::RetargetOutcome;
 
 #[cfg(test)]
 use engine_mode::{preferred_engine_from, startup_engine};

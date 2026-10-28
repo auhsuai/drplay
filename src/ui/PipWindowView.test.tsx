@@ -192,6 +192,7 @@ const BASE_STATE: PipStatePayload = {
   hasEnded: false,
   buffered: [],
   isDownloading: false,
+  trackId: "video-1",
 };
 
 /**
@@ -232,7 +233,12 @@ async function mountView(): Promise<ReturnType<typeof render>> {
 }
 
 /** Drive the real `pip-state` listener, exactly as the IPC bridge would. */
-async function publish(overrides: Partial<PipStatePayload>): Promise<void> {
+type StateOverride = Omit<Partial<PipStatePayload>, "trackId"> & {
+  /** Explicit `undefined` is the "field absent" case older publishes have. */
+  trackId?: string | null | undefined;
+};
+
+async function publish(overrides: StateOverride): Promise<void> {
   const handler = mocks.listenHandlers.get(PIP_EVENTS.state);
   if (handler === undefined) throw new Error("expected a pip-state listener");
   await act(async () => {
@@ -883,8 +889,8 @@ describe("PipWindowView aspect lock", () => {
 
   it("re-applies when the loaded media changes", async () => {
     await mountView();
-    // PipStatePayload carries no track id, so the trigger key is the set of
-    // fields that move on a track switch: title + duration (+ the gates).
+    // Title + duration move on a track switch, so they are the closest thing
+    // to an identity when the payload carries no id.
     await publish({ title: "First video", duration: 120 });
     await settle();
     expect(mocks.setSize).toHaveBeenCalledTimes(1);
@@ -894,5 +900,84 @@ describe("PipWindowView aspect lock", () => {
 
     expect(mocks.setSize).toHaveBeenCalledTimes(2);
     expect(aspectInvocations()).toHaveLength(2);
+  });
+
+  it("F: re-applies for two different items with IDENTICAL title and duration", async () => {
+    await mountView();
+    // Same metadata, different media — e.g. a movie and its director's cut.
+    // Title+duration alone made this key collide and the new video kept the
+    // old ratio locked; the stable track id is what separates them.
+    await publish({ trackId: "a", title: "Same", duration: 120 });
+    await settle();
+    expect(aspectInvocations()).toHaveLength(1);
+    expect(mocks.setSize).toHaveBeenCalledTimes(1);
+
+    await publish({ trackId: "b", title: "Same", duration: 120 });
+    await settle();
+
+    expect(aspectInvocations()).toHaveLength(2);
+    expect(mocks.setSize).toHaveBeenCalledTimes(2);
+  });
+
+  it("G: ordinary playback updates of the SAME item do not re-apply", async () => {
+    await mountView();
+    // The identity fields are carried by EVERY publish below: a real publisher
+    // rebuilds the payload from the same track, so title/duration hold steady
+    // for one item. Dropping back to BASE_STATE here would change the title
+    // and prove nothing about time/buffer traffic.
+    const SAME_ITEM = { trackId: "a", title: "Same", duration: 120 };
+    await publish(SAME_ITEM);
+    await settle();
+    expect(aspectInvocations()).toHaveLength(1);
+
+    // Every field the poller churns (~4x/s) while one video plays. None of
+    // them is media identity, so the window must not be resized again — that
+    // would fight a user's manual resize several times a second.
+    for (const patch of [
+      { currentTime: 10 },
+      { isBuffering: true },
+      { volume: 0.3 },
+      { isMuted: true },
+      { isPlaying: true },
+      { buffered: [{ start: 0, end: 10 }] },
+      { isDownloading: true },
+    ] as StateOverride[]) {
+      await publish({ ...SAME_ITEM, ...patch });
+    }
+    await settle();
+
+    expect(aspectInvocations()).toHaveLength(1);
+    // The updates really did arrive (the listener is not silently dead).
+    expect(screen.getByTestId("pip-controls")).toBeTruthy();
+  });
+
+  it("H: missing identity still renders and keeps the media gates", async () => {
+    await mountView();
+    // Older/partial publishes carry no id at all. The view must render, and
+    // the gates must still refuse a video-only apply for non-video media.
+    await publish({ trackId: null });
+    await settle();
+    expect(screen.getByTestId("pip-controls")).toBeTruthy();
+
+    await publish({ trackId: undefined });
+    await settle();
+    expect(screen.getByTestId("pip-controls")).toBeTruthy();
+
+    // Fresh mount: an audio track (and then no track) must never trigger the
+    // native aspect call, whatever the identity says.
+    cleanup();
+    mocks.invoke.mockClear();
+    mocks.setSize.mockClear();
+    mocks.listenHandlers.clear();
+    await mountView();
+    await publish({ trackId: null, hasTrack: false, isVideo: false });
+    await settle();
+    await publish({ trackId: undefined, hasTrack: true, isVideo: false });
+    await settle();
+    await publish({ trackId: "audio-1", hasTrack: true, isVideo: false });
+    await settle();
+
+    expect(aspectInvocations()).toEqual([]);
+    expect(mocks.setSize).not.toHaveBeenCalled();
   });
 });

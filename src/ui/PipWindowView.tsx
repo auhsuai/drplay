@@ -44,16 +44,18 @@ export function PipWindowView() {
   const currentTime = safeTime(state.currentTime);
   const duration = safeTime(state.duration);
 
-  // Trigger key for the aspect apply. `PipStatePayload` has no track id, so the
-  // media identity has to be approximated from the fields that DO move on a
-  // track switch. KNOWN LIMITATION: two different videos with the same title
-  // AND the same duration would not re-trigger. That is acceptable because the
-  // apply is also idempotent and cheap, and because the failure mode is only a
-  // stale ratio on a same-title same-length switch — the next media change
-  // fixes it. The proper fix is a trackId/mediaKey field on the payload.
+  // Trigger key for the aspect apply. `state.trackId` is the STABLE identity of
+  // the loaded media (`Track.id`), so two item-switches that happen to share a
+  // title and a duration are still distinguishable — title+duration alone
+  // silently skipped the re-apply for those and left the previous ratio locked
+  // on a differently-shaped video. Time/buffering/volume/play-state updates do
+  // not touch `trackId`, so the key stays identical while the same item plays
+  // and no re-apply is triggered by ordinary playback traffic. The two gates
+  // stay in the key because the apply is meaningful only for a loaded video.
   const aspectKey = [
     String(hasTrack),
     String(isVideo),
+    state.trackId ?? "",
     (state.title ?? "").trim(),
     String(duration),
   ].join("|");

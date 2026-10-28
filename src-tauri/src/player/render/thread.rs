@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::super::engine::EngineError;
+use super::super::surface::RetargetOutcome;
 use super::api::{
     error_message, MpvOpenglFbo, MpvOpenglInitParams, MpvRenderContext, MpvRenderParam,
     RenderApi, MPV_RENDER_PARAM_ADVANCED_CONTROL, MPV_RENDER_PARAM_API_TYPE,
@@ -530,6 +531,26 @@ fn apply_set_visible(state: &mut RenderThreadState, visible: bool) {
     }
 }
 
+/// What happened to the rollback attempt after a failed retarget create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RollbackResult {
+    Restored,
+    Failed,
+}
+
+/// Decide the typed outcome of a failed retarget from the two facts the render
+/// thread actually knows. Pure and GPU-free so the table is pinned by a unit
+/// test: only a rebuilt OLD target can present video again (`RolledBack`);
+/// anything else leaves `state.present = None` (`Detached`).
+pub(super) fn failure_outcome(old_hwnd: usize, rollback: RollbackResult) -> RetargetOutcome {
+    match (old_hwnd != 0, rollback) {
+        (true, RollbackResult::Restored) => RetargetOutcome::RolledBack,
+        // A failed rollback (and the no-previous-target case) leaves no
+        // pipeline behind: `state.present` is None either way.
+        _ => RetargetOutcome::Detached,
+    }
+}
+
 /// Reset the shared presentation diagnostics that describe the live pipeline's
 /// last applied geometry. A retarget drops that pipeline and both outcomes
 /// (success and rollback) restart hidden at rect 0,0,0,0, so the old numbers
@@ -567,7 +588,7 @@ fn clear_present_diagnostics(shared: &SharedState) {
 fn apply_retarget(
     state: &mut RenderThreadState,
     hwnd: usize,
-    reply: mpsc::Sender<Result<(), String>>,
+    reply: mpsc::Sender<RetargetOutcome>,
     shared: &SharedState,
 ) {
     let gl_width = state.gl_context.width();
@@ -599,9 +620,12 @@ fn apply_retarget(
             // the last frame is redrawn after the new owner shows it.
             state.needs_repaint = true;
             log::info!("[player] presentation retargeted to hwnd {hwnd}");
-            let _ = reply.send(Ok(()));
+            let _ = reply.send(RetargetOutcome::Retargeted);
         }
         Err(create_error) => {
+            // Exactly one native end state survives a failed create, decided
+            // by `failure_outcome` (single source of truth for the table).
+            let outcome;
             log::error!("[player] retarget to {hwnd} failed: {create_error}; attempting rollback to {old_hwnd}");
             if old_hwnd != 0 {
                 match PresentPipeline::new(old_hwnd, &state.gl_context, width, height) {
@@ -617,14 +641,14 @@ fn apply_retarget(
                         log::info!(
                             "[player] presentation rolled back to hwnd {old_hwnd}; the restored surface repaints on the next visible pump"
                         );
-                        let _ = reply.send(Err(create_error));
+                        outcome = failure_outcome(old_hwnd, RollbackResult::Restored);
                     }
                     Err(rollback_error) => {
                         log::error!(
                             "[player] LOUD: retarget to {hwnd} failed AND rollback to {old_hwnd} failed: {rollback_error}; presentation is detached (state.present = None), playback continues without video output"
                         );
                         state.present = None;
-                        let _ = reply.send(Err(format!("{create_error}; rollback failed: {rollback_error}")));
+                        outcome = failure_outcome(old_hwnd, RollbackResult::Failed);
                     }
                 }
             } else {
@@ -632,8 +656,9 @@ fn apply_retarget(
                     "[player] LOUD: retarget to {hwnd} failed with no previous target to roll back to: {create_error}; presentation stays detached (state.present = None)"
                 );
                 state.present = None;
-                let _ = reply.send(Err(create_error));
+                outcome = failure_outcome(old_hwnd, RollbackResult::Failed);
             }
+            let _ = reply.send(outcome);
         }
     }
 }

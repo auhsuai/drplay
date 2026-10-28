@@ -40,6 +40,8 @@ pub(crate) use shared::PixelSample;
 pub(crate) use surface::RENDER_THREAD_NAME;
 #[cfg(test)]
 pub(crate) use thread::requests::needs_size_sync;
+#[cfg(test)]
+use thread::{failure_outcome, RollbackResult};
 
 /// Initial FBO/texture size. The first real resize arrives from the surface
 /// rect pipeline in S3; until then this is the headless target size.

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Condvar, Mutex};
 
 use super::super::ffi;
+use super::super::surface::RetargetOutcome;
 
 // ---------------------------------------------------------------------------
 // Shared state: the only channel between callers, the update callback and the
@@ -21,11 +22,15 @@ pub(super) enum Request {
     /// Show/hide the composition content (`SetContent(surface | null)`).
     SetVisible { visible: bool },
     /// Retarget the composition presentation to a different HWND (pip <-> main).
-    /// Replaces the whole present pipeline on the render thread; replies with
-    /// success/failure for an acknowledged switch. A queued request is never
-    /// cancelled: a caller that timed out may enqueue a compensating retarget
-    /// behind it, and an undeliverable reply is ignored by the render thread.
-    Retarget { hwnd: usize, reply: mpsc::Sender<Result<(), String>> },
+    /// Replaces the whole present pipeline on the render thread and replies with
+    /// the TYPED outcome of the switch. The four native states collapse into
+    /// three outcomes: new pipeline built -> `Retargeted`, old pipeline rebuilt
+    /// -> `RolledBack`, neither -> `Detached`. A request is never cancelled: a
+    /// caller that timed out may enqueue a compensating retarget behind it, so
+    /// a timed-out request may still complete (the final native state is then
+    /// whatever the queued pair settles on), and an undeliverable reply is
+    /// ignored by the render thread.
+    Retarget { hwnd: usize, reply: mpsc::Sender<RetargetOutcome> },
 }
 
 /// One frame read back from the FBO by the render thread (RGBA8; GL row

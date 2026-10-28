@@ -4,9 +4,16 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import i18next from "i18next";
 
-import { setVideoHostOwner, type VideoHostOwner } from "../lib/videoHost";
+import {
+  setVideoHostOwner,
+  setVideoPresentationStatus,
+  type VideoHostOwner,
+  type VideoPresentationStatus,
+} from "../lib/videoHost";
 import {
   closePipWindow,
+  handoffSurfaceToMain,
+  handoffSurfaceToPip,
   isPipWindowOpen,
   openPipWindowAndWaitReady,
   requestPipOwner,
@@ -14,6 +21,7 @@ import {
   PIP_WINDOW_LABEL,
   type BufferedRangePayload,
   type PipActionEvent,
+  type PipHandoffResult,
   type PipStatePayload,
 } from "../lib/pipWindow";
 import { AudioController } from "../lib/AudioController";
@@ -59,6 +67,28 @@ function logPipError(
 function setPipHostOwner(owner: VideoHostOwner): void {
   setVideoHostOwner(owner);
   window.dispatchEvent(new Event(VIDEO_HOST_OWNER_CHANGED_EVENT));
+}
+
+/**
+ * Presentation status implied by one hand-off, from the only question that
+ * matters: is there a pipeline that currently presents?
+ *
+ * - `retargeted` → healthy (the requested window presents);
+ * - `rolled_back` → healthy as well: the PREVIOUS target was recreated, so the
+ *   pipeline the user was already watching still works. That is precisely why
+ *   a failed Close/Return is not a picture-loss event;
+ * - `detached` → detached, `unresolved` → unresolved.
+ *
+ * The ONE caller that must NOT use this is the external-close recovery
+ * (`recoverFromExternalPipClose`): the window those outcomes refer to is the
+ * one that just disappeared, so it maps explicitly and degrades `rolled_back`
+ * to `unresolved` instead of `healthy`. Do not "simplify" that call site back
+ * to this helper.
+ */
+function statusForHandoff(result: PipHandoffResult): VideoPresentationStatus {
+  if (result.kind === "detached") return "detached";
+  if (result.kind === "unresolved") return "unresolved";
+  return "healthy";
 }
 
 /**
@@ -143,6 +173,9 @@ export interface PipControllerDeps {
 export interface PipController {
   /** Mirror state — App truyền cho `NowPlayingOverlay isPipActive`. */
   isPipActive: boolean;
+  /** Whether a native presentation pipeline is known to exist (see
+   *  `VideoPresentationStatus`). Independent of the owner on purpose. */
+  presentationStatus: VideoPresentationStatus;
   /** Enter only, fire-and-forget (guard nội bộ). */
   enterPip: () => void;
   /** Trả về app: restore + focus + mở Now Playing. */
@@ -176,6 +209,15 @@ export function usePipController(deps: PipControllerDeps): PipController {
 
   const [isBuffering, setIsBuffering] = useState(false);
   const [hasEnded, setHasEnded] = useState(false);
+  /**
+   * Mirror of the module-level presentation status (lib/videoHost). The owner
+   * says who the surface was last CONFIRMED to belong to; this says whether a
+   * pipeline to that owner is known to exist. Kept as React state only so the
+   * value is observable/assertable and survives a re-render — every write goes
+   * through `commitPresentationStatus`, which updates both copies together.
+   */
+  const [presentationStatus, setPresentationStatus] =
+    useState<VideoPresentationStatus>("healthy");
   const [pipStateTrackId, setPipStateTrackId] = useState(currentTrack?.id);
   const [pipStateLoadNonce, setPipStateLoadNonce] = useState(loadNonce);
   if (pipStateTrackId !== currentTrack?.id || pipStateLoadNonce !== loadNonce) {
@@ -229,6 +271,19 @@ export function usePipController(deps: PipControllerDeps): PipController {
     isPipActiveRef.current = isPipActive;
   }, [isPipActive]);
 
+  /**
+   * Single writer for the presentation status: the React mirror and the
+   * module-level copy must never diverge, because the geometry code reads the
+   * module value synchronously (no render) while the UI/tests read this state.
+   */
+  const commitPresentationStatus = useCallback(
+    (status: VideoPresentationStatus) => {
+      setVideoPresentationStatus(status);
+      setPresentationStatus(status);
+    },
+    [],
+  );
+
   const publishPipState = useCallback(() => {
     const audio = AudioController.getInstance();
     const payload: PipStatePayload = {
@@ -245,6 +300,7 @@ export function usePipController(deps: PipControllerDeps): PipController {
       hasEnded,
       buffered: readPipBuffered(audio),
       isDownloading,
+      trackId: currentTrack?.id ?? null,
     };
     try {
       void emitTo(PIP_WINDOW_LABEL, PIP_EVENTS.state, payload).catch(
@@ -306,6 +362,9 @@ export function usePipController(deps: PipControllerDeps): PipController {
 
     pipTransitionRef.current = true;
     let retargetedToPip = false;
+    // Kept so the failure tail can report the HONEST pipeline status from the
+    // outcome that actually failed, instead of guessing from "entry failed".
+    let enterHandoff: PipHandoffResult | null = null;
     try {
       await openPipWindowAndWaitReady();
       publishPipStateRef.current();
@@ -330,8 +389,16 @@ export function usePipController(deps: PipControllerDeps): PipController {
         // re-surfaced by the retarget right below. Log with context and go on.
         logPipError("enter-spawn-failed", error, "warn");
       }
-      await invoke("video_surface_retarget_to_pip_cmd");
+      const pipResult = await handoffSurfaceToPip();
+      enterHandoff = pipResult;
+      // Only `retargeted` means PiP really presents the surface. The other two
+      // resolved outcomes and any rejection must take the existing rollback
+      // path below, so the window is never marked active on a failed switch.
+      if (pipResult.kind !== "retargeted") {
+        throw new Error(`pip retarget ${pipResult.kind}`);
+      }
       retargetedToPip = true;
+      commitPresentationStatus("healthy");
       setPipHostOwner("pip");
 
       let ownerSynced = await requestPipOwner("pip");
@@ -380,13 +447,22 @@ export function usePipController(deps: PipControllerDeps): PipController {
     } catch (error) {
       logPipError("enter-failed", error);
       if (retargetedToPip) {
-        try {
-          await invoke("video_surface_retarget_to_main_cmd");
-        } catch (rollbackError) {
-          logPipError("enter-rollback-retarget-failed", rollbackError);
+        const rollback = await handoffSurfaceToMain();
+        if (rollback.kind !== "retargeted") {
+          logPipError(
+            "enter-rollback-retarget-failed",
+            new Error(`rollback ${rollback.kind}`),
+          );
           // The native target may still be the PiP window. Declaring main
           // here would strand the picture, so keep PiP as the presentation
           // owner (and the window alive) until a successful Return retries.
+          //
+          // Honest status: this branch only runs when PiP DID take ownership
+          // (`retargetedToPip`), so the previous target the native side falls
+          // back to is PiP itself. `rolled_back` therefore means the PiP
+          // pipeline was recreated intact (healthy); `detached` means nothing
+          // presents at all; `unresolved` means we simply do not know.
+          commitPresentationStatus(statusForHandoff(rollback));
           isPipActiveRef.current = true;
           setIsPipActive(true);
           setIsNowPlayingOpen(false);
@@ -404,6 +480,23 @@ export function usePipController(deps: PipControllerDeps): PipController {
           return;
         }
       }
+      // Entry failed (or was rolled back to main).
+      //
+      // Two distinct situations, and only the second one can leave a broken
+      // pipeline behind:
+      //  * `retargetedToPip` — PiP took the surface and the rollback above
+      //    SUCCEEDED (`retargeted`), so main presents again: healthy.
+      //  * PiP never owned it. A `rolled_back` to-PiP hand-off means the
+      //    previous (main) target was recreated, also healthy; `detached` and
+      //    `unresolved` are carried over verbatim. No hand-off at all (the
+      //    window failed to open) never touched the surface: healthy.
+      if (retargetedToPip) {
+        commitPresentationStatus("healthy");
+      } else {
+        commitPresentationStatus(
+          enterHandoff === null ? "healthy" : statusForHandoff(enterHandoff),
+        );
+      }
       setPipHostOwner("main");
       isPipActiveRef.current = false;
       setIsPipActive(false);
@@ -417,17 +510,40 @@ export function usePipController(deps: PipControllerDeps): PipController {
     } finally {
       pipTransitionRef.current = false;
     }
-  }, [isVideoActive, isPlaying, setIsNowPlayingOpen, setIsPlayerFullscreen]);
+  }, [
+    commitPresentationStatus,
+    isVideoActive,
+    isPlaying,
+    setIsNowPlayingOpen,
+    setIsPlayerFullscreen,
+  ]);
 
   const returnFromPip = useCallback(async () => {
     if (!isPipActiveRef.current || pipTransitionRef.current) return;
     pipTransitionRef.current = true;
 
     try {
-      try {
-        await invoke("video_surface_retarget_to_main_cmd");
-      } catch (error) {
-        logPipError("return-retarget-failed", error);
+      const result = await handoffSurfaceToMain();
+      if (result.kind !== "retargeted") {
+        // The surface did NOT make it back: leave the main window alone (no
+        // restore/unminimize/focus — bringing forward a window with no picture
+        // is worse than staying in PiP), keep the PiP ownership and window so
+        // the user still has something to watch and a way to retry.
+        commitPresentationStatus(
+          result.kind === "rolled_back"
+            ? "healthy"
+            : result.kind === "detached"
+              ? "detached"
+              : "unresolved",
+        );
+        logPipError(
+          result.kind === "rolled_back"
+            ? "return-handoff-rolled-back"
+            : result.kind === "detached"
+              ? "return-handoff-detached"
+              : "return-handoff-unresolved",
+          result.kind === "unresolved" ? result.reason : result.kind,
+        );
         try {
           await emitTo(PIP_WINDOW_LABEL, PIP_EVENTS.refreshSurface);
         } catch (refreshError) {
@@ -437,6 +553,7 @@ export function usePipController(deps: PipControllerDeps): PipController {
         return;
       }
 
+      commitPresentationStatus("healthy");
       // Retarget succeeded; the main window owns the surface now. Restore its
       // visibility BEFORE tearing the PiP window down.
       await restoreMainWindowForPip();
@@ -454,7 +571,7 @@ export function usePipController(deps: PipControllerDeps): PipController {
     } finally {
       pipTransitionRef.current = false;
     }
-  }, [restoreMainWindowForPip, setIsNowPlayingOpen]);
+  }, [commitPresentationStatus, restoreMainWindowForPip, setIsNowPlayingOpen]);
 
   /**
    * Close (X in the PiP window / Alt+F4): pause, hand the surface back to main
@@ -472,36 +589,51 @@ export function usePipController(deps: PipControllerDeps): PipController {
    * `handleTogglePlay` uses (engine first, then the named store commit), so
    * this path stays one source of truth without inheriting the toggle.
    *
-   * Best-effort on purpose: a failed retarget is logged and the window is
-   * still destroyed. Leaving PiP up because the retarget failed would strand
-   * the user with a window they explicitly closed.
+   * The hand-off must SUCCEED before anything is torn down. This used to be
+   * best-effort (log, then destroy the window anyway), which stranded the
+   * native surface in a window that no longer existed: the user lost the
+   * picture entirely and had nothing left to click. Now a failed hand-off
+   * leaves the PiP window UP — the user keeps a recovery surface, sees the
+   * video still there, and can press Close again (the guard is released in
+   * `finally`), which retries the hand-off from scratch.
    */
   const closePipToBackground = useCallback(async () => {
     if (!isPipActiveRef.current || pipTransitionRef.current) return;
     pipTransitionRef.current = true;
 
     try {
-      // Pause ONLY when something is actually playing: a close of a paused
-      // video must not issue an engine command or touch the flag. The engine
-      // call comes first so the audible state stops even if the rest of the
-      // teardown below has to swallow a failure.
-      if (usePlayerStore.getState().isPlaying) {
-        AudioController.getInstance().pause();
-        commitIsPlaying("intent", false);
-      }
-
-      // Retarget first, then tear the window down. A failed retarget is
-      // best-effort here: ask the PiP window to re-measure once (the same
-      // recovery `returnFromPip` uses), log, and still close.
-      try {
-        await invoke("video_surface_retarget_to_main_cmd");
-      } catch (error) {
-        logPipError("close-retarget-failed", error);
+      const result = await handoffSurfaceToMain();
+      if (result.kind !== "retargeted") {
+        // `rolled_back` = the native side recreated the PREVIOUS (PiP) target,
+        // so the picture is still there and the pipeline is healthy.
+        commitPresentationStatus(statusForHandoff(result));
+        logPipError(
+          result.kind === "rolled_back"
+            ? "close-handoff-rolled-back"
+            : result.kind === "detached"
+              ? "close-handoff-detached"
+              : "close-handoff-unresolved",
+          result.kind === "unresolved" ? result.reason : result.kind,
+        );
+        // Best-effort only: ask the PiP window to re-measure once, in case the
+        // target it was rolled back into lost its rect. Still its own
+        // try/catch — a failed refresh must not skip the return below.
         try {
           await emitTo(PIP_WINDOW_LABEL, PIP_EVENTS.refreshSurface);
         } catch (refreshError) {
           logPipError("close-refresh-failed", refreshError, "warn");
         }
+        return;
+      }
+
+      commitPresentationStatus("healthy");
+      // Pause ONLY when something is actually playing: a close of a paused
+      // video must not issue an engine command or touch the flag. Pausing here
+      // (after a successful hand-off, never before) is what makes the failure
+      // path above non-destructive: a failed close must not stop playback.
+      if (usePlayerStore.getState().isPlaying) {
+        AudioController.getInstance().pause();
+        commitIsPlaying("intent", false);
       }
 
       setPipHostOwner("main");
@@ -516,7 +648,7 @@ export function usePipController(deps: PipControllerDeps): PipController {
     } finally {
       pipTransitionRef.current = false;
     }
-  }, []);
+  }, [commitPresentationStatus]);
 
   const recoverFromExternalPipClose = useCallback(async () => {
     if (!isPipActiveRef.current || pipTransitionRef.current) return;
@@ -529,10 +661,27 @@ export function usePipController(deps: PipControllerDeps): PipController {
         "pip window disappeared while active; recovering to main",
         "warn",
       );
-      try {
-        await invoke("video_surface_retarget_to_main_cmd");
-      } catch (error) {
-        logPipError("pip-lost-retarget-failed", error);
+      // `handoffSurfaceToMain` never throws — a rejection is already folded
+      // into `unresolved` — so there is no try/catch here on purpose.
+      const result = await handoffSurfaceToMain();
+      // Deliberately NOT `statusForHandoff`: that helper calls a `rolled_back`
+      // healthy because there the PREVIOUS target is worth watching. Here the
+      // previous target is the PiP window that just DISAPPEARED (this runs from
+      // the liveness poller after `isPipWindowOpen()` answered false), so a
+      // recreated PiP surface presents into a destroyed HWND — as useless as
+      // `detached`. Only a real retarget to main yields a working pipeline.
+      commitPresentationStatus(
+        result.kind === "retargeted"
+          ? "healthy"
+          : result.kind === "detached"
+            ? "detached"
+            : "unresolved",
+      );
+      if (result.kind !== "retargeted") {
+        logPipError(
+          `pip-lost-handoff-${result.kind}`,
+          result.kind === "unresolved" ? result.reason : result.kind,
+        );
       }
       await restoreMainWindowForPip();
       setPipHostOwner("main");
@@ -542,7 +691,7 @@ export function usePipController(deps: PipControllerDeps): PipController {
     } finally {
       pipTransitionRef.current = false;
     }
-  }, [restoreMainWindowForPip, setIsNowPlayingOpen]);
+  }, [commitPresentationStatus, restoreMainWindowForPip, setIsNowPlayingOpen]);
 
   // External destroy/crash: nothing in the PiP document can notify main, so
   // the owner polls for the window's existence and recovers the UI rather
@@ -796,6 +945,7 @@ export function usePipController(deps: PipControllerDeps): PipController {
 
   return {
     isPipActive,
+    presentationStatus,
     enterPip: enterPipRequest,
     returnFromPip: returnPipRequest,
     closePipToBackground: closePipRequest,

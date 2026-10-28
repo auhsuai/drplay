@@ -209,6 +209,31 @@ export function getVideoHostOwner(): VideoHostOwner {
   return videoHostOwner;
 }
 
+/**
+ * Whether the native presentation pipeline is KNOWN to work.
+ *
+ * Deliberately NOT folded into `videoHostOwner`: the owner is the last
+ * CONFIRMED owner of the surface, while this says whether a pipeline to that
+ * owner is known to exist. The two can disagree on purpose — a retarget can
+ * fail after tearing the old pipeline down (`detached`), leaving the owner
+ * unchanged while the picture is gone; and a hand-off that never answered
+ * (`unresolved`) tells us nothing about either. Collapsing them into one value
+ * would make "who owns it" lie whenever the answer is "nobody knows".
+ */
+export type VideoPresentationStatus = "healthy" | "detached" | "unresolved";
+
+let videoPresentationStatus: VideoPresentationStatus = "healthy";
+
+export function setVideoPresentationStatus(
+  status: VideoPresentationStatus,
+): void {
+  videoPresentationStatus = status;
+}
+
+export function getVideoPresentationStatus(): VideoPresentationStatus {
+  return videoPresentationStatus;
+}
+
 export function shouldShowVideoHost(input: VideoHostVisibilityInput): boolean {
   return (
     input.hasTrack &&

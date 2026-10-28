@@ -5,6 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::super::engine::EngineError;
+use super::super::surface::RetargetOutcome;
 use super::gl;
 use super::shared::{PixelSample, RenderHost, Request, SharedState};
 use super::thread::{join_thread, render_thread_main};
@@ -164,7 +165,7 @@ impl RenderSurface {
         Ok(())
     }
 
-    fn enqueue_retarget(&self, hwnd: usize, reply: mpsc::Sender<Result<(), String>>) {
+    fn enqueue_retarget(&self, hwnd: usize, reply: mpsc::Sender<RetargetOutcome>) {
         {
             let mut inner = self.shared.lock();
             inner.pending.push_back(Request::Retarget { hwnd, reply });
@@ -173,9 +174,9 @@ impl RenderSurface {
     }
 
     /// Retarget the presentation to a different HWND (main <-> pip).
-    /// Acknowledged: blocks (bounded) until the render thread reports
-    /// success/failure. The blocking wait must not run on the Tauri UI thread;
-    /// the commands offload it to the blocking pool.
+    /// Acknowledged: blocks (bounded) until the render thread reports the typed
+    /// outcome of the switch. The blocking wait must not run on the Tauri UI
+    /// thread; the commands offload it to the blocking pool.
     ///
     /// A timeout does NOT cancel the request: it is already in the render
     /// thread's queue and will still run. The frontend has failed the
@@ -187,7 +188,7 @@ impl RenderSurface {
         &self,
         hwnd: usize,
         timeout: Duration,
-    ) -> Result<(), EngineError> {
+    ) -> Result<RetargetOutcome, EngineError> {
         if hwnd == 0 {
             return Err(EngineError::Render {
                 message: "invalid retarget hwnd 0".to_string(),
@@ -196,14 +197,18 @@ impl RenderSurface {
         let (reply, receiver) = mpsc::channel();
         self.enqueue_retarget(hwnd, reply);
         match receiver.recv_timeout(timeout) {
-            Ok(Ok(())) => {
+            Ok(RetargetOutcome::Retargeted) => {
                 *self
                     .target_hwnd
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hwnd);
-                Ok(())
+                Ok(RetargetOutcome::Retargeted)
             }
-            Ok(Err(message)) => Err(EngineError::Render { message }),
+            // Rolled back / detached: the render thread already put the old
+            // target back (or dropped it). The acknowledged target must NOT
+            // move: a compensating switch back would address the window that
+            // was never left, and a later timeout would replay the wrong one.
+            Ok(outcome) => Ok(outcome),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let previous = *self
                     .target_hwnd

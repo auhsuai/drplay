@@ -8,9 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::super::surface::RetargetOutcome;
 use super::shared::Request;
 use super::thread::requests::coalesce_requests;
-use super::{needs_size_sync, PixelSample, RenderSurface, RENDER_THREAD_NAME};
+use super::{
+    failure_outcome, needs_size_sync, PixelSample, RenderSurface, RollbackResult,
+    RENDER_THREAD_NAME,
+};
 use crate::player::engine::Engine;
 use crate::player::tests::{
     collector, command, engine_available, serial, wait_for_named_threads,
@@ -684,6 +688,55 @@ fn the_first_frame_signal_is_armed_per_media_load() {
     );
 
     engine.destroy(false).ok();
+}
+
+// --- Retarget outcome contract (pure: no GPU, no window, no mpv) ---
+
+/// The retarget reply is what lets the frontend decide whether the hand-off
+/// happened. Three native end states, and only `Retargeted` is a success: a
+/// rebuilt old target still owns the window (`RolledBack`), while no target at
+/// all means the video output is gone (`Detached`).
+#[test]
+fn retarget_failure_outcome_distinguishes_rollback_from_detached() {
+    assert_eq!(
+        failure_outcome(0x1234, RollbackResult::Restored),
+        RetargetOutcome::RolledBack,
+        "a rebuilt old HWND is a rollback, not a detach"
+    );
+    assert_eq!(
+        failure_outcome(0x1234, RollbackResult::Failed),
+        RetargetOutcome::Detached,
+        "a failed rollback leaves no pipeline at all"
+    );
+    assert_eq!(
+        failure_outcome(0, RollbackResult::Restored),
+        RetargetOutcome::Detached,
+        "there is nothing to restore without a previous HWND"
+    );
+    assert_eq!(
+        failure_outcome(0, RollbackResult::Failed),
+        RetargetOutcome::Detached,
+        "the no-previous-target path is always detached"
+    );
+}
+
+/// The wire shape is the contract the frontend switches on: a rename or a
+/// differently-cased variant would silently degrade every retarget to
+/// "not retargeted" instead of failing loudly.
+#[test]
+fn retarget_outcome_wire_shape_is_pinned() {
+    assert_eq!(
+        serde_json::to_string(&RetargetOutcome::Retargeted).expect("outcome must serialize"),
+        "\"retargeted\""
+    );
+    assert_eq!(
+        serde_json::to_string(&RetargetOutcome::RolledBack).expect("outcome must serialize"),
+        "\"rolled_back\""
+    );
+    assert_eq!(
+        serde_json::to_string(&RetargetOutcome::Detached).expect("outcome must serialize"),
+        "\"detached\""
+    );
 }
 
 // --- S3 composition bridge (NV_DX_interop2 -> D3D11 -> DirectComposition) ---

@@ -97,7 +97,9 @@ fn pip_set_aspect_cmd(app: tauri::AppHandle, aspect: f64) -> Result<(), String> 
 
 #[cfg(windows)]
 #[tauri::command]
-async fn video_surface_retarget_to_pip_cmd(app: tauri::AppHandle) -> Result<(), String> {
+async fn video_surface_retarget_to_pip_cmd(
+    app: tauri::AppHandle,
+) -> Result<crate::player::RetargetOutcome, String> {
     // The HWND can only come from the Tauri-managed webview window with the
     // "pip" label — never from a frontend-supplied value.
     let hwnd = pip_window_hwnd(&app)?;
@@ -112,7 +114,9 @@ async fn video_surface_retarget_to_pip_cmd(app: tauri::AppHandle) -> Result<(), 
 
 #[cfg(windows)]
 #[tauri::command]
-async fn video_surface_retarget_to_main_cmd(app: tauri::AppHandle) -> Result<(), String> {
+async fn video_surface_retarget_to_main_cmd(
+    app: tauri::AppHandle,
+) -> Result<crate::player::RetargetOutcome, String> {
     // Only the Tauri-managed webview window with the "main" label can be a
     // retarget destination.
     let hwnd = crate::video_host::main_window_hwnd(&app)
