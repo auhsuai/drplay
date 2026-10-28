@@ -70,7 +70,9 @@
     "confirm_root_body": "This folder will become your root location in DrPlay.",
     "confirm": "Confirm",
     "continue": "Continue",
-    "roots_commit_failed": "Couldn't save your root folders. Try again."
+    "roots_commit_failed": "Couldn't save your root folders. Try again.",
+    "config_unavailable_body": "Couldn't load your root folders from Google Drive. Check your connection, then try again.",
+    "config_unavailable_retry": "Try again"
   },
   "home": {
     "good_morning": "Good morning",
@@ -366,6 +368,8 @@
     "music_library": "Music Library",
     "google_drive_folder": "Google Drive Folder",
     "change_folder": "Change Folder",
+    "config_sync_unsaved": "Saved on this device, but Google Drive wasn't updated.",
+    "config_sync_retry": "Sync again",
     "change_path": "Change Path",
     "preferences": "Preferences",
     "theme": "Theme",

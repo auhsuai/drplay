@@ -115,6 +115,8 @@ const baseProps = {
   setMinimizeToTray: vi.fn(),
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
+  configSync: null,
+  onRetryConfigSync: vi.fn<() => Promise<void>>(),
 };
 
 describe("SettingsTab download path display", () => {
@@ -455,5 +457,82 @@ describe("SettingsTab metadata fetch toggle", () => {
       name: "Fetch metadata",
     });
     expect(checkbox.checked).toBe(false);
+  });
+});
+
+// Acceptance criterion 6: an unconfirmed cloud write must stay recoverable from
+// the UI. Before this row existed the only feedback was a 4-second toast, and
+// the user had to re-pick every root to retry.
+describe("SettingsTab config sync retry row", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the unsaved warning and the retry button when configSync is unsaved", () => {
+    render(<SettingsTab {...baseProps} configSync="unsaved" />);
+
+    expect(screen.getByTestId("config-sync-unsaved")).toBeTruthy();
+    expect(screen.getByTestId("config-sync-retry")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Saved on this device, but Google Drive wasn't updated.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("calls onRetryConfigSync exactly once and keeps the button disabled until it settles", async () => {
+    let resolveRetry: () => void = () => {};
+    const onRetryConfigSync = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRetry = resolve;
+        }),
+    );
+    render(
+      <SettingsTab
+        {...baseProps}
+        configSync="unsaved"
+        onRetryConfigSync={onRetryConfigSync}
+      />,
+    );
+
+    const button = screen.getByTestId<HTMLButtonElement>("config-sync-retry");
+    expect(button.disabled).toBe(false);
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(onRetryConfigSync).toHaveBeenCalledTimes(1);
+    });
+    // Still pending: the button must stay disabled (no double submit).
+    expect(
+      screen.getByTestId<HTMLButtonElement>("config-sync-retry").disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      resolveRetry();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId<HTMLButtonElement>("config-sync-retry").disabled,
+      ).toBe(false);
+    });
+    expect(onRetryConfigSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the row when configSync is saved", () => {
+    render(<SettingsTab {...baseProps} configSync="saved" />);
+
+    expect(screen.queryByTestId("config-sync-unsaved")).toBeNull();
+    expect(screen.queryByTestId("config-sync-retry")).toBeNull();
+  });
+
+  it("hides the row when configSync is null (no commit attempted)", () => {
+    render(<SettingsTab {...baseProps} configSync={null} />);
+
+    expect(screen.queryByTestId("config-sync-unsaved")).toBeNull();
+    expect(screen.queryByTestId("config-sync-retry")).toBeNull();
   });
 });

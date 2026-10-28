@@ -22,6 +22,33 @@ function buildConfigSearchUrl(): string {
 type ConfigSearchResult =
   { ok: true; fileId: string | null } | { ok: false; status: number };
 
+// Why a config read produced no usable document. Kept as a small taxonomy so
+// callers can log a reason without leaking bodies/headers: "missing" is a
+// CONFIRMED absence (safe to treat as first run), while "failed" means the
+// remote state is UNKNOWN (must never be read as "the user is new").
+export type AppConfigFailureReason =
+  "search" | "download" | "network" | "malformed" | "aborted";
+
+/**
+ * Discriminated result of reading the app config. The three statuses are
+ * deliberately distinct: a failed request and a genuinely absent file lead to
+ * different UX (retry surface vs. first-run setup), so collapsing them into
+ * null would erase information the caller cannot reconstruct.
+ */
+export type AppConfigReadResult =
+  | { status: "found"; config: Record<string, unknown> }
+  | { status: "missing" }
+  | { status: "failed"; reason: AppConfigFailureReason; detail?: string };
+
+// A caller abort is an expected cancellation, not a fault: driveFetch rethrows
+// the DOMException unchanged (no retry), and an AbortSignal.timeout() failure
+// carries "TimeoutError" instead, which stays a transient network failure.
+function isAbortError(e: unknown): boolean {
+  return (
+    (e instanceof DOMException || e instanceof Error) && e.name === "AbortError"
+  );
+}
+
 async function findConfigFileId(
   token: string,
   signal?: AbortSignal,
@@ -43,17 +70,22 @@ async function findConfigFileId(
 /**
  * Read the app config JSON from Drive's appDataFolder (invisible to the
  * user's Drive UI). The config is the source of truth for app settings that
- * must survive reinstalls; a missing/corrupt file or a failed request returns
- * null so the app falls back to defaults. Failures never throw: network/parse
- * errors and non-ok responses (search or download) all log and return null.
+ * must survive reinstalls and MUST bridge the storage-origin split between the
+ * packaged build and `tauri dev`, so the read result distinguishes a confirmed
+ * absence from an unreadable document: only "missing" may be treated as "the
+ * user has not configured anything yet".
+ *
+ * Failures never throw: network/parse errors, caller aborts and non-ok
+ * responses (search or download) are logged and reported as a typed failure
+ * carrying a reason (never a body, header or token).
  * @param token Drive access token.
  * @param signal Optional AbortSignal to cancel the request (e.g. unmount).
- * @returns The parsed config object, or null when absent/unreadable.
+ * @returns A discriminated read result; never null, never throws.
  */
 export async function getAppConfig(
   token: string,
   signal?: AbortSignal,
-): Promise<Record<string, unknown> | null> {
+): Promise<AppConfigReadResult> {
   try {
     const search = await findConfigFileId(token, signal);
     if (!search.ok) {
@@ -62,10 +94,14 @@ export async function getAppConfig(
         source: DRIVE_MODULE,
         message: `get-config-search-failed (status=${String(search.status)})`,
       });
-      return null;
+      return {
+        status: "failed",
+        reason: "search",
+        detail: String(search.status),
+      };
     }
     const fileId = search.fileId;
-    if (fileId === null) return null;
+    if (fileId === null) return { status: "missing" };
 
     const downloadUrl = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?alt=media`;
     const downloadRes = await driveFetch(downloadUrl, {
@@ -80,23 +116,34 @@ export async function getAppConfig(
         config === null ||
         Array.isArray(config)
       ) {
-        return null;
+        return { status: "failed", reason: "malformed" };
       }
-      return config as Record<string, unknown>;
+      return { status: "found", config: config as Record<string, unknown> };
     }
     await captureError({
       level: "warn",
       source: DRIVE_MODULE,
       message: `get-config-download-failed (status=${String(downloadRes.status)})`,
     });
+    return {
+      status: "failed",
+      reason: "download",
+      detail: String(downloadRes.status),
+    };
   } catch (e: unknown) {
+    // Same diagnostic log as before for every throw (token-free: only the
+    // classified error name/message), then split the reason so the caller can
+    // tell an expected cancellation from a real network failure.
     await captureError({
       level: "error",
       source: DRIVE_MODULE,
       message: `get-config-failed: ${classifyDriveError(e)}`,
     });
+    if (signal?.aborted === true || isAbortError(e)) {
+      return { status: "failed", reason: "aborted" };
+    }
+    return { status: "failed", reason: "network" };
   }
-  return null;
 }
 
 // Serialize config writes with a promise-chain mutex. Two concurrent saves

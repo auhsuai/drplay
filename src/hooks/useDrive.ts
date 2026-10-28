@@ -6,11 +6,18 @@ import { useNavStatePersistence } from "./useNavStatePersistence";
 import { useDriveNavigation } from "./useDriveNavigation";
 import { useDriveRootSelector } from "./useDriveRootSelector";
 
-export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
+export const useDrive = (
+  isLoggedIn: boolean,
+  accessToken: string | null,
+  /** Bumped to re-run the very same init path (gate "couldn't load" retry). */
+  reloadNonce = 0,
+) => {
   const {
     appRootFolder,
     rootFolders,
     isHydrated,
+    configError,
+    configSync,
     setAppRootFolder,
     currentFolderId,
     setCurrentFolderId,
@@ -25,6 +32,8 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
       appRootFolder: state.appRootFolder,
       rootFolders: state.rootFolders,
       isHydrated: state.isHydrated,
+      configError: state.configError,
+      configSync: state.configSync,
       setAppRootFolder: state.setAppRootFolder,
       currentFolderId: state.currentFolderId,
       setCurrentFolderId: state.setCurrentFolderId,
@@ -45,16 +54,19 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
   // useNavStatePersistence reads the flag to gate its save effect.
   const hydratedRef = useRef(false);
 
-  useDriveInit({ accessToken, isLoggedIn, hydratedRef });
+  useDriveInit({ accessToken, isLoggedIn, hydratedRef, reloadNonce });
   useNavStatePersistence({ hydratedRef, isLoggedIn });
   const { handleOpenFolder, handleBack, handleBreadcrumbClick } =
     useDriveNavigation();
-  const { commitRootFolders, handleSelectRootFolder } = useDriveRootSelector();
+  const { commitRootFolders, handleSelectRootFolder, retryConfigSync } =
+    useDriveRootSelector();
 
   return {
     appRootFolder,
     rootFolders,
     isHydrated,
+    configError,
+    configSync,
     setAppRootFolder,
     currentFolderId,
     setCurrentFolderId,
@@ -69,5 +81,6 @@ export const useDrive = (isLoggedIn: boolean, accessToken: string | null) => {
     handleBreadcrumbClick,
     commitRootFolders,
     handleSelectRootFolder,
+    retryConfigSync,
   };
 };

@@ -80,6 +80,10 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabKey>(TABS.home);
   const { theme, setTheme } = useTheme();
   const [showTrashScreen, setShowTrashScreen] = useState(false);
+  // Bumped by the folder gate's "couldn't load" Retry: useDrive threads it into
+  // the init effect's dependency array so the retry re-runs the SAME init path
+  // instead of a bespoke reload.
+  const [configReloadNonce, setConfigReloadNonce] = useState(0);
 
   // setAppRootFolder is produced by useDrive() BELOW, while the logout cleanup
   // callback above runs at logout time. A ref bridges the TDZ (the callback
@@ -147,7 +151,10 @@ function App() {
     handleBack,
     handleBreadcrumbClick,
     commitRootFolders,
-  } = useDrive(isLoggedIn, accessToken);
+    configError,
+    configSync,
+    retryConfigSync,
+  } = useDrive(isLoggedIn, accessToken, configReloadNonce);
 
   const { setIsLoadingTracks, isLoadingTracks } = useDriveStore(
     useShallow((s) => ({
@@ -515,6 +522,10 @@ function App() {
         token={accessToken}
         rootFolders={rootFolders}
         onCommitRoots={commitRootFolders}
+        configError={configError}
+        onRetryConfig={() => {
+          setConfigReloadNonce((n) => n + 1);
+        }}
         onDone={() => {
           setShowFolderSelection(false);
         }}
@@ -594,6 +605,10 @@ function App() {
             setMinimizeToTray={setMinimizeToTray}
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
+            configSync={configSync}
+            onRetryConfigSync={async () => {
+              await retryConfigSync();
+            }}
             isNowPlayingOpen={isNowPlayingOpen}
           />
         }

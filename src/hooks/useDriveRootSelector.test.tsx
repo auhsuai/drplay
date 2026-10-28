@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "../db/db";
 import { wipeFileRowsForUser } from "../db/fileRows";
-import { saveAppConfig } from "../utils/driveApi";
+import { getAppConfig, saveAppConfig } from "../utils/driveApi";
+import { showErrorToast } from "../utils/simpleToast";
 import { getValidToken } from "../utils/apiClient";
 import { CLEAR_LOCAL_CACHE_CMD } from "../utils/cache";
 import { captureError } from "../utils/errorLog";
@@ -39,6 +40,17 @@ vi.mock("../utils/apiClient", () => ({
 
 vi.mock("../utils/driveApi", () => ({
   saveAppConfig: vi.fn(),
+  getAppConfig: vi.fn(),
+}));
+
+// The hook resolves the existing toast key through i18next's global `t` and
+// surfaces failures via showErrorToast; both are observable seams here.
+vi.mock("i18next", () => ({
+  t: (key: string) => key,
+}));
+
+vi.mock("../utils/simpleToast", () => ({
+  showErrorToast: vi.fn(),
 }));
 
 vi.mock("../utils/cache", () => ({
@@ -60,6 +72,15 @@ vi.mock("../utils/errorLog", () => ({
 const mockedInvoke = vi.mocked(invoke);
 const mockedGetValidToken = vi.mocked(getValidToken);
 const mockedSaveAppConfig = vi.mocked(saveAppConfig);
+const mockedGetAppConfig = vi.mocked(getAppConfig);
+const mockedShowErrorToast = vi.mocked(showErrorToast);
+
+type AppConfigReadResult = Awaited<ReturnType<typeof getAppConfig>>;
+
+const foundConfig = (config: Record<string, unknown>): AppConfigReadResult => ({
+  status: "found",
+  config,
+});
 const mockedWipeFileRowsForUser = vi.mocked(wipeFileRowsForUser);
 const mockedCaptureError = vi.mocked(captureError);
 
@@ -85,6 +106,8 @@ beforeEach(() => {
   mockedInvoke.mockResolvedValue(undefined);
   mockedGetValidToken.mockResolvedValue("tok");
   mockedSaveAppConfig.mockResolvedValue(true);
+  mockedGetAppConfig.mockResolvedValue({ status: "missing" });
+  useDriveStore.setState({ configError: null, configSync: null });
 });
 
 afterEach(async () => {
@@ -405,5 +428,249 @@ describe("handleSelectRootFolder - legacy single-root wrapper", () => {
       updatedAt: expect.any(Number),
     };
     expect(mockedSaveAppConfig).toHaveBeenCalledWith("tok", savedConfig);
+  });
+});
+
+// P1 conflation fix, phase 4: a commit whose CLOUD write failed is still a
+// successful LOCAL commit (the user can work), but the app must not imply the
+// config reached Drive — the other build/origin would still read the old one.
+describe("commitRootFolders cloud write truthfulness", () => {
+  it("cloud false ⇒ still returns true locally, marks configSync unsaved, toasts", async () => {
+    mockedSaveAppConfig.mockResolvedValue(false);
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    let committed: boolean | undefined;
+    await act(async () => {
+      committed = await result.current.commitRootFolders([
+        { id: "root-A", name: "Music" },
+      ]);
+    });
+
+    expect(committed).toBe(true);
+    expect(useDriveStore.getState().appRootFolder).toBe("root-A");
+    expect(useDriveStore.getState().configSync).toBe("unsaved");
+    expect(useDriveStore.getState().configError).toBeNull();
+    expect(mockedShowErrorToast).toHaveBeenCalledWith(
+      "folder_selection.roots_commit_failed",
+    );
+  });
+
+  it("cloud throw ⇒ still returns true locally, marks configSync unsaved, toasts", async () => {
+    mockedSaveAppConfig.mockRejectedValue(new Error("upload boom"));
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    let committed: boolean | undefined;
+    await act(async () => {
+      committed = await result.current.commitRootFolders([
+        { id: "root-A", name: "Music" },
+      ]);
+    });
+
+    expect(committed).toBe(true);
+    expect(useDriveStore.getState().configSync).toBe("unsaved");
+    expect(mockedShowErrorToast).toHaveBeenCalledWith(
+      "folder_selection.roots_commit_failed",
+    );
+  });
+
+  it("no valid token ⇒ still commits locally, marks unsaved and keeps a retryable payload", async () => {
+    mockedGetValidToken.mockResolvedValue(null);
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    let committed: boolean | undefined;
+    await act(async () => {
+      committed = await result.current.commitRootFolders([
+        { id: "root-A", name: "Music" },
+      ]);
+    });
+
+    expect(committed).toBe(true);
+    expect(mockedSaveAppConfig).not.toHaveBeenCalled();
+    expect(useDriveStore.getState().configSync).toBe("unsaved");
+    expect(mockedShowErrorToast).toHaveBeenCalledWith(
+      "folder_selection.roots_commit_failed",
+    );
+
+    // The payload is retryable once a token is available again.
+    mockedGetValidToken.mockResolvedValue("tok");
+    mockedGetAppConfig.mockResolvedValue({ status: "missing" });
+    mockedSaveAppConfig.mockResolvedValue(true);
+    let retried: boolean | undefined;
+    await act(async () => {
+      retried = await result.current.retryConfigSync();
+    });
+    expect(retried).toBe(true);
+    expect(useDriveStore.getState().configSync).toBe("saved");
+  });
+
+  it("cache-cleanup failure ⇒ marks unsaved, keeps the payload retryable, toasts", async () => {
+    mockedInvoke.mockRejectedValueOnce(new Error("cache boom"));
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    await act(async () => {
+      await result.current.commitRootFolders([{ id: "root-A", name: "Music" }]);
+    });
+
+    expect(mockedSaveAppConfig).not.toHaveBeenCalled();
+    expect(useDriveStore.getState().configSync).toBe("unsaved");
+    expect(mockedShowErrorToast).toHaveBeenCalledWith(
+      "folder_selection.roots_commit_failed",
+    );
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "root-select-cleanup-failed",
+        ) as unknown as string,
+      }),
+    );
+
+    // Still retryable with the payload of that commit.
+    mockedGetAppConfig.mockResolvedValue({ status: "missing" });
+    mockedSaveAppConfig.mockResolvedValue(true);
+    let retried: boolean | undefined;
+    await act(async () => {
+      retried = await result.current.retryConfigSync();
+    });
+    expect(retried).toBe(true);
+    expect(mockedSaveAppConfig).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({ rootFolderId: "root-A" }),
+    );
+  });
+
+  it("cloud success ⇒ marks configSync saved and never toasts", async () => {
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    await act(async () => {
+      await result.current.commitRootFolders([{ id: "root-A", name: "Music" }]);
+    });
+
+    expect(useDriveStore.getState().configSync).toBe("saved");
+    expect(mockedShowErrorToast).not.toHaveBeenCalled();
+  });
+});
+
+describe("retryConfigSync", () => {
+  // Commits with a failed cloud write, then clears the spy so the retry's own
+  // call is the only observable one. Returns the ORIGINAL payload so the test
+  // can prove the retry reuses it byte-for-byte (same updatedAt).
+  const commitWithFailedCloud = async () => {
+    mockedSaveAppConfig.mockResolvedValue(false);
+    const hook = renderHook(() => useDriveRootSelector());
+    await act(async () => {
+      await hook.result.current.commitRootFolders([
+        { id: "root-A", name: "Music" },
+      ]);
+    });
+    const payload = mockedSaveAppConfig.mock.calls[0]?.[1] as
+      Record<string, unknown> | undefined;
+    if (payload === undefined) throw new Error("expected a cloud save call");
+    mockedSaveAppConfig.mockClear();
+    return { hook, payload };
+  };
+
+  it("returns false when there is no pending payload", async () => {
+    const { result } = renderHook(() => useDriveRootSelector());
+
+    let retried: boolean | undefined;
+    await act(async () => {
+      retried = await result.current.retryConfigSync();
+    });
+
+    expect(retried).toBe(false);
+    expect(mockedSaveAppConfig).not.toHaveBeenCalled();
+    expect(mockedGetAppConfig).not.toHaveBeenCalled();
+  });
+
+  it("re-uploads the SAME payload (identical updatedAt) exactly once on success", async () => {
+    const { hook, payload } = await commitWithFailedCloud();
+    mockedGetAppConfig.mockResolvedValue({ status: "missing" });
+    mockedSaveAppConfig.mockResolvedValue(true);
+
+    let retried: boolean | undefined;
+    await act(async () => {
+      retried = await hook.result.current.retryConfigSync();
+    });
+
+    expect(retried).toBe(true);
+    expect(mockedGetAppConfig).toHaveBeenCalledTimes(1);
+    expect(mockedSaveAppConfig).toHaveBeenCalledTimes(1);
+    expect(payload).toMatchObject({
+      rootFolderId: "root-A",
+      rootFolderName: "Music",
+      rootFolders: [{ id: "root-A", name: "Music" }],
+    });
+    expect(typeof payload.updatedAt).toBe("number");
+    // Byte-for-byte the same document: no freshly stamped updatedAt.
+    expect(mockedSaveAppConfig).toHaveBeenCalledWith("tok", payload);
+    expect(useDriveStore.getState().configSync).toBe("saved");
+  });
+
+  it("does NOT upload when the remote config is NEWER (other origin won)", async () => {
+    const { hook, payload } = await commitWithFailedCloud();
+    const marker = payload.updatedAt as number;
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-Z", updatedAt: marker + 5_000 }),
+    );
+
+    let retried: boolean | undefined;
+    await act(async () => {
+      retried = await hook.result.current.retryConfigSync();
+    });
+
+    expect(retried).toBe(true);
+    expect(mockedSaveAppConfig).not.toHaveBeenCalled();
+    expect(useDriveStore.getState().configSync).toBe("saved");
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "config-retry-superseded",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("does NOT upload when the remote read fails and stays unsaved", async () => {
+    const { hook } = await commitWithFailedCloud();
+    mockedGetAppConfig.mockResolvedValue({
+      status: "failed",
+      reason: "network",
+    });
+
+    let retried: boolean | undefined;
+    await act(async () => {
+      retried = await hook.result.current.retryConfigSync();
+    });
+
+    expect(retried).toBe(false);
+    expect(mockedSaveAppConfig).not.toHaveBeenCalled();
+    expect(useDriveStore.getState().configSync).toBe("unsaved");
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "config-retry-skipped-unavailable",
+        ) as unknown as string,
+      }),
+    );
+  });
+
+  it("uploads when the remote is OLDER than the pending payload", async () => {
+    const { hook, payload } = await commitWithFailedCloud();
+    const marker = payload.updatedAt as number;
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-A", updatedAt: marker - 5_000 }),
+    );
+    mockedSaveAppConfig.mockResolvedValue(true);
+
+    let retried: boolean | undefined;
+    await act(async () => {
+      retried = await hook.result.current.retryConfigSync();
+    });
+
+    expect(retried).toBe(true);
+    expect(mockedSaveAppConfig).toHaveBeenCalledTimes(1);
+    expect(useDriveStore.getState().configSync).toBe("saved");
   });
 });

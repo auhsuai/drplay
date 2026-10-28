@@ -70,7 +70,9 @@
     "confirm_root_body": "Thư mục này sẽ trở thành vị trí gốc trong DrPlay.",
     "confirm": "Xác nhận",
     "continue": "Tiếp tục",
-    "roots_commit_failed": "Không thể lưu thư mục gốc. Vui lòng thử lại."
+    "roots_commit_failed": "Không thể lưu thư mục gốc. Vui lòng thử lại.",
+    "config_unavailable_body": "Không thể tải thư mục gốc từ Google Drive. Hãy kiểm tra kết nối rồi thử lại.",
+    "config_unavailable_retry": "Thử lại"
   },
   "home": {
     "good_morning": "Chào buổi sáng",
@@ -362,6 +364,8 @@
     "music_library": "Thư viện âm nhạc",
     "google_drive_folder": "Thư mục Google Drive",
     "change_folder": "Đổi thư mục",
+    "config_sync_unsaved": "Đã lưu trên thiết bị này, nhưng Google Drive chưa được cập nhật.",
+    "config_sync_retry": "Đồng bộ lại",
     "change_path": "Đổi đường dẫn",
     "preferences": "Tùy chỉnh",
     "theme": "Giao diện",

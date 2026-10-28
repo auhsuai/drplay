@@ -44,6 +44,14 @@ const mockedFetchWithAuth = vi.mocked(fetchWithAuth);
 const mockedGetAppConfig = vi.mocked(getAppConfig);
 const mockedSaveAppConfig = vi.mocked(saveAppConfig);
 
+// getAppConfig now returns a discriminated read result (found/missing/failed).
+type AppConfigReadResult = Awaited<ReturnType<typeof getAppConfig>>;
+
+const foundConfig = (config: Record<string, unknown>): AppConfigReadResult => ({
+  status: "found",
+  config,
+});
+
 function makeOkFolderResponse() {
   return {
     ok: true,
@@ -58,14 +66,14 @@ function makeOkFolderResponse() {
 
 // Deferred getAppConfig: holds the init run inside its network verify so the
 // tests can observe isHydrated while the "network" is still in flight.
-let resolveConfig: (v: Record<string, unknown> | null) => void = () => {};
+let resolveConfig: (v: AppConfigReadResult) => void = () => {};
 function deferredConfig() {
-  return new Promise<Record<string, unknown> | null>((resolve) => {
+  return new Promise<AppConfigReadResult>((resolve) => {
     resolveConfig = resolve;
   });
 }
 
-const settle = async (value: Record<string, unknown> | null) => {
+const settle = async (value: AppConfigReadResult) => {
   await act(async () => {
     resolveConfig(value);
     await new Promise((r) => setTimeout(r, 20));
@@ -119,7 +127,7 @@ describe("useDrive hydration flag (P2-04-8)", () => {
     // getAppConfig has not resolved: the picker must stay gated.
     expect(useDriveStore.getState().isHydrated).toBe(false);
 
-    await settle({ rootFolderId: "root-A" });
+    await settle(foundConfig({ rootFolderId: "root-A" }));
     await waitFor(() => {
       expect(useDriveStore.getState().isHydrated).toBe(true);
     });
@@ -127,7 +135,9 @@ describe("useDrive hydration flag (P2-04-8)", () => {
 
   it("re-login after logout resets hydration: false during the re-verify, true when it settles", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    mockedGetAppConfig.mockResolvedValueOnce({ rootFolderId: "root-A" });
+    mockedGetAppConfig.mockResolvedValueOnce(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
 
     const { rerender } = renderDrive();
     await waitFor(() => {
@@ -151,7 +161,7 @@ describe("useDrive hydration flag (P2-04-8)", () => {
     });
     expect(useDriveStore.getState().isHydrated).toBe(false);
 
-    await settle({ rootFolderId: "root-A" });
+    await settle(foundConfig({ rootFolderId: "root-A" }));
     await waitFor(() => {
       expect(useDriveStore.getState().isHydrated).toBe(true);
     });
@@ -160,7 +170,9 @@ describe("useDrive hydration flag (P2-04-8)", () => {
 
   it("a mid-session token rotation does NOT reset the flag (no gate blink on re-init)", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    mockedGetAppConfig.mockResolvedValueOnce({ rootFolderId: "root-A" });
+    mockedGetAppConfig.mockResolvedValueOnce(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
 
     const { rerender } = renderDrive();
     await waitFor(() => {
@@ -175,7 +187,7 @@ describe("useDrive hydration flag (P2-04-8)", () => {
     // The re-verify keeps the previous root (B12-1): the gate must stay settled.
     expect(useDriveStore.getState().isHydrated).toBe(true);
 
-    await settle({ rootFolderId: "root-A" });
+    await settle(foundConfig({ rootFolderId: "root-A" }));
     expect(useDriveStore.getState().isHydrated).toBe(true);
   });
 });

@@ -32,4 +32,8 @@ export {
   getFileName,
 } from "./driveFiles";
 export { getAppConfig, withSaveConfigLock, saveAppConfig } from "./driveConfig";
+export type {
+  AppConfigFailureReason,
+  AppConfigReadResult,
+} from "./driveConfig";
 export { getDriveStorageQuota } from "./driveQuota";

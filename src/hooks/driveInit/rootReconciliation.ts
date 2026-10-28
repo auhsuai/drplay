@@ -341,6 +341,10 @@ export type ReconcileRemoteRootsOutcome =
   | { kind: "keep-previous" }
   // `config-failed` → the caller must null the roots (sync-config-failed).
   | { kind: "config-failed" }
+  // The remote config could not be read AND there is no usable local copy —
+  // the app must NOT claim the user is new. The setup gate shows a recoverable
+  // "couldn't load" state instead of the first-run picker.
+  | { kind: "config-unavailable" }
   | { kind: "resolved"; roots: RootFolder[]; rootChanged: boolean };
 
 // Never throws for cancellation or a failed sync: every path is an outcome.
@@ -365,11 +369,46 @@ export async function reconcileRemoteRoots(
     if (isCancelled()) return { kind: "cancelled" };
     if (rootChangedByUser()) return { kind: "user-changed" };
     if (!freshToken) {
-      return { kind: "resolved", roots: [], rootChanged: false };
+      if (isReInit) {
+        // B12-1 mirror: a re-init that cannot even obtain a token is a
+        // transient auth hiccup, not proof the user has no roots. Nulling them
+        // would open the folder gate mid-session.
+        void captureError({
+          level: "warn",
+          source: "useDrive",
+          message:
+            "reverify-transient: keeping previous roots (no-valid-token)",
+        });
+        return { kind: "keep-previous" };
+      }
+      return { kind: "config-unavailable" };
     }
-    const remoteConfig = await getAppConfig(freshToken, signal);
+    const read = await getAppConfig(freshToken, signal);
     if (isCancelled()) return { kind: "cancelled" };
     if (rootChangedByUser()) return { kind: "user-changed" };
+
+    if (read.status === "failed") {
+      // The remote state is UNKNOWN. Never treat that as "missing": a new
+      // origin (MSI ↔ dev have different localStorage origins) would otherwise
+      // show the first-run picker to an already-configured user.
+      void captureError({
+        level: "warn",
+        source: "useDrive",
+        message: `config-read-failed: ${read.reason}`,
+        kind: "config-read-failed",
+      });
+      if (localRoots.length > 0) {
+        // Transient outage: the local copy still describes the configured
+        // roots, so keep working offline (no verify — we cannot reach Drive).
+        return { kind: "resolved", roots: localRoots, rootChanged: false };
+      }
+      return { kind: "config-unavailable" };
+    }
+
+    // "missing" is a CONFIRMED absence (search ok, no file): the local
+    // fallback / setup flow is legitimate there, so it maps to null exactly
+    // like the old null return did.
+    const remoteConfig = read.status === "found" ? read.config : null;
 
     const selected = selectAuthoritativeRoots({
       remoteConfig,

@@ -35,12 +35,15 @@ interface UseDriveInitParams {
   accessToken: string | null;
   isLoggedIn: boolean;
   hydratedRef: RefObject<boolean>;
+  /** Bumped by the gate's Retry action to re-run this exact init path. */
+  reloadNonce?: number;
 }
 
 export const useDriveInit = ({
   accessToken,
   isLoggedIn,
   hydratedRef,
+  reloadNonce = 0,
 }: UseDriveInitParams) => {
   const {
     setAppRootFolder,
@@ -50,6 +53,7 @@ export const useDriveInit = ({
     setFolderHistory,
     setSortOption,
     setIsHydrated,
+    setConfigError,
   } = useDriveStore(
     useShallow((state) => ({
       setAppRootFolder: state.setAppRootFolder,
@@ -59,6 +63,7 @@ export const useDriveInit = ({
       setFolderHistory: state.setFolderHistory,
       setSortOption: state.setSortOption,
       setIsHydrated: state.setIsHydrated,
+      setConfigError: state.setConfigError,
     })),
   );
 
@@ -134,6 +139,10 @@ export const useDriveInit = ({
         // snapshot (which points inside the OLD roots) must be discarded.
         let rootChanged = false;
         let roots: RootFolder[] = localRoots;
+        // Set when the remote config is UNREADABLE and there is no usable local
+        // copy. The app must not claim "you are new": leave the live state
+        // untouched, flag the store and let the gate paint a retry surface.
+        let configUnavailable = false;
 
         if (isLoggedIn && accessToken) {
           // Reconcile local vs remote roots (driveInit/rootReconciliation):
@@ -149,17 +158,38 @@ export const useDriveInit = ({
             rootChangedByUser,
           });
           if (outcome.kind === "cancelled") return;
-          if (outcome.kind === "user-changed") return;
-          if (outcome.kind === "keep-previous") return;
-          if (outcome.kind === "config-failed") {
+          if (outcome.kind === "user-changed") {
+            setConfigError(null);
+            return;
+          }
+          if (outcome.kind === "keep-previous") {
+            setConfigError(null);
+            return;
+          }
+          if (outcome.kind === "config-unavailable") {
+            configUnavailable = true;
+          } else if (outcome.kind === "config-failed") {
+            setConfigError(null);
             roots = [];
           } else {
+            setConfigError(null);
             roots = outcome.roots;
             rootChanged = outcome.rootChanged;
           }
+        } else {
+          // Logged out: a stale config error must never survive the session.
+          setConfigError(null);
         }
 
         if (isCancelled()) return;
+        if (configUnavailable) {
+          // Deliberately no appRootFolder/rootFolders write here: a null root
+          // would read as "first run" and a non-empty root list must survive
+          // the outage. The `finally` below still marks the session hydrated so
+          // the gate can render the recoverable error surface.
+          setConfigError("unavailable");
+          return;
+        }
 
         if (roots.length > 0) {
           const primaryRoot = roots[0];
@@ -337,6 +367,9 @@ export const useDriveInit = ({
     hydratedRef,
     isLoggedIn,
     accessToken,
+    // Retry nonce: App bumps it from the gate's "couldn't load" surface so the
+    // retry re-runs THIS exact init path (no bespoke reload).
+    reloadNonce,
     setSortOption,
     setAppRootFolder,
     setRootFolders,
@@ -344,5 +377,6 @@ export const useDriveInit = ({
     setCurrentFolderName,
     setFolderHistory,
     setIsHydrated,
+    setConfigError,
   ]);
 };

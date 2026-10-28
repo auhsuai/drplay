@@ -33,6 +33,10 @@ interface SettingsTabProps {
   setMinimizeToTray: (minimize: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
+  /** "unsaved" = local roots applied but the Drive config write failed. */
+  configSync: "saved" | "unsaved" | null;
+  /** Retry that unconfirmed cloud write WITHOUT re-picking the roots. */
+  onRetryConfigSync: () => Promise<void>;
 }
 
 export function SettingsTab({
@@ -42,9 +46,14 @@ export function SettingsTab({
   setMinimizeToTray,
   setShowFolderSelection,
   setShowTrashScreen,
+  configSync,
+  onRetryConfigSync,
 }: SettingsTabProps) {
   const { t } = useTranslation();
   const [showCacheManager, setShowCacheManager] = useState(false);
+  // Truthful busy state for the retry: the button stays disabled until the
+  // real promise settles, so a slow Drive cannot be double-submitted.
+  const [isRetryingConfigSync, setIsRetryingConfigSync] = useState(false);
   // Local state, localStorage-backed: no prop drilling into App/TabContentRouter
   // for a setting only this tab reads and writes.
   const [metadataFetchEnabled, setMetadataFetchEnabledState] = useState(
@@ -90,6 +99,37 @@ export function SettingsTab({
                 {t("settings.change_folder")}
               </button>
             </div>
+            {/* Truthful cloud-sync state: the roots ARE applied on this
+                device, but Drive was not updated, so the other build/origin
+                would still read the old config. Retry re-sends the SAME
+                payload — no root re-selection. */}
+            {configSync === "unsaved" ? (
+              <div
+                data-testid="config-sync-unsaved"
+                className="flex items-center justify-between gap-3 pb-6"
+              >
+                <p className="text-sm text-amber-600 dark:text-amber-400">
+                  {t("settings.config_sync_unsaved")}
+                </p>
+                <button
+                  data-testid="config-sync-retry"
+                  onClick={() => {
+                    setIsRetryingConfigSync(true);
+                    void (async () => {
+                      try {
+                        await onRetryConfigSync();
+                      } finally {
+                        setIsRetryingConfigSync(false);
+                      }
+                    })();
+                  }}
+                  disabled={isRetryingConfigSync}
+                  className="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                >
+                  {t("settings.config_sync_retry")}
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-col gap-2 mt-6">

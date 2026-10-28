@@ -1543,7 +1543,7 @@ describe("getAppConfig caller abort signal", () => {
 
     const result = await getAppConfig("tok-1", controller.signal);
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: "failed", reason: "aborted" });
     expect(captureError).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "error",
@@ -1618,7 +1618,10 @@ describe("driveConfig encodes config fileId in download URL (getAppConfig mirror
       ) // search finds existing config
       .mockResolvedValueOnce(makeJsonResponse(200, { ok: true })); // alt=media download
 
-    await expect(getAppConfig("tok-1")).resolves.toEqual({ ok: true });
+    await expect(getAppConfig("tok-1")).resolves.toEqual({
+      status: "found",
+      config: { ok: true },
+    });
 
     expect(fetchCallAt(0)[0]).toContain("spaces=appDataFolder");
     expect(fetchCallAt(1)[0]).toBe(
@@ -1641,7 +1644,7 @@ describe("getAppConfig non-object JSON body (B02-3)", () => {
     { label: "string", body: "abc" },
     { label: "number", body: 42 },
   ])(
-    "returns null when the downloaded config JSON is a non-object ($label)",
+    "reports failed/malformed when the downloaded config JSON is a non-object ($label)",
     async ({ body }) => {
       mockedFetch
         .mockResolvedValueOnce(
@@ -1649,8 +1652,168 @@ describe("getAppConfig non-object JSON body (B02-3)", () => {
         ) // search finds the config file
         .mockResolvedValueOnce(makeJsonResponse(200, body)); // alt=media download
 
-      await expect(getAppConfig("tok-1")).resolves.toBeNull();
+      await expect(getAppConfig("tok-1")).resolves.toEqual({
+        status: "failed",
+        reason: "malformed",
+      });
       expect(mockedFetch).toHaveBeenCalledTimes(2);
     },
   );
+});
+
+// The read result must keep the 4 previously-collapsed situations apart: a new
+// storage origin (MSI build vs `tauri dev`) has no local config, so only a
+// CONFIRMED absence may lead to the first-run setup flow. Everything else
+// reports a typed failure the caller can surface as a retry state.
+describe("getAppConfig typed read result", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    vi.clearAllMocks();
+  });
+
+  // Only the LOGGED diagnostics are asserted: the Authorization header sent to
+  // Drive legitimately contains the access token, nothing in captureError may.
+  const expectNoTokenLeak = () => {
+    const token = "tok-secret-123";
+    for (const args of vi.mocked(captureError).mock.calls) {
+      for (const arg of args) {
+        expect(JSON.stringify(arg)).not.toContain(token);
+      }
+    }
+  };
+
+  it("reports found with the parsed config object", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(
+        makeJsonResponse(200, { files: [{ id: "file-1" }] }),
+      )
+      .mockResolvedValueOnce(
+        makeJsonResponse(200, { rootFolderId: "root-A", updatedAt: 7 }),
+      );
+
+    await expect(getAppConfig("tok-secret-123")).resolves.toEqual({
+      status: "found",
+      config: { rootFolderId: "root-A", updatedAt: 7 },
+    });
+    expectNoTokenLeak();
+  });
+
+  it("reports missing when the search succeeds but finds no config file", async () => {
+    mockedFetch.mockResolvedValueOnce(makeJsonResponse(200, { files: [] }));
+
+    await expect(getAppConfig("tok-secret-123")).resolves.toEqual({
+      status: "missing",
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expectNoTokenLeak();
+  });
+
+  it("reports failed/search with the HTTP status when the search is non-ok", async () => {
+    mockedFetch.mockResolvedValueOnce(makeResponse(403));
+
+    await expect(getAppConfig("tok-secret-123")).resolves.toEqual({
+      status: "failed",
+      reason: "search",
+      detail: "403",
+    });
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: "get-config-search-failed (status=403)",
+      }),
+    );
+    expectNoTokenLeak();
+  });
+
+  it("reports failed/download with the HTTP status when the download is non-ok", async () => {
+    // A 5xx download is retried by driveFetch, so drive the bounded budget with
+    // fake timers (the final response is what the read result reports).
+    vi.useFakeTimers();
+    try {
+      mockedFetch
+        .mockResolvedValueOnce(
+          makeJsonResponse(200, { files: [{ id: "file-1" }] }),
+        )
+        .mockResolvedValue(makeResponse(500));
+
+      const pending = getAppConfig("tok-secret-123");
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      await expect(pending).resolves.toEqual({
+        status: "failed",
+        reason: "download",
+        detail: "500",
+      });
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "warn",
+          message: "get-config-download-failed (status=500)",
+        }),
+      );
+      expectNoTokenLeak();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports failed/malformed when the body is not a plain object", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(
+        makeJsonResponse(200, { files: [{ id: "file-1" }] }),
+      )
+      .mockResolvedValueOnce(makeJsonResponse(200, [1, 2]));
+
+    await expect(getAppConfig("tok-secret-123")).resolves.toEqual({
+      status: "failed",
+      reason: "malformed",
+    });
+    expectNoTokenLeak();
+  });
+
+  it("reports failed/network when the request throws a non-abort error", async () => {
+    // driveFetch retries a transient network error, so drive the bounded retry
+    // budget with fake timers instead of waiting out the real backoff.
+    vi.useFakeTimers();
+    try {
+      mockedFetch.mockRejectedValue(new Error("network down"));
+
+      const pending = getAppConfig("tok-secret-123");
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      await expect(pending).resolves.toEqual({
+        status: "failed",
+        reason: "network",
+      });
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: "error",
+          message: expect.stringContaining(
+            "get-config-failed",
+          ) as unknown as string,
+        }),
+      );
+      expectNoTokenLeak();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports failed/aborted for a caller abort (no retry, no fault)", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    mockedFetch.mockImplementation((_url, opts) => {
+      if (opts?.signal?.aborted) {
+        return Promise.reject(new DOMException("aborted", "AbortError"));
+      }
+      return Promise.resolve(
+        makeJsonResponse(200, { files: [{ id: "file-1" }] }),
+      );
+    });
+
+    await expect(
+      getAppConfig("tok-secret-123", controller.signal),
+    ).resolves.toEqual({ status: "failed", reason: "aborted" });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expectNoTokenLeak();
+  });
 });

@@ -21,6 +21,15 @@ interface DriveState {
    * the initial placeholder — not proof that no root is configured).
    */
   isHydrated: boolean;
+  /** Set when the remote config could not be read and no local roots exist.
+   *  The setup gate must show a recoverable "couldn't load" state, not the
+   *  first-run picker. Cleared by a successful reload or by a user commit. */
+  configError: "unavailable" | null;
+  /** Truthfulness of the last cloud write of the root config: "unsaved" means
+   *  the local roots are applied but Drive did not confirm the write, so the
+   *  other build's origin may still read the previous config. null = no commit
+   *  attempted yet in this session. */
+  configSync: "saved" | "unsaved" | null;
   /** The folder currently open in the explorer. */
   currentFolderId: string;
   /** Display name of the currently open folder (breadcrumb + list header). */
@@ -41,6 +50,10 @@ interface DriveState {
   setRootFolders: (roots: RootFolder[]) => void;
   /** Mark the current session's drive init as settled (or restarted). */
   setIsHydrated: (isHydrated: boolean) => void;
+  /** Set/clear the recoverable remote-config failure flag. */
+  setConfigError: (error: "unavailable" | null) => void;
+  /** Record whether the last root-config cloud write was confirmed. */
+  setConfigSync: (sync: "saved" | "unsaved" | null) => void;
   /** Open a different folder in the explorer. */
   setCurrentFolderId: (folderId: string) => void;
   /** Update the display name of the currently open folder. */
@@ -76,6 +89,8 @@ export const useDriveStore = create<DriveState>((set) => ({
   // Initial FALSE: until useDriveInit settles, appRootFolder=null is a
   // placeholder, so the folder gate must not treat it as "not configured".
   isHydrated: false,
+  configError: null,
+  configSync: null,
   currentFolderId: ROOT_FOLDER_ID,
   currentFolderName: MY_DRIVE_TAB,
   folderHistory: [],
@@ -93,6 +108,12 @@ export const useDriveStore = create<DriveState>((set) => ({
   },
   setIsHydrated: (isHydrated) => {
     set({ isHydrated });
+  },
+  setConfigError: (configError) => {
+    set({ configError });
+  },
+  setConfigSync: (configSync) => {
+    set({ configSync });
   },
   setCurrentFolderId: (currentFolderId) => {
     set({ currentFolderId });

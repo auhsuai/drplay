@@ -74,6 +74,8 @@ const baseProps = {
   setMinimizeToTray: vi.fn(),
   setShowFolderSelection: vi.fn(),
   setShowTrashScreen: vi.fn(),
+  configSync: null,
+  onRetryConfigSync: vi.fn<() => Promise<void>>(),
 };
 
 describe("Clear Cache flow renders a real success toast", () => {

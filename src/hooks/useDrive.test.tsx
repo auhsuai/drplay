@@ -71,6 +71,22 @@ const mockedSaveAppConfig = vi.mocked(saveAppConfig);
 const mockedWipeFileRowsForUser = vi.mocked(wipeFileRowsForUser);
 const mockedCaptureError = vi.mocked(captureError);
 
+// getAppConfig now returns a discriminated read result: a confirmed absence
+// ("missing") is NOT the same as an unreadable remote ("failed"), so the mocks
+// state which one they model instead of collapsing everything into null.
+type AppConfigReadResult = Awaited<ReturnType<typeof getAppConfig>>;
+
+const foundConfig = (config: Record<string, unknown>): AppConfigReadResult => ({
+  status: "found",
+  config,
+});
+
+const missingConfig = (): AppConfigReadResult => ({ status: "missing" });
+
+const failedConfig = (
+  reason: "search" | "download" | "network" | "malformed" | "aborted",
+): AppConfigReadResult => ({ status: "failed", reason });
+
 function makeOkFolderResponse() {
   return {
     ok: true,
@@ -169,7 +185,9 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
     // First login with root "root-A" already saved locally and in the
     // remote config: nothing changed, so no cache wipe may happen.
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-A" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
     const clearSpy = vi.spyOn(db.files, "clear");
 
     const { rerender } = renderHook(
@@ -200,7 +218,9 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
   it("wipes ONLY the current account's rows when the remote root folder CHANGES", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-B" }),
+    );
     const clearSpy = vi.spyOn(db.files, "clear");
 
     renderHook(() => useDrive(true, "tok1"));
@@ -221,7 +241,9 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
   it("keeps OTHER accounts' mirrors when the remote root folder changes (2-account isolation)", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-B" }),
+    );
     await db.files.bulkPut([
       {
         id: "mine",
@@ -259,7 +281,9 @@ describe("useDrive initApp root-change guard (B-regression: unconditional db.fil
     // so legacy rows have no real account fingerprint and the store-wide clear
     // is preserved for this branch.
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-B" }),
+    );
     const clearSpy = vi.spyOn(db.files, "clear");
 
     renderHook(() => useDrive(true, "tok1"));
@@ -280,12 +304,12 @@ describe("useDrive initApp re-init & user race (B12)", () => {
       key: DB_NAV_STATE_KEY,
       value: { id: "old-folder", name: "Old Folder", history: [] },
     });
-    let resolveConfig: (v: Record<string, unknown> | null) => void = () => {};
+    let resolveConfig: (v: AppConfigReadResult) => void = () => {};
     mockedGetAppConfig
-      .mockResolvedValueOnce({ rootFolderId: "root-A" })
+      .mockResolvedValueOnce(foundConfig({ rootFolderId: "root-A" }))
       .mockImplementationOnce(
         () =>
-          new Promise<Record<string, unknown> | null>((resolve) => {
+          new Promise<AppConfigReadResult>((resolve) => {
             resolveConfig = resolve;
           }),
       );
@@ -316,7 +340,7 @@ describe("useDrive initApp re-init & user race (B12)", () => {
     // Remote config resolves with the SAME root: the re-init must not re-apply
     // the persisted snapshot over the live navigation.
     await act(async () => {
-      resolveConfig({ rootFolderId: "root-A" });
+      resolveConfig(foundConfig({ rootFolderId: "root-A" }));
       await new Promise((r) => setTimeout(r, 50));
     });
 
@@ -325,7 +349,9 @@ describe("useDrive initApp re-init & user race (B12)", () => {
 
   it("keeps the previous app root when the re-verify request fails transiently on token rotation (B12-1)", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-A" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
 
     const { rerender } = renderHook(
       ({ token }: { token: string | null }) => useDrive(true, token),
@@ -352,10 +378,10 @@ describe("useDrive initApp re-init & user race (B12)", () => {
 
   it("lets a root the user picked mid-init win over the in-flight remote config (B12-3)", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    let resolveConfig: (v: Record<string, unknown> | null) => void = () => {};
+    let resolveConfig: (v: AppConfigReadResult) => void = () => {};
     mockedGetAppConfig.mockImplementationOnce(
       () =>
-        new Promise<Record<string, unknown> | null>((resolve) => {
+        new Promise<AppConfigReadResult>((resolve) => {
           resolveConfig = resolve;
         }),
     );
@@ -373,7 +399,7 @@ describe("useDrive initApp re-init & user race (B12)", () => {
 
     // The pending remote config still reports the OLD root.
     await act(async () => {
-      resolveConfig({ rootFolderId: "root-A" });
+      resolveConfig(foundConfig({ rootFolderId: "root-A" }));
       await new Promise((r) => setTimeout(r, 50));
     });
 
@@ -385,7 +411,9 @@ describe("useDrive initApp re-init & user race (B12)", () => {
   it("lands on the new remote root instead of restoring nav from the old root (B12-5)", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-B" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-B" }),
+    );
     await db.syncState.put({
       key: DB_NAV_STATE_KEY,
       value: {
@@ -411,12 +439,12 @@ describe("useDrive initApp re-init & user race (B12)", () => {
 });
 
 describe("useDrive initApp multi-root load, verify and landing (Slice B)", () => {
-  let resolveConfig: (v: Record<string, unknown> | null) => void = () => {};
+  let resolveConfig: (v: AppConfigReadResult) => void = () => {};
   const deferredConfig = () =>
-    new Promise<Record<string, unknown> | null>((resolve) => {
+    new Promise<AppConfigReadResult>((resolve) => {
       resolveConfig = resolve;
     });
-  const settlePendingConfig = async (value: Record<string, unknown> | null) => {
+  const settlePendingConfig = async (value: AppConfigReadResult) => {
     await act(async () => {
       resolveConfig(value);
       await new Promise((r) => setTimeout(r, 50));
@@ -430,7 +458,9 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
 
   it("migrates a remote legacy single root and refreshes its real name", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-A" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
     mockVerifyByRootId({ "root-A": okFolderResponse("Verified A") });
 
     renderHook(() => useDrive(true, "tok1"));
@@ -446,13 +476,15 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
   });
 
   it("loads a remote two-root list, verifies each name, and lands on the virtual root", async () => {
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "Stale A" },
-        { id: "root-B", name: "Stale B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "Stale A" },
+          { id: "root-B", name: "Stale B" },
+        ],
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("Music"),
       "root-B": okFolderResponse("Archive"),
@@ -480,10 +512,12 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
 
   it("verifies all 5 roots and preserves their order", async () => {
     const ids = ["r1", "r2", "r3", "r4", "r5"];
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "r1",
-      rootFolders: ids.map((id) => ({ id, name: `Old ${id}` })),
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "r1",
+        rootFolders: ids.map((id) => ({ id, name: `Old ${id}` })),
+      }),
+    );
     mockVerifyByRootId(
       Object.fromEntries(ids.map((id) => [id, okFolderResponse(`New ${id}`)])),
     );
@@ -524,11 +558,13 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
   ])(
     "falls back to the legacy single root when rootFolders has %s",
     async (_label, badList) => {
-      mockedGetAppConfig.mockResolvedValue({
-        rootFolderId: "root-L",
-        rootFolderName: "Legacy",
-        rootFolders: badList,
-      });
+      mockedGetAppConfig.mockResolvedValue(
+        foundConfig({
+          rootFolderId: "root-L",
+          rootFolderName: "Legacy",
+          rootFolders: badList,
+        }),
+      );
       mockVerifyByRootId({
         "root-L": okFolderResponse("Legacy real"),
       });
@@ -556,7 +592,7 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
   it("falls back to the single local root when the local root list JSON is corrupt", async () => {
     localStorage.setItem(ROOT_FOLDERS_KEY, "{not-json");
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
-    mockedGetAppConfig.mockResolvedValue(null);
+    mockedGetAppConfig.mockResolvedValue(missingConfig());
     mockVerifyByRootId({ "root-A": okFolderResponse("Real A") });
 
     renderHook(() => useDrive(true, "tok1"));
@@ -595,13 +631,15 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
         ],
         "root-A",
       );
-      mockedGetAppConfig.mockResolvedValue({
-        rootFolderId: "root-A",
-        rootFolders: [
-          { id: "root-A", name: "A" },
-          { id: "root-B", name: "B" },
-        ],
-      });
+      mockedGetAppConfig.mockResolvedValue(
+        foundConfig({
+          rootFolderId: "root-A",
+          rootFolders: [
+            { id: "root-A", name: "A" },
+            { id: "root-B", name: "B" },
+          ],
+        }),
+      );
       mockVerifyByRootId({
         "root-A": okFolderResponse("Verified A"),
         "root-B": badResponse,
@@ -637,13 +675,15 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
       ],
       "root-A",
     );
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+      }),
+    );
     mockVerifyByRootId({
       "root-A": errorResponse(404),
       "root-B": okFolderResponse("Verified B"),
@@ -681,7 +721,7 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
     });
     expect(useDriveStore.getState().appRootFolder).toBe("root-B");
 
-    await settlePendingConfig({ rootFolderId: "root-A" });
+    await settlePendingConfig(foundConfig({ rootFolderId: "root-A" }));
 
     expect(useDriveStore.getState().appRootFolder).toBe("root-B");
     expect(useDriveStore.getState().rootFolders).toEqual([
@@ -711,7 +751,7 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
         { id: "root-B", name: "B" },
       ],
     };
-    mockedGetAppConfig.mockResolvedValue(remoteList);
+    mockedGetAppConfig.mockResolvedValue(foundConfig(remoteList));
     mockVerifyByRootId({
       "root-A": okFolderResponse("A"),
       "root-B": okFolderResponse("B"),
@@ -751,13 +791,15 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
       ],
       "root-A",
     );
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A"),
       "root-B": okFolderResponse("B"),
@@ -807,13 +849,15 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
         history: [{ id: "root-A", name: MY_DRIVE_TAB }],
       },
     });
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A real"),
       "root-B": okFolderResponse("B real"),
@@ -856,13 +900,15 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
         history: [{ id: "root-A", name: "A" }],
       },
     });
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A"),
       "root-B": okFolderResponse("B"),
@@ -885,10 +931,12 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
       key: DB_NAV_STATE_KEY,
       value: { id: VIRTUAL_ROOT_ID, name: VIRTUAL_ROOT_NAME, history: [] },
     });
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [{ id: "root-A", name: "A" }],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [{ id: "root-A", name: "A" }],
+      }),
+    );
     mockVerifyByRootId({ "root-A": okFolderResponse("A") });
 
     renderHook(() => useDrive(true, "tok1"));
@@ -916,13 +964,15 @@ describe("useDrive initApp multi-root load, verify and landing (Slice B)", () =>
         history: [{ id: "root-A", name: "A" }],
       },
     });
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A"),
       "root-B": okFolderResponse("B"),
@@ -948,10 +998,12 @@ describe("useDrive nav restore with persisted branch-root identity", () => {
     seedLocalRoots(MULTI_ROOTS, "root-A");
   };
   const configMultiRoots = () => {
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: MULTI_ROOTS,
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: MULTI_ROOTS,
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("Music"),
       "root-B": okFolderResponse("Archive"),
@@ -961,10 +1013,12 @@ describe("useDrive nav restore with persisted branch-root identity", () => {
     seedLocalRoots([{ id: "root-A", name: "A" }], "root-A");
   };
   const configSingleRoot = () => {
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [{ id: "root-A", name: "A" }],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [{ id: "root-A", name: "A" }],
+      }),
+    );
     mockVerifyByRootId({ "root-A": okFolderResponse("Music") });
   };
   const seedNav = (value: Record<string, unknown>) =>
@@ -1176,7 +1230,9 @@ describe("useDrive initApp transient verify failures keep stored roots (B v2)", 
   it("keeps the stored single legacy root when the first-init verify throws (network)", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-A" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
     mockedFetchWithAuth.mockRejectedValue(new Error("network down"));
     const clearSpy = vi.spyOn(db.files, "clear");
 
@@ -1211,7 +1267,7 @@ describe("useDrive initApp transient verify failures keep stored roots (B v2)", 
       ],
       "root-A",
     );
-    mockedGetAppConfig.mockResolvedValue(null);
+    mockedGetAppConfig.mockResolvedValue(missingConfig());
     mockedFetchWithAuth.mockRejectedValue(new Error("offline"));
     const clearSpy = vi.spyOn(db.files, "clear");
 
@@ -1242,7 +1298,9 @@ describe("useDrive initApp transient verify failures keep stored roots (B v2)", 
   it("keeps the stored single root when the first-init verify returns 500", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({ rootFolderId: "root-A" });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
     mockedFetchWithAuth.mockResolvedValue(errorResponse(500));
     const clearSpy = vi.spyOn(db.files, "clear");
 
@@ -1271,13 +1329,15 @@ describe("useDrive initApp transient verify failures keep stored roots (B v2)", 
   it("does not adopt, persist or wipe a grown remote list when its verify fails transiently", async () => {
     localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+      }),
+    );
     mockedFetchWithAuth.mockRejectedValue(new Error("timeout"));
     const clearSpy = vi.spyOn(db.files, "clear");
 
@@ -1325,11 +1385,13 @@ describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
     );
     localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(committedAt));
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [{ id: "root-A", name: "A" }],
-      updatedAt: committedAt - 1_000,
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [{ id: "root-A", name: "A" }],
+        updatedAt: committedAt - 1_000,
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A"),
       "root-B": okFolderResponse("B"),
@@ -1367,14 +1429,16 @@ describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
     seedLocalRoots([{ id: "root-A", name: "A" }], "root-A");
     localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(localMarker));
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-      updatedAt: Date.now() - 1_000,
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+        updatedAt: Date.now() - 1_000,
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A real"),
       "root-B": okFolderResponse("B real"),
@@ -1409,10 +1473,12 @@ describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
       "root-A",
     );
     localStorage.setItem(ROOT_FOLDERS_UPDATED_KEY, String(Date.now()));
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-C",
-      rootFolderName: "Legacy C",
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-C",
+        rootFolderName: "Legacy C",
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A"),
       "root-B": okFolderResponse("B"),
@@ -1446,7 +1512,7 @@ describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
       ],
       updatedAt: committedAt + 1_000,
     };
-    mockedGetAppConfig.mockResolvedValue(staleRemote);
+    mockedGetAppConfig.mockResolvedValue(foundConfig(staleRemote));
     mockVerifyByRootId({
       "root-A": okFolderResponse("Verified A"),
       "root-B": errorResponse(404),
@@ -1511,14 +1577,16 @@ describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
       key: DB_NAV_STATE_KEY,
       value: { id: "old-folder", name: "Old", history: [] },
     });
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-      updatedAt: committedAt + 1_000,
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+        updatedAt: committedAt + 1_000,
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("Verified A"),
       "root-B": errorResponse(404),
@@ -1549,13 +1617,15 @@ describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
   it("does not overwrite a user commit that lands after the last verify check", async () => {
     seedLocalRoots([{ id: "root-A", name: "A" }], "root-A");
     localStorage.setItem(USER_EMAIL_KEY, "a@x");
-    mockedGetAppConfig.mockResolvedValue({
-      rootFolderId: "root-A",
-      rootFolders: [
-        { id: "root-A", name: "A" },
-        { id: "root-B", name: "B" },
-      ],
-    });
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({
+        rootFolderId: "root-A",
+        rootFolders: [
+          { id: "root-A", name: "A" },
+          { id: "root-B", name: "B" },
+        ],
+      }),
+    );
     mockVerifyByRootId({
       "root-A": okFolderResponse("A"),
       "root-B": okFolderResponse("B"),
@@ -1593,5 +1663,155 @@ describe("useDrive initApp local version marker (GAP-3/GAP-2)", () => {
     expect(localStorage.getItem(ROOT_FOLDERS_UPDATED_KEY)).toBe(userMarker);
     expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
     expect(mockedInvoke).not.toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+  });
+});
+
+// P1 conflation fix: a config read that FAILS must never be read as "the user
+// is new". That single bug made switching between the MSI build (tauri.localhost)
+// and `tauri dev` (localhost:1420) — different localStorage origins — land an
+// already-configured user on the first-run picker whenever Drive hiccuped.
+describe("useDrive remote config unavailable (P1 conflation fix)", () => {
+  it("empty local + failed read ⇒ configError=unavailable, hydrated, and no 'new user' claim", async () => {
+    mockedGetAppConfig.mockResolvedValue(failedConfig("network"));
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().isHydrated).toBe(true);
+    });
+
+    const state = useDriveStore.getState();
+    expect(state.configError).toBe("unavailable");
+    expect(state.appRootFolder).toBeNull();
+    expect(state.rootFolders).toEqual([]);
+    // No verify attempt: the config never loaded, so nothing was proposed.
+    expect(mockedFetchWithAuth).not.toHaveBeenCalled();
+    expect(mockedCaptureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "useDrive",
+        message: "config-read-failed: network",
+        kind: "config-read-failed",
+      }),
+    );
+  });
+
+  it("non-empty local + failed read ⇒ keeps the stored roots and works offline", async () => {
+    seedLocalRoots(
+      [
+        { id: "root-A", name: "A" },
+        { id: "root-B", name: "B" },
+      ],
+      "root-A",
+    );
+    mockedGetAppConfig.mockResolvedValue(failedConfig("search"));
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().isHydrated).toBe(true);
+    });
+
+    const state = useDriveStore.getState();
+    expect(state.configError).toBeNull();
+    expect(state.rootFolders).toEqual([
+      { id: "root-A", name: "A" },
+      { id: "root-B", name: "B" },
+    ]);
+    expect(state.appRootFolder).toBe("root-A");
+    expect(mockedFetchWithAuth).not.toHaveBeenCalled();
+    // A transient outage must not invalidate the mirror.
+    expect(mockedWipeFileRowsForUser).not.toHaveBeenCalled();
+    expect(mockedInvoke).not.toHaveBeenCalledWith(CLEAR_LOCAL_CACHE_CMD);
+  });
+
+  it("a later successful reload clears configError", async () => {
+    mockedGetAppConfig.mockResolvedValueOnce(failedConfig("download"));
+    const { rerender } = renderHook(
+      ({ nonce }: { nonce: number }) => useDrive(true, "tok1", nonce),
+      { initialProps: { nonce: 0 } },
+    );
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().configError).toBe("unavailable");
+    });
+
+    mockedGetAppConfig.mockResolvedValueOnce(missingConfig());
+    act(() => {
+      rerender({ nonce: 1 });
+    });
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().configError).toBeNull();
+    });
+  });
+
+  it("!freshToken on a RE-INIT keeps the previous root instead of resetting it", async () => {
+    // P2: mid-session refresh failure used to map to resolved/[] and blank the
+    // roots — the folder gate then flashed open on a transient blip.
+    localStorage.setItem(ROOT_FOLDER_KEY, "root-A");
+    mockedGetAppConfig.mockResolvedValue(
+      foundConfig({ rootFolderId: "root-A" }),
+    );
+
+    const { rerender } = renderHook(
+      ({ token }: { token: string | null }) => useDrive(true, token),
+      { initialProps: { token: "tok1" } },
+    );
+    await waitForInit();
+
+    mockedGetValidToken.mockResolvedValue(null);
+    act(() => {
+      rerender({ token: "tok2" });
+    });
+
+    await waitFor(() => {
+      expect(mockedCaptureError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "keeping previous roots (no-valid-token)",
+          ) as unknown as string,
+        }),
+      );
+    });
+
+    expect(useDriveStore.getState().appRootFolder).toBe("root-A");
+    // The first init verified the root, so the name is the live folder name.
+    expect(useDriveStore.getState().rootFolders).toEqual([
+      { id: "root-A", name: "Root A" },
+    ]);
+    expect(useDriveStore.getState().configError).toBeNull();
+  });
+
+  it("!freshToken on a FIRST init reports unavailable (never 'no roots')", async () => {
+    mockedGetValidToken.mockResolvedValue(null);
+
+    renderHook(() => useDrive(true, "tok1"));
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().isHydrated).toBe(true);
+    });
+    expect(useDriveStore.getState().configError).toBe("unavailable");
+    expect(useDriveStore.getState().appRootFolder).toBeNull();
+  });
+
+  it("logging out clears a stale configError", async () => {
+    mockedGetAppConfig.mockResolvedValue(failedConfig("network"));
+    const { rerender } = renderHook(
+      ({ loggedIn }: { loggedIn: boolean }) =>
+        useDrive(loggedIn, loggedIn ? "tok1" : null),
+      { initialProps: { loggedIn: true } },
+    );
+    await waitFor(() => {
+      expect(useDriveStore.getState().configError).toBe("unavailable");
+    });
+
+    act(() => {
+      rerender({ loggedIn: false });
+    });
+
+    await waitFor(() => {
+      expect(useDriveStore.getState().configError).toBeNull();
+    });
   });
 });

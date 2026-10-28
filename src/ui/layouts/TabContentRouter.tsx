@@ -57,6 +57,10 @@ interface TabContentRouterProps {
   setMinimizeToTray: (minimize: boolean) => void;
   setShowFolderSelection: (val: boolean) => void;
   setShowTrashScreen: (val: boolean) => void;
+  /** "unsaved" = local roots applied but the Drive config write failed. */
+  configSync: "saved" | "unsaved" | null;
+  /** Retry the unconfirmed cloud write without re-picking the roots. */
+  onRetryConfigSync: () => Promise<void>;
   // Fullscreen NowPlaying overlay state (from App): Backspace must stay a
   // no-op behind it in every tab it reaches.
   isNowPlayingOpen: boolean;
@@ -87,6 +91,8 @@ export function TabContentRouter({
   setMinimizeToTray,
   setShowFolderSelection,
   setShowTrashScreen,
+  configSync,
+  onRetryConfigSync,
   isNowPlayingOpen,
 }: TabContentRouterProps) {
   const { t } = useTranslation();
@@ -186,6 +192,8 @@ export function TabContentRouter({
             setMinimizeToTray={setMinimizeToTray}
             setShowFolderSelection={setShowFolderSelection}
             setShowTrashScreen={setShowTrashScreen}
+            configSync={configSync}
+            onRetryConfigSync={onRetryConfigSync}
           />
         ) : (
           <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex items-center justify-center transition-colors duration-300">

@@ -63,6 +63,8 @@ function routerProps(
     setMinimizeToTray: vi.fn(),
     setShowFolderSelection: vi.fn(),
     setShowTrashScreen: vi.fn(),
+    configSync: null,
+    onRetryConfigSync: vi.fn<() => Promise<void>>(),
     isNowPlayingOpen: false,
   };
 }
