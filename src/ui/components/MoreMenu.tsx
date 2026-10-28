@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { Track } from "../../types";
 import type { DriveItem } from "../../types";
@@ -13,27 +13,18 @@ import { useMenuDownload } from "../../hooks/useMenuDownload";
 import { useMenuDelete } from "../../hooks/useMenuDelete";
 import { useMenuPlaylists } from "../../hooks/useMenuPlaylists";
 import { useMenuAddToQueue } from "../../hooks/useMenuAddToQueue";
-import { AddToPlaylistItem } from "./MoreMenu/AddToPlaylistItem";
-import { DefaultMenuItems } from "./MoreMenu/DefaultMenuItems";
 import { DeleteConfirmDialog } from "./MoreMenu/DeleteConfirmDialog";
 import { DownloadDialog } from "./MoreMenu/DownloadDialog";
 import { DownloadToast } from "./MoreMenu/DownloadToast";
+import { MoreMenuContent } from "./MoreMenu/MoreMenuContent";
 import { MoreMenuTrigger } from "./MoreMenu/MoreMenuTrigger";
-import { PlayerBarMenuItems } from "./MoreMenu/PlayerBarMenuItems";
-import { PlaylistMenuItems } from "./MoreMenu/PlaylistMenuItems";
-import { QueueMenuItems } from "./MoreMenu/QueueMenuItems";
-import { RecentMenuItems } from "./MoreMenu/RecentMenuItems";
-import { SidebarPlaylistMenuItems } from "./MoreMenu/SidebarPlaylistMenuItems";
 import { useMenuMove } from "./MoreMenu/useMenuMove";
 import { useMoreMenuEvents } from "./MoreMenu/useMoreMenuEvents";
 import {
   getContextMenuStyle,
   shouldOpenUpwards,
 } from "./MoreMenu/menuPositioning";
-import {
-  focusMenuItemAt as focusItemAt,
-  getEnabledMenuItems as getEnabledItems,
-} from "./MoreMenu/menuFocus";
+import { useMenuKeyboardNavigation } from "./MoreMenu/useMenuKeyboardNavigation";
 import { EVENT_LOCATE_FILE } from "./MoreMenu/constants";
 import type { MoreMenuVariant } from "./MoreMenu/constants";
 
@@ -115,7 +106,6 @@ export function MoreMenu({
   const [openUpwards, setOpenUpwards] = useState(true);
 
   const isMenuOpen = isOpen || forceOpen;
-  const pendingFocusRef = useRef<"first" | "last">("first");
   // Why: 'recent' is a third curated mode for the Recent Files view (Delete +
   // Download Song + Add to Playlist + Navigate). isPlayerBarMode stays as the
   // legacy switch so PlayerBar does not need to change its call site.
@@ -146,18 +136,8 @@ export function MoreMenu({
 
   const { isAddingToQueue, handleAddToQueueClick } = useMenuAddToQueue(t);
 
-  const {
-    showPlaylistsSubmenu,
-    playlistSearchQuery,
-    setPlaylistSearchQuery,
-    playlistCurrentPage,
-    setPlaylistCurrentPage,
-    playlistSubmenuOpenLeft,
-    playlists,
-    handleAddToPlaylist,
-    handleToggleSubmenu,
-    setShowPlaylistsSubmenu,
-  } = useMenuPlaylists(!!isMenuOpen, t);
+  const menuPlaylists = useMenuPlaylists(!!isMenuOpen, t);
+  const { showPlaylistsSubmenu, setShowPlaylistsSubmenu } = menuPlaylists;
 
   const { showMoveScreen, setShowMoveScreen, handleMove } = useMenuMove({
     driveItem,
@@ -181,32 +161,13 @@ export function MoreMenu({
     restoreFocus: !forceOpen && !anchorPoint,
   });
 
-  // Keyboard support for the portal menu (APG menu button): the items are
-  // rendered by several child components, so the roving set is queried from
-  // the dropdown at event time (same approach as the dialog focus
-  // containment in ImageCropperModal) instead of threading a prop through
-  // every item caller. Only role="menuitem" entries participate, so the
-  // playlists search input keeps its own arrow-key behavior.
-  // Roving focus is shared with the video menu (menuFocus.ts) so both menus
-  // navigate identically — including checkable rows (menuitemcheckbox), which
-  // the previous menuitem-only selector would have skipped.
-  const getEnabledMenuItems = useCallback(
-    (): HTMLElement[] => getEnabledItems(dropdownRef.current),
-    [],
-  );
-
-  const focusMenuItemAt = useCallback((index: number): void => {
-    focusItemAt(dropdownRef.current, index);
-  }, []);
-
-  // APG: focus moves to the first item whenever the menu opens — trigger
-  // click, optional trigger ArrowDown/Up, or the SongCard context menu.
-  useEffect(() => {
-    if (!isMenuOpen) return;
-    const position = pendingFocusRef.current;
-    pendingFocusRef.current = "first";
-    focusMenuItemAt(position === "last" ? -1 : 0);
-  }, [isMenuOpen, focusMenuItemAt]);
+  const { setPendingFocus, handleMenuKeyDown } = useMenuKeyboardNavigation({
+    isMenuOpen,
+    dropdownRef,
+    closeMenu,
+    showPlaylistsSubmenu,
+    setShowPlaylistsSubmenu,
+  });
 
   useEffect(() => {
     onOpenChange?.(isOpen);
@@ -251,102 +212,38 @@ export function MoreMenu({
   };
 
   const renderMenuContent = () => (
-    <>
-      {mode === "queue" ? (
-        <QueueMenuItems
-          track={track}
-          queueFolder={queueFolder}
-          handleDownloadClick={handleDownloadClick}
-          handleNavigateClick={handleNavigateClick}
-          onRemoveFromQueue={onRemoveFromQueue}
-          disableRemoveFromQueue={disableRemoveFromQueue}
-          onRemoveFolderFromQueue={onRemoveFolderFromQueue}
-          setIsOpen={setIsOpen}
-          t={t}
-        />
-      ) : mode === "playlist" ? (
-        <PlaylistMenuItems
-          track={track}
-          handleNavigateClick={handleNavigateClick}
-          onSelectMultiple={onSelectMultiple}
-          onRemoveFromPlaylist={onRemoveFromPlaylist}
-          setIsOpen={setIsOpen}
-          onClose={onClose}
-          t={t}
-        />
-      ) : mode === "sidebarPlaylist" ? (
-        <SidebarPlaylistMenuItems
-          playlist={playlist}
-          onRename={onRenamePlaylist}
-          onDelete={onDeletePlaylist}
-          onTogglePin={onTogglePinPlaylist}
-          setIsOpen={setIsOpen}
-          onClose={onClose}
-          t={t}
-        />
-      ) : mode === "playerbar" ? (
-        <PlayerBarMenuItems
-          track={track}
-          handleDownloadClick={handleDownloadClick}
-          handleNavigateClick={handleNavigateClick}
-          setIsOpen={setIsOpen}
-          t={t}
-          isQueueOpen={isQueueOpen}
-          onToggleQueue={onToggleQueue}
-        />
-      ) : mode === "recent" ? (
-        <RecentMenuItems
-          track={track}
-          driveItem={driveItem}
-          token={token}
-          handleDownloadClick={handleDownloadClick}
-          handleNavigateClick={handleNavigateClick}
-          openDeleteConfirm={openDeleteConfirm}
-          setIsOpen={setIsOpen}
-          onClose={onClose}
-          t={t}
-        />
-      ) : (
-        <DefaultMenuItems
-          track={track}
-          driveItem={driveItem}
-          token={token}
-          handleDownloadClick={handleDownloadClick}
-          handleAddToQueueClick={handleAddToQueueClick}
-          isAddingToQueue={isAddingToQueue}
-          openDeleteConfirm={openDeleteConfirm}
-          setIsOpen={setIsOpen}
-          onClose={onClose}
-          onSelectMultiple={onSelectMultiple}
-          isBulkSelected={isBulkSelected}
-          onBulkMoveClick={onBulkMoveClick}
-          onBulkDeleteClick={onBulkDeleteClick}
-          setShowMoveScreen={setShowMoveScreen}
-          t={t}
-        />
-      )}
-
-      {/* Playlist rows already belong to a playlist — adding them elsewhere
-          is not part of the playlist row menu. The sidebar playlist menu is
-          not track-scoped at all. */}
-      {mode !== "playlist" && mode !== "sidebarPlaylist" && (
-        <AddToPlaylistItem
-          track={track}
-          showPlaylistsSubmenu={showPlaylistsSubmenu}
-          playlistSearchQuery={playlistSearchQuery}
-          setPlaylistSearchQuery={setPlaylistSearchQuery}
-          playlistCurrentPage={playlistCurrentPage}
-          setPlaylistCurrentPage={setPlaylistCurrentPage}
-          playlistSubmenuOpenLeft={playlistSubmenuOpenLeft}
-          playlists={playlists}
-          handleAddToPlaylist={handleAddToPlaylist}
-          handleToggleSubmenu={handleToggleSubmenu}
-          setIsOpen={setIsOpen}
-          onClose={onClose}
-          t={t}
-        />
-      )}
-    </>
+    <MoreMenuContent
+      mode={mode}
+      subject={{ track, driveItem, token, queueFolder, playlist }}
+      actions={{
+        handleDownloadClick,
+        handleNavigateClick,
+        handleAddToQueueClick,
+        openDeleteConfirm,
+      }}
+      variantActions={{
+        onSelectMultiple,
+        onRemoveFromPlaylist,
+        onRemoveFromQueue,
+        onRemoveFolderFromQueue,
+        onRenamePlaylist,
+        onDeletePlaylist,
+        onTogglePinPlaylist,
+        onToggleQueue,
+        onBulkMoveClick,
+        onBulkDeleteClick,
+        setShowMoveScreen,
+      }}
+      flags={{
+        isAddingToQueue,
+        disableRemoveFromQueue,
+        isBulkSelected,
+        isQueueOpen,
+      }}
+      playlists={menuPlaylists}
+      close={{ setIsOpen, onClose }}
+      t={t}
+    />
   );
 
   return (
@@ -371,7 +268,7 @@ export function MoreMenu({
           setOpenUpwards(shouldOpenUpwards(rect));
         }}
         onArrowOpen={(position) => {
-          pendingFocusRef.current = position;
+          setPendingFocus(position);
           setIsOpen(true);
         }}
       />
@@ -392,48 +289,7 @@ export function MoreMenu({
             onClick={(e) => {
               e.stopPropagation();
             }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                e.stopPropagation();
-                if (showPlaylistsSubmenu) {
-                  // APG submenu-first order (P2-08-6): the first Escape closes
-                  // only the submenu and returns focus to its parent menuitem;
-                  // the next Escape closes the menu (closeMenu restores the
-                  // trigger focus per P2-08-3).
-                  setShowPlaylistsSubmenu(false);
-                  dropdownRef.current
-                    ?.querySelector<HTMLElement>('[aria-haspopup="menu"]')
-                    ?.focus();
-                  return;
-                }
-                closeMenu();
-                return;
-              }
-              if (
-                e.key !== "ArrowDown" &&
-                e.key !== "ArrowUp" &&
-                e.key !== "Home" &&
-                e.key !== "End"
-              ) {
-                return;
-              }
-              // Arrow keys belong to the text cursor while typing in the
-              // playlists search box — never to roving focus.
-              if ((e.target as HTMLElement).closest("input, textarea")) return;
-              e.preventDefault();
-              const items = getEnabledMenuItems();
-              if (items.length === 0) return;
-              const current = items.indexOf(e.target as HTMLElement);
-              if (e.key === "ArrowDown") {
-                focusMenuItemAt(current < 0 ? 0 : current + 1);
-              } else if (e.key === "ArrowUp") {
-                focusMenuItemAt(current < 0 ? items.length - 1 : current - 1);
-              } else if (e.key === "Home") {
-                focusMenuItemAt(0);
-              } else {
-                focusMenuItemAt(items.length - 1);
-              }
-            }}
+            onKeyDown={handleMenuKeyDown}
             onContextMenu={(e) => {
               e.stopPropagation();
               e.preventDefault();

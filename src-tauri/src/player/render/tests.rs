@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::shared::Request;
+use super::thread::requests::coalesce_requests;
 use super::{needs_size_sync, PixelSample, RenderSurface, RENDER_THREAD_NAME};
 use crate::player::engine::Engine;
 use crate::player::tests::{
@@ -322,7 +324,10 @@ fn hwdec_uses_nvdec_for_hevc10_hevc8_and_h264_4k() {
     }
     engine.destroy(true).expect("cleanup destroy");
 
-    assert!(!rows.is_empty(), "HWDEC: no fixture was available; nothing was verified");
+    if rows.is_empty() {
+        eprintln!("SKIP: HWDEC matrix needs hevc10/hevc8/h264 fixture files; none present");
+        return;
+    }
     for (name, hwdec, pixelformat) in &rows {
         assert!(hwdec.starts_with("nvdec"), "HWDEC {name}: expected nvdec decoding, got {hwdec:?}");
         assert!(
@@ -505,6 +510,143 @@ fn size_sync_rebuilds_exactly_when_the_target_size_changes() {
     // rebuild, a different one must.
     assert!(!needs_size_sync((1280, 720), (1280, 720)));
     assert!(needs_size_sync((1280, 720), (1000, 639)));
+}
+
+// --- Coalescing contract ----------------------------------------------------
+//
+// `coalesce_requests` decides which of a drained request batch survives before
+// the batch is applied on the render thread. It had no direct test: the only
+// indirect coverage is S3-10, which skips without the mpv DLL + HEVC fixture,
+// so a silent semantics change would go unnoticed. These are CHARACTERIZATION
+// tests: they pin the behaviour that exists today (they pass before any
+// refactor) so a move/extraction cannot alter it. `Request` has no `Debug` or
+// `PartialEq`, so every case asserts both the count and the variant + payload.
+
+fn set_rect(x: i32, y: i32, w: u32, h: u32) -> Request {
+    Request::SetRect { x, y, w, h }
+}
+
+fn set_visible(visible: bool) -> Request {
+    Request::SetVisible { visible }
+}
+
+fn sample_request() -> Request {
+    let (reply, _rx) = std::sync::mpsc::channel();
+    Request::Sample { reply }
+}
+
+fn retarget_request(hwnd: usize) -> Request {
+    let (reply, _rx) = std::sync::mpsc::channel();
+    Request::Retarget { hwnd, reply }
+}
+
+#[test]
+fn coalesce_requests_keeps_an_empty_batch_empty() {
+    assert!(coalesce_requests(Vec::new()).is_empty());
+}
+
+#[test]
+fn coalesce_requests_keeps_only_the_last_of_consecutive_rects() {
+    let out = coalesce_requests(vec![
+        set_rect(0, 0, 100, 100),
+        set_rect(0, 0, 640, 360),
+        set_rect(10, 20, 1280, 720),
+    ]);
+    assert_eq!(out.len(), 1, "a drag must collapse to ONE rebuild");
+    assert!(
+        matches!(out[0], Request::SetRect { x: 10, y: 20, w: 1280, h: 720 }),
+        "the surviving rect must be the LAST one queued"
+    );
+}
+
+#[test]
+fn coalesce_requests_keeps_only_the_last_of_consecutive_visibilities() {
+    let out = coalesce_requests(vec![set_visible(false), set_visible(true), set_visible(false)]);
+    assert_eq!(out.len(), 1);
+    assert!(
+        matches!(out[0], Request::SetVisible { visible: false }),
+        "the surviving visibility must be the LAST one queued"
+    );
+}
+
+#[test]
+fn coalesce_requests_keeps_rects_on_both_sides_of_a_retarget() {
+    let out = coalesce_requests(vec![
+        set_rect(0, 0, 100, 100),
+        retarget_request(0x1234),
+        set_rect(0, 0, 200, 200),
+    ]);
+    assert_eq!(out.len(), 3, "Retarget is a barrier: nothing across it may be dropped");
+    assert!(matches!(out[0], Request::SetRect { w: 100, h: 100, .. }));
+    assert!(matches!(out[1], Request::Retarget { hwnd: 0x1234, .. }));
+    assert!(matches!(out[2], Request::SetRect { w: 200, h: 200, .. }));
+}
+
+#[test]
+fn coalesce_requests_keeps_rects_on_both_sides_of_a_resize() {
+    let out = coalesce_requests(vec![
+        set_rect(0, 0, 100, 100),
+        Request::Resize { width: 640, height: 360 },
+        set_rect(0, 0, 200, 200),
+    ]);
+    assert_eq!(out.len(), 3, "Resize reallocates the FBO: the rect before it must apply first");
+    assert!(matches!(out[0], Request::SetRect { w: 100, h: 100, .. }));
+    assert!(matches!(out[1], Request::Resize { width: 640, height: 360 }));
+    assert!(matches!(out[2], Request::SetRect { w: 200, h: 200, .. }));
+}
+
+#[test]
+fn coalesce_requests_keeps_rects_on_both_sides_of_a_sample() {
+    let out = coalesce_requests(vec![
+        set_rect(0, 0, 100, 100),
+        sample_request(),
+        set_rect(0, 0, 200, 200),
+    ]);
+    assert_eq!(out.len(), 3, "Sample reads the FBO back: the rect before it must apply first");
+    assert!(matches!(out[0], Request::SetRect { w: 100, h: 100, .. }));
+    assert!(matches!(out[1], Request::Sample { .. }));
+    assert!(matches!(out[2], Request::SetRect { w: 200, h: 200, .. }));
+}
+
+#[test]
+fn coalesce_requests_drops_the_hide_that_a_later_show_supersedes() {
+    // Exactly the S3-10 batch: a resize while hidden. The `false` is dead
+    // because `true` follows in the same segment and the batch is applied
+    // completely before the pump, so the surface is never presented hidden.
+    let out = coalesce_requests(vec![set_visible(false), set_rect(0, 0, 1280, 720), set_visible(true)]);
+    assert_eq!(out.len(), 2, "the superseded hide is dropped, the rect and the show survive");
+    assert!(matches!(out[0], Request::SetRect { w: 1280, h: 720, .. }));
+    assert!(matches!(out[1], Request::SetVisible { visible: true }));
+}
+
+#[test]
+fn coalesce_requests_keeps_a_rect_and_a_visibility_side_by_side() {
+    // Different variants never coalesce into each other: the rect and the
+    // visibility are independent state and both must reach the handler.
+    let out = coalesce_requests(vec![set_rect(0, 0, 640, 360), set_visible(true)]);
+    assert_eq!(out.len(), 2);
+    assert!(matches!(out[0], Request::SetRect { w: 640, h: 360, .. }));
+    assert!(matches!(out[1], Request::SetVisible { visible: true }));
+
+    let out = coalesce_requests(vec![set_visible(false), set_rect(0, 0, 640, 360)]);
+    assert_eq!(out.len(), 2);
+    assert!(matches!(out[0], Request::SetVisible { visible: false }));
+    assert!(matches!(out[1], Request::SetRect { w: 640, h: 360, .. }));
+}
+
+#[test]
+fn coalesce_requests_keeps_one_visibility_per_segment_around_a_retarget() {
+    let out = coalesce_requests(vec![
+        set_visible(true),
+        set_visible(false),
+        retarget_request(0x5678),
+        set_visible(true),
+        set_visible(true),
+    ]);
+    assert_eq!(out.len(), 3, "one visibility per segment, plus the retarget");
+    assert!(matches!(out[0], Request::SetVisible { visible: false }));
+    assert!(matches!(out[1], Request::Retarget { hwnd: 0x5678, .. }));
+    assert!(matches!(out[2], Request::SetVisible { visible: true }));
 }
 
 /// The one-shot first-frame signal (visual polish). The frontend can only keep

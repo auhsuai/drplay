@@ -307,16 +307,16 @@ async fn mpv_real_pipeline_spike() {
     let deadline = Instant::now() + Duration::from_secs(SPIKE_PROPERTY_WAIT_SECS);
     let mut time_pos_seen: Option<f64> = None;
     while Instant::now() < deadline {
-        match ipc.send_command(vec![json!("get_property"), json!("time-pos")]).await {
-            Ok(value) => {
-                if let Some(secs) = value.as_f64() {
-                    if secs > 0.0 {
-                        time_pos_seen = Some(secs);
-                        break;
-                    }
+        if let Ok(value) = ipc
+            .send_command(vec![json!("get_property"), json!("time-pos")])
+            .await
+        {
+            if let Some(secs) = value.as_f64() {
+                if secs > 0.0 {
+                    time_pos_seen = Some(secs);
+                    break;
                 }
             }
-            _ => {}
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

@@ -195,6 +195,7 @@ fn classify_seed_entry(name: &str) -> Result<SeedEntryKind, String> {
 /// 2. Pass 2 reads + writes the pre-validated entries. IO failures here
 ///    (disk full, permission) can still leave a partial import on disk —
 ///    validation is upfront, not an atomic multi-file commit.
+///
 /// Pure directory entries are skipped silently (Python's zipfile emits them).
 /// Oversized entries (metadata > 1 MiB, cover > 20 MiB) are SKIPPED and
 /// counted, never fatal — a decompression bomb cannot balloon memory because

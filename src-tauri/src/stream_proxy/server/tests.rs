@@ -1,9 +1,13 @@
 use super::*;
+use std::future::Future;
 use std::io::{Read, Write};
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex,
 };
+
+use super::super::upstream::{plan_redirect_hop, redact_urls, HopPlan};
 
 // Minimal scripted upstream mirroring the `spawn_fixture` harness in
 // `stream_proxy::tests`: that harness is private to `mod.rs`, which this

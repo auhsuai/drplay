@@ -397,6 +397,10 @@ async fn large_containers_play_seek_and_do_not_grow_with_file_size() {
     }
 }
 
+/// One row of the hwdec measurement: (label, cpu percent, memory in MB —
+/// working set and private bytes).
+type HwdecSample = (String, f64, Option<(f64, f64)>);
+
 /// R5 / Phase 14: the shipped flag set sets NO `hwdec`, so mpv decodes H.264 in
 /// software. This measures what that costs on a real 1080p video and whether
 /// `hwdec=auto-safe` (a RUNTIME property — no flag change, no second engine)
@@ -407,7 +411,7 @@ async fn software_decode_cost_is_measured() {
     /// Seconds of steady playback sampled per configuration.
     const SAMPLE_SECS: u64 = 8;
     let file = fixture("large.mkv");
-    let mut results: Vec<(String, f64, Option<(f64, f64)>)> = Vec::new();
+    let mut results: Vec<HwdecSample> = Vec::new();
 
     for hwdec in ["no", "auto-safe"] {
         let origin = spawn_origin(&file, None, &[]);

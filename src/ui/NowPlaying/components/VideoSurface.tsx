@@ -1,19 +1,9 @@
 // @vitest-environment jsdom
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import {
-  getVideoHostOwner,
-  sameRect,
-  setVideoHostRect,
-  setVideoHostVisible,
-  toPhysicalRect,
-  type PhysicalRect,
-} from "../../../lib/videoHost";
-
-/** Longest transition in the app is `duration-1000`; the tracker never runs
- *  longer than this even if its end event is lost. */
-const TRANSITION_TRACK_CAP_MS = 1400;
+import { getVideoHostOwner, setVideoHostVisible } from "../../../lib/videoHost";
+import { useVideoSurfaceGeometry } from "../hooks/useVideoSurfaceGeometry";
 
 /** S4 (libmpv composition plumbing): marker class toggled on <html> exactly
  *  while the native host is visible. The DComp video visual composites BELOW
@@ -23,49 +13,14 @@ const TRANSITION_TRACK_CAP_MS = 1400;
  *  component is the only toggler because it owns host visibility. */
 const HOST_VISIBLE_ROOT_CLASS = "drplay-host-visible";
 
-export const VIDEO_HOST_OWNER_CHANGED_EVENT =
-  "drplay:video-host-owner-changed";
-
-/** S4: custom properties carrying the host rect (CSS px, relative to <main>)
- *  that the player background layer clips its transparent hole with. Left
- *  unset they resolve to the layer's 0/0 corner => zero-size hole => opaque,
- *  which is the safe placeholder state before the first measurement. */
-const HOLE_VARS = [
-  "--drplay-hole-l",
-  "--drplay-hole-t",
-  "--drplay-hole-r",
-  "--drplay-hole-b",
-] as const;
-
-/** S4: publish the host rect for the background layer's clip hole. The
- *  consumer is an absolutely-positioned child of <main>, so the coordinates
- *  are made relative to that box — the overlay slide translates the whole
- *  subtree, and a viewport-relative rect would drift by the slide offset
- *  while a main-relative one stays exact. */
-function publishHoleRect(box: HTMLElement, rect: DOMRect): void {
-  const main = box.closest("main");
-  if (!main) return;
-  const origin = main.getBoundingClientRect();
-  const left = Math.max(0, rect.left - origin.left);
-  const top = Math.max(0, rect.top - origin.top);
-  const style = document.documentElement.style;
-  style.setProperty(HOLE_VARS[0], `${String(left)}px`);
-  style.setProperty(HOLE_VARS[1], `${String(top)}px`);
-  style.setProperty(HOLE_VARS[2], `${String(left + rect.width)}px`);
-  style.setProperty(HOLE_VARS[3], `${String(top + rect.height)}px`);
-}
-
-function clearHoleRect(): void {
-  const style = document.documentElement.style;
-  for (const name of HOLE_VARS) style.removeProperty(name);
-}
+export const VIDEO_HOST_OWNER_CHANGED_EVENT = "drplay:video-host-owner-changed";
 
 interface VideoSurfaceProps {
   /** Which window owns the native surface. Defaults to "main". */
   owner?: "main" | "pip";
   /**
    * Whether the native host should be SHOWN over this box. The surface itself
-   * stays mounted whenever a track is loaded so the ResizeObserver keeps
+   * stays mounted whenever a track is loaded so the geometry hook keeps
    * tracking the box; only the host's visibility follows this flag.
    */
   active: boolean;
@@ -135,35 +90,7 @@ export function VideoSurface({
 }: VideoSurfaceProps) {
   const { t } = useTranslation();
   const boxRef = useRef<HTMLDivElement | null>(null);
-  const lastSentRef = useRef<PhysicalRect | null>(null);
-  // One rAF is in flight at most; every trigger coalesces into it, so a
-  // maximize drag or a cascade of resize events can never turn into a stream
-  // of IPC calls. rAF (not a debounce) because the value we need is a LAYOUT
-  // read: it must happen after style/layout for the frame is settled.
-  const frameRef = useRef<number | null>(null);
-
-  const sendRect = useCallback(() => {
-    frameRef.current = null;
-    const box = boxRef.current;
-    if (!box) return;
-    if (owner !== getVideoHostOwner()) return;
-    const domRect = box.getBoundingClientRect();
-    // S4: the CSS hole follows every measured position, even one the physical
-    // dedupe below would drop (e.g. a sub-pixel move).
-    publishHoleRect(box, domRect);
-    const rect = toPhysicalRect(domRect, window.devicePixelRatio);
-    // A collapsed rect (minimized window, pre-layout read) is not a window:
-    // skip it rather than asking Rust to clamp a zero size.
-    if (rect === null) return;
-    if (sameRect(lastSentRef.current, rect)) return;
-    lastSentRef.current = rect;
-    setVideoHostRect(rect);
-  }, [owner]);
-
-  const scheduleRect = useCallback(() => {
-    if (frameRef.current !== null) return;
-    frameRef.current = window.requestAnimationFrame(sendRect);
-  }, [sendRect]);
+  const { resendRect } = useVideoSurfaceGeometry(boxRef, { owner, active });
 
   // Visibility. Idempotent on the Rust side, and video -> video deliberately
   // sends nothing here at all: `active` does not change, so there is no
@@ -176,21 +103,17 @@ export function VideoSurface({
   useEffect(() => {
     const onOwnerChanged = (): void => {
       if (owner !== getVideoHostOwner()) return;
-      lastSentRef.current = null;
-      sendRect();
+      resendRect();
       setVideoHostVisible(active);
     };
-    window.addEventListener(
-      VIDEO_HOST_OWNER_CHANGED_EVENT,
-      onOwnerChanged,
-    );
+    window.addEventListener(VIDEO_HOST_OWNER_CHANGED_EVENT, onOwnerChanged);
     return () => {
       window.removeEventListener(
         VIDEO_HOST_OWNER_CHANGED_EVENT,
         onOwnerChanged,
       );
     };
-  }, [active, owner, sendRect]);
+  }, [active, owner, resendRect]);
 
   // S4: mirror `active` onto <html> for the global transparency rules
   // (App.css). Same single owner as the visibility call above, so the class
@@ -212,152 +135,6 @@ export function VideoSurface({
       if (owner === getVideoHostOwner()) setVideoHostVisible(false);
     };
   }, [owner]);
-
-  // Rect triggers. Every path a box can move or a scale can change:
-  //  1. first mount with a real size (also the react-commit measure)
-  //  2. the element resizing  -> ResizeObserver
-  //  3. window resize / maximize / restore / minimize -> resize event
-  //     (minimize collapses the box, which sendRect drops; restore resizes it)
-  //  4. devicePixelRatio changing (DPI / monitor move). A ResizeObserver does
-  //     NOT fire on a pure scale change, so it needs its own trigger:
-  //     matchMedia on the RESOLVED ratio (`(resolution: 1.5dppx)`) flips
-  //     exactly when the DPR changes, and we re-arm it after each change.
-  //     Tauri's own `onScaleChanged` event exists but is not reachable from
-  //     this component's dependency set, and matchMedia needs no IPC.
-  useEffect(() => {
-    sendRect();
-
-    let observer: ResizeObserver | null = null;
-    if (typeof ResizeObserver === "function") {
-      observer = new ResizeObserver(scheduleRect);
-      if (boxRef.current) observer.observe(boxRef.current);
-    }
-
-    const onResize = (): void => {
-      scheduleRect();
-    };
-    window.addEventListener("resize", onResize);
-
-    let mql: MediaQueryList | null = null;
-    const onScaleChange = (): void => {
-      scheduleRect();
-      armScaleQuery();
-    };
-    const armScaleQuery = (): void => {
-      // jsdom does not implement matchMedia (verified on jsdom 29) — the same
-      // guard useResponsiveItems.ts uses. Without it the surface still syncs
-      // on mount, resize and element-resize.
-      if (typeof window.matchMedia !== "function") return;
-      mql?.removeEventListener("change", onScaleChange);
-      mql = window.matchMedia(
-        `(resolution: ${String(window.devicePixelRatio)}dppx)`,
-      );
-      mql.addEventListener("change", onScaleChange);
-    };
-    armScaleQuery();
-
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", onResize);
-      mql?.removeEventListener("change", onScaleChange);
-      if (frameRef.current !== null) {
-        window.cancelAnimationFrame(frameRef.current);
-        frameRef.current = null;
-      }
-      // S4: no consumer survives this component, so the published hole would
-      // only be stale state for a later mount.
-      clearHoleRect();
-    };
-  }, [scheduleRect, sendRect]);
-
-  // Transform-based movement — the Now Playing overlay slides with
-  // `translate-y` — changes the box's POSITION without changing its size, so
-  // none of the triggers above fire: ResizeObserver reports layout size (not
-  // transforms), no `resize`, no DPR change. Without this the host would keep
-  // the rect from before the slide until some unrelated event.
-  //
-  // GATED ON `active`: while the host is hidden nothing is presented, the CSS
-  // hole is not cut, and every frame of a collapse transition would cost two
-  // forced layout reads, four root custom-property writes and an IPC for a
-  // rect nobody consumes. Re-arming on `active` sends the current rect once on
-  // the way back in, which covers a box that moved while hidden (and is a
-  // no-op when it did not, because of the dedupe above).
-  useEffect(() => {
-    if (!active) return;
-    sendRect();
-
-    let rafId: number | null = null;
-    let deadline = 0;
-    const track = (): void => {
-      rafId = null;
-      sendRect();
-      if (performance.now() >= deadline) {
-        rafId = window.requestAnimationFrame(settle);
-        return;
-      }
-      rafId = window.requestAnimationFrame(track);
-    };
-    // The frame AFTER the loop stopped. Stopping the loop is NOT the same as
-    // having SENT the settled rect: the last in-loop frame can read a
-    // mid-transition position (an end event cancels the remaining motion, so
-    // the box only reaches its resting place on the frames that follow), and
-    // the slide changed position without changing size — no ResizeObserver, no
-    // resize, no DPI change — so no other trigger would ever correct it. The
-    // host would stay parked at the intermediate rect, off-screen, until
-    // something unrelated moved the box again (observed live: ~970px below the
-    // surface after a fullscreen toggle). Reading one frame later guarantees
-    // the browser has applied the final transform first.
-    //
-    // Exactly one such frame, never a poll: only `track`'s cap branch and the
-    // end-event handler arm it, at most one frame is in flight, and it
-    // re-enters the loop only when a new transition extended the deadline in
-    // the meantime.
-    const settle = (): void => {
-      rafId = null;
-      sendRect();
-      if (performance.now() < deadline) {
-        rafId = window.requestAnimationFrame(track);
-      }
-    };
-    // Tailwind v4 emits `translate-y-*` as the CSS `translate` property (not
-    // `transform`), so the event that matters here is propertyName
-    // "translate" — verified against the live app's computed transition
-    // property list: "transform, translate, scale, rotate".
-    const isMovement = (e: TransitionEvent): boolean =>
-      e.propertyName === "translate" ||
-      e.propertyName === "transform" ||
-      e.propertyName === "all";
-    const onTransitionRun = (e: TransitionEvent): void => {
-      if (!isMovement(e)) return;
-      deadline = performance.now() + TRANSITION_TRACK_CAP_MS;
-      if (rafId !== null) return;
-      rafId = window.requestAnimationFrame(track);
-    };
-    const onTransitionEnd = (e: TransitionEvent): void => {
-      if (!isMovement(e)) return;
-      // Read the settled position on the next frame, then stop. The loop may
-      // already have spent its cap, leaving NO frame in flight: setting the
-      // deadline alone would arm nothing and the settled rect would never be
-      // sent, so the settle read is armed here too (it is a no-op frame when a
-      // frame is already pending — that one covers it).
-      deadline = performance.now();
-      if (rafId === null) rafId = window.requestAnimationFrame(settle);
-    };
-    window.addEventListener("transitionrun", onTransitionRun);
-    window.addEventListener("transitionstart", onTransitionRun);
-    window.addEventListener("transitionend", onTransitionEnd);
-    window.addEventListener("transitioncancel", onTransitionEnd);
-    return () => {
-      window.removeEventListener("transitionrun", onTransitionRun);
-      window.removeEventListener("transitionstart", onTransitionRun);
-      window.removeEventListener("transitionend", onTransitionEnd);
-      window.removeEventListener("transitioncancel", onTransitionEnd);
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-    };
-  }, [active, sendRect]);
 
   // The gradient + spinner is what the user sees between "video track
   // selected" and mpv's first present, and it sits behind the HWND the moment

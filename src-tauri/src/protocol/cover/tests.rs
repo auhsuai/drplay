@@ -643,7 +643,7 @@ fn s3_gc_enforces_budget_across_deep_dirs() {
     // 250 B budget is satisfied (≤ 3 files remain).
     for i in 0..8u32 {
         let id = format!("file_b{i:02}");
-        write_cover_to_disk(&root, &id, true, &vec![i as u8; 100]).expect("post must succeed");
+        write_cover_to_disk(&root, &id, true, &[i as u8; 100]).expect("post must succeed");
         std::thread::sleep(Duration::from_millis(15)); // distinct mtimes
     }
     gc_covers_with_budgets(&root, 250, u64::MAX).expect("gc must succeed");
@@ -658,7 +658,7 @@ fn s3_gc_enforces_budget_across_deep_dirs() {
 fn s3_gc_removes_empty_shard_dirs() {
     let root = s3_temp_root("gc_dirs");
     let id = "file_dirprune";
-    write_cover_to_disk(&root, id, true, &vec![0x04u8; 64]).expect("post must succeed");
+    write_cover_to_disk(&root, id, true, &[0x04u8; 64]).expect("post must succeed");
     let path = s3_shard_path(&root, id, true);
     std::fs::remove_file(&path).expect("fixture file must be removable");
     gc_covers(&root).expect("gc must succeed");
@@ -673,7 +673,7 @@ fn s3_gc_removes_empty_shard_dirs() {
 #[test]
 fn s3_directory_size_reflects_disk_after_post() {
     let root = s3_temp_root("sizeinfo");
-    write_cover_to_disk(&root, "file_size_a", true, &vec![0x05u8; 100]).expect("post must succeed");
+    write_cover_to_disk(&root, "file_size_a", true, &[0x05u8; 100]).expect("post must succeed");
     write_cover_to_disk(&root, "file_size_b", false, &vec![0x06u8; 250]).expect("post must succeed");
     let size = directory_size(&root);
     assert_eq!(size, 350, "directory_size must sum both variants (100+250)");

@@ -9,16 +9,12 @@ import type {
   AudioEventHandler,
 } from "./audioNativeEvents";
 import {
-  asBoolean,
-  asNumber,
   buildProxyStreamUrl,
   classifyEndFileError,
   describeError,
-  extractCacheRanges,
   freshThrottleClocks,
   LOADFILE_DEADLINE_MS,
   LOADFILE_RESTART_MAX_ATTEMPTS,
-  maxRangeEnd,
   MPV_BOOL,
   MPV_COMMANDS,
   MPV_PROPERTY_ARGS,
@@ -27,11 +23,9 @@ import {
   parseProxyError,
   RELOAD_SHUTDOWN_TIMEOUT_MS,
   SEEK_ACK_TIMEOUT_MS,
-  SEEK_ACK_TOLERANCE_SECS,
   STALL_MIN_RESUME_SECS,
   TAURI_COMMANDS,
   toTimeRanges,
-  VOLUME_SCALE,
   withStallQueryTimeout,
   type MpvEventCallbacks,
   type MpvRange,
@@ -42,9 +36,18 @@ import {
   type StallTruth,
   TimePosWatchdog,
 } from "./mpvPlaybackMachines";
+import {
+  buildEventIdentity,
+  isSeekAckReport,
+  parseStallTruth,
+  proxyStatusForStream,
+  tagPayload,
+} from "./mpvAudio/derive";
 import { detachListeners, EventHub } from "./mpvAudio/eventHub";
 import { EngineSession } from "./mpvAudio/engineSession";
 import { logError, logWarn, throttled } from "./mpvAudio/log";
+import type { ProxyErrorRecord } from "./mpvAudio/types";
+import { VolumeController } from "./mpvAudio/volume";
 import { TimeInterpolator } from "./timeInterpolator";
 import { TimerRegistry } from "./timerRegistry";
 
@@ -68,7 +71,7 @@ export class MpvAudioController {
   /** Latest `stream-proxy-error` for the current stream (R05) — state only,
    *  never a display channel: mpv's end-file is the single place an error
    *  surfaces (the two events describe the same failure — dedupe). */
-  private lastProxyError: { fileId: string; status: number } | null = null;
+  private lastProxyError: ProxyErrorRecord | null = null;
   /**
    * The RAW `paused-for-cache` fact mpv last reported. Kept even while the
    * user paused: the user's pause suppresses the UI SIGNAL, not the fact, and
@@ -131,8 +134,10 @@ export class MpvAudioController {
   /** Shared reload-shutdown promise: concurrent reload requests join the
    *  first one instead of issuing a second `mpv_shutdown`. */
   private reloadShutdown: Promise<void> | null = null;
-  private volume = 1;
-  private muted = false;
+  private readonly volumeCtrl = new VolumeController({
+    isEngineStarted: () => this.session.isStarted,
+    sendCommand: (cmd) => this.sendCommand(cmd),
+  });
   private throttle = freshThrottleClocks();
   // Why: guards the once-per-track `first-audio` emit so interpolated
   // timeupdates (which bypass onTimeUpdate) can never fake it.
@@ -203,7 +208,7 @@ export class MpvAudioController {
         // queued pre-seek pushes and in-flight watchdog polls both land here,
         // so this single filter protects the clock, the interpolator base,
         // first-audio and the spinner tick from stale regressions.
-        if (Math.abs(time - this.seekTarget) > SEEK_ACK_TOLERANCE_SECS) return;
+        if (!isSeekAckReport(time, this.seekTarget)) return;
         this.clearSeekAck();
       }
       this.currentTime = time;
@@ -368,7 +373,7 @@ export class MpvAudioController {
       this.noteProxyError(payload);
     },
     applyVolume: () => {
-      this.applyVolume();
+      this.volumeCtrl.apply();
     },
     getUnlistenFns: () => this.unlistenFns,
     setUnlistenFns: (fns) => {
@@ -399,11 +404,11 @@ export class MpvAudioController {
    *  identity exists for it. A missing current track yields `{}` so the
    *  event stays untagged and consumers keep legacy behavior. */
   private eventIdentity(trackIdOverride?: string): AudioEventIdentity {
-    const trackId = trackIdOverride ?? this.currentTrackId;
-    if (trackId === null) return {};
-    return trackId === this.currentTrackId
-      ? { trackId, attempt: this.loadAttemptSeq }
-      : { trackId };
+    return buildEventIdentity(
+      this.currentTrackId,
+      this.loadAttemptSeq,
+      trackIdOverride,
+    );
   }
 
   private emit<K extends keyof AudioEventMap>(
@@ -413,12 +418,7 @@ export class MpvAudioController {
   ) {
     const handlers = this.hub.handlersFor(event);
     if (handlers) {
-      // Tag every payload with the engine identity (R2.1). Spread keeps the
-      // event's own fields authoritative and tolerates `undefined` payloads.
-      const tagged = {
-        ...this.eventIdentity(trackIdOverride),
-        ...(payload as object | undefined),
-      } as AudioEventMap[K];
+      const tagged = tagPayload(this.eventIdentity(trackIdOverride), payload);
       handlers.forEach((h) => {
         h(tagged);
       });
@@ -450,9 +450,7 @@ export class MpvAudioController {
   /** The proxy status usable for THIS stream only — a stale event (other
    *  fileId, previous stream) must never steer end-file classification. */
   private proxyStatusForCurrentStream(): number | null {
-    const error = this.lastProxyError;
-    if (error === null || error.fileId !== this.currentTrackId) return null;
-    return error.status;
+    return proxyStatusForStream(this.lastProxyError, this.currentTrackId);
   }
 
   private emitEndFileError(): void {
@@ -486,17 +484,6 @@ export class MpvAudioController {
       this.currentTrackId !== trackId ||
       this.loadRequestSeq !== seq
     );
-  }
-
-  private applyVolume(): void {
-    const mpvVolume = this.muted ? 0 : this.volume * VOLUME_SCALE;
-    void this.sendCommand([
-      MPV_COMMANDS.setProperty,
-      MPV_PROPERTY_ARGS.volume,
-      String(Math.round(mpvVolume)),
-    ]).catch((e: unknown) => {
-      logWarn(`volume-apply-failed: ${describeError(e)}`);
-    });
   }
 
   private beginTrack(track: Track, startTime?: number): void {
@@ -746,22 +733,18 @@ export class MpvAudioController {
   }
 
   public setVolume(vol: number): void {
-    this.volume = Math.max(0, Math.min(1, vol));
-    // Muted: keep silent at 0 (unmute restores); pre-spawn it just stores — applied in ensureStarted.
-    if (!this.muted && this.session.isStarted) this.applyVolume();
+    this.volumeCtrl.setVolume(vol);
   }
 
   public toggleMute(): boolean {
-    this.muted = !this.muted;
-    if (this.session.isStarted) this.applyVolume();
-    return this.muted;
+    return this.volumeCtrl.toggleMute();
   }
 
   public getVolume(): number {
-    return this.volume;
+    return this.volumeCtrl.getVolume();
   }
   public isMuted(): boolean {
-    return this.muted;
+    return this.volumeCtrl.isMuted();
   }
   public getCurrentTime(): number {
     return this.currentTime;
@@ -959,11 +942,7 @@ export class MpvAudioController {
         }),
       ),
     ]);
-    return {
-      timePos: asNumber(timePosRaw),
-      buffering: asBoolean(bufferingRaw),
-      cacheEnd: maxRangeEnd(extractCacheRanges(cacheRaw)),
-    };
+    return parseStallTruth(timePosRaw, bufferingRaw, cacheRaw);
   }
 
   /** Stall self-heal step 1: reload the stream at the pinned position. */

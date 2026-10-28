@@ -14,6 +14,9 @@
 // (src/mpv/video_lifecycle.rs) can start the REAL proxy and drive a real mpv
 // against it, instead of a second re-implementation of the same server.
 pub(crate) mod server;
+mod types;
+mod upstream;
+mod response;
 
 use std::future::Future;
 use std::pin::Pin;

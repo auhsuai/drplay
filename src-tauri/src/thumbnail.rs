@@ -113,8 +113,7 @@ mod tests {
         let dir = temp_test_dir("cleanup_helper");
         let tmp = dir.join("probe.tmp");
         std::fs::write(&tmp, b"x").expect("fixture file");
-        let err: std::io::Result<()> =
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "boom"));
+        let err: std::io::Result<()> = Err(std::io::Error::other("boom"));
         assert!(cleanup_on_err(&tmp, err).is_err());
         assert!(!tmp.exists(), "tmp must be removed when the write chain fails");
 

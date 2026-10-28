@@ -152,7 +152,7 @@ pub(super) fn spawn_origin(path: &Path, stall: Option<Stall>, missing_ids: &[&st
                 .nth(1)
                 .map(|rest| rest.split(['?', '/']).next().unwrap_or("").to_string())
                 .unwrap_or_default();
-            let known = !missing.iter().any(|id| *id == requested_id);
+            let known = !missing.contains(&requested_id);
 
             let is_first = {
                 let mut guard = first_response.lock().expect("first-response flag");

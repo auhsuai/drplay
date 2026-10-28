@@ -25,7 +25,7 @@ mod win {
     /// assumption about gpu-next would not be evidence, the OS window list is.
     pub fn visible_windows(pid: u32) -> Vec<String> {
         extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
-            let titles = unsafe { &mut *((param as *mut Vec<String>)) };
+            let titles = unsafe { &mut *(param as *mut Vec<String>) };
             let mut owner = 0u32;
             unsafe { GetWindowThreadProcessId(hwnd, &mut owner) };
             let wanted = ENUM_PID.load(std::sync::atomic::Ordering::SeqCst);

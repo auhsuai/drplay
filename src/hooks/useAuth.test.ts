@@ -1,4 +1,4 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -871,5 +871,103 @@ describe("useAuth auth-hydration flag (P2-04-9)", () => {
     renderHook(() => useAuth());
 
     expect(authState.setIsAuthHydrated).toHaveBeenCalledWith(true);
+  });
+});
+
+// No pre-existing test pins the FULL logout sequence, so the split into
+// hooks/auth/logoutCleanup.ts is guarded here: the historical 0->17 order must
+// survive the move (login state is cleared at step 6, BEFORE the wipes and the
+// revokes; the caller's onLogoutExt is the last step).
+describe("useAuth full logout step order (refactor guard)", () => {
+  it("runs the teardown steps in the historical order", async () => {
+    const calls: string[] = [];
+    let lsCleared = false;
+
+    localStorage.setItem(ACCESS_TOKEN_KEY, "tok-123");
+    localStorage.setItem(USER_EMAIL_KEY, "out@example.com");
+    mockedReadRefreshToken.mockResolvedValue("rt-1");
+    mockedInvalidateCurrentSession.mockImplementationOnce(() => {
+      calls.push("invalidate");
+    });
+    mockedStopProSyncWorker.mockImplementationOnce(() => {
+      calls.push("stopWorker");
+    });
+    mockedReadRefreshToken.mockImplementationOnce(() => {
+      calls.push("readRefresh");
+      return Promise.resolve("rt-1");
+    });
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      if (!lsCleared) {
+        lsCleared = true;
+        calls.push("lsClear");
+      }
+    });
+    // clearLoginState() clears the token last-nullable first: setAccessToken(null)
+    // is the middle setter of the historical trio, so tag on that argument.
+    authState.setAccessToken.mockImplementation((token: string | null) => {
+      if (token === null) calls.push("stateLogout");
+    });
+    mockedStopProactiveRefresh.mockImplementationOnce(() => {
+      calls.push("stopRefresh");
+    });
+    const playerStopListener = (): void => {
+      calls.push("playerStop");
+    };
+    window.addEventListener("player-stop", playerStopListener);
+    mockedInvoke.mockImplementationOnce(() => {
+      calls.push("clearCache");
+      return Promise.resolve(undefined);
+    });
+    mockedWipePersistedMetadataCache.mockImplementationOnce(() => {
+      calls.push("wipeMeta");
+      return Promise.resolve();
+    });
+    mockedWipeFileRowsForUser.mockImplementationOnce(() => {
+      calls.push("wipeFiles");
+      return Promise.resolve();
+    });
+    mockedSyncStateDelete.mockImplementationOnce(() => {
+      calls.push("cursorDelete");
+      return Promise.resolve();
+    });
+    mockedRevokeGoogleToken.mockImplementation((token: string) => {
+      calls.push(token === "tok-123" ? "revokeAccess" : "revokeRefresh");
+      return Promise.resolve();
+    });
+    mockedDeleteRefreshToken.mockImplementationOnce(() => {
+      calls.push("deleteKeyring");
+      return Promise.resolve();
+    });
+    const onLogoutExt = vi.fn(() => {
+      calls.push("onLogoutExt");
+    });
+
+    try {
+      const { result } = renderHook(() => useAuth(onLogoutExt));
+
+      await act(async () => {
+        await result.current.handleLogout();
+      });
+    } finally {
+      window.removeEventListener("player-stop", playerStopListener);
+    }
+
+    expect(calls).toEqual([
+      "invalidate",
+      "stopWorker",
+      "readRefresh",
+      "lsClear",
+      "stateLogout",
+      "stopRefresh",
+      "playerStop",
+      "clearCache",
+      "wipeMeta",
+      "wipeFiles",
+      "cursorDelete",
+      "revokeAccess",
+      "revokeRefresh",
+      "deleteKeyring",
+      "onLogoutExt",
+    ]);
   });
 });

@@ -575,7 +575,7 @@ async fn measured_stall_threshold_is_the_configured_deadline_not_a_byte_budget()
     );
     assert_eq!(
         *events.lock().unwrap(),
-        vec![("over-deadline".to_string(), server::IDLE_ABORT_STATUS)],
+        vec![("over-deadline".to_string(), crate::stream_proxy::types::IDLE_ABORT_STATUS)],
         "exactly one idle-abort event at the configured deadline"
     );
     println!(

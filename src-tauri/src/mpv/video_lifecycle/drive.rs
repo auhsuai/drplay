@@ -320,7 +320,7 @@ async fn real_drive_resource_key_gap_is_measured() {
     // only), so any file in `shared_that_needs_a_key` is a hard 404/403 for the
     // user. This account cannot produce one, so the assertion only records that
     // the probe ran.
-    assert!(files.len() > 0, "files.list returned nothing at all");
+    assert!(!files.is_empty(), "files.list returned nothing at all");
 }
 
 /// REGRESSION BASELINE for audio, on the SAME code path as the video numbers:
