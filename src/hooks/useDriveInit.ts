@@ -835,6 +835,9 @@ export const useDriveInit = ({
       controller.abort();
     };
   }, [
+    // Stable `useRef` handle owned by useDrive, passed in as a prop. ESLint
+    // cannot prove it is stable, and listing it cannot cause a re-run.
+    hydratedRef,
     isLoggedIn,
     accessToken,
     setSortOption,

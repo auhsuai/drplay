@@ -93,7 +93,13 @@ export function useMoreMenuEvents({
       window.removeEventListener("resize", handleResize);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isMenuOpen, closeMenu]);
+  }, [
+    // Stable `useRef` handle owned by the caller, passed in as a prop. ESLint
+    // cannot prove it is stable, and listing it cannot cause a re-run.
+    dropdownRef,
+    isMenuOpen,
+    closeMenu,
+  ]);
 
   return { closeMenu };
 }

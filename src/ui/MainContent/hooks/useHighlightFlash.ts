@@ -51,7 +51,13 @@ export function useHighlightFlash({
         setIsFlashOn(false);
       };
     }
-  }, [isHighlighted, highlightTrigger]);
+  }, [
+    // Stable `React.useRef` handle owned by SongCard, passed in as a prop.
+    // ESLint cannot prove it is stable, and listing it cannot cause a re-run.
+    cardRef,
+    isHighlighted,
+    highlightTrigger,
+  ]);
 
   return isFlashOn;
 }
