@@ -176,9 +176,9 @@ export async function performFullSync(ownerEmail: string) {
   }
 
   // One-time cleanup (Task 1 — hide-unplayable-formats): rows synced before
-  // this change may hold formats Chromium/WebView2 cannot decode
-  // (wma/aiff/alac/ape/dsf/dff/wv/tak). Delete every non-folder row whose
-  // name has no playable extension (folders keep their rows — isFolder
+  // this change may hold containers the shipped engine has never been verified
+  // against end to end (alac/ape/dsf/dff/wv/tak). Delete every non-folder row
+  // whose name has no playable extension (folders keep their rows — isFolder
   // exempts them even though their names have no media extension). Runs only
   // at full-sync completion (delta sync never mass-deletes) and is
   // best-effort: a cleanup failure must not fail the whole sync.

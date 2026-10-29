@@ -1,12 +1,19 @@
 import { FOLDER_MIME } from "./driveTypes";
 
-// Only formats Chromium/WebView2 can decode are playable in this app.
-// Source of truth: chromium.org/audio-video ("Codec and Container Support" —
-// audio codecs: FLAC, MP3, PCM variants, Vorbis, Opus; AAC limited to Chrome
-// builds) + MDN Web audio codec guide (ALAC Chrome=No, MP3/FLAC/Opus/Vorbis
-// Chrome=Yes, AAC Chrome=MP4-only). wma/aiff/alac/ape/dsf/dff/wv/tak are
-// deliberately absent: Chromium's FFmpeg build has no decoder for them
-// (Task 1 — hide-unplayable-formats plan).
+// Playback is the shipped libmpv engine, not the WebView2/Chromium media
+// stack: the decodable set is mpv's FFmpeg build, so Chromium's codec matrix
+// is irrelevant here.
+//
+// The five appended formats (.wma, .aif/.aiff, .oga, .m4b) were verified at
+// DECODER level with the shipped mpv.exe against real samples (exit 0 and a
+// live AO line), and they travel the same localhost Range proxy + SW ?ext=
+// lane as the original seven. That is decoder evidence, not an end-to-end run.
+//
+// .ape/.wv/.tak/.dsf/.dff stay absent as an EVIDENCE GAP — no sample has been
+// played end to end yet — NOT because of a Chromium decoder limit.
+//
+// The extension is a container, never a codec guarantee: ALAC inside .m4a was
+// separately confirmed decodable, so .m4a is not AAC-only.
 export const PLAYABLE_AUDIO_EXTENSIONS = [
   ".mp3",
   ".flac",
@@ -15,6 +22,11 @@ export const PLAYABLE_AUDIO_EXTENSIONS = [
   ".m4a",
   ".aac",
   ".opus",
+  ".wma",
+  ".aif",
+  ".aiff",
+  ".oga",
+  ".m4b",
 ] as const;
 
 const TRASHED = "trashed=false";
@@ -139,12 +151,12 @@ function buildExtCondition(
 
 // The discriminator is the playable EXTENSION, not the mime type: a file
 // without a playable extension must not sync even when Drive reports audio/*
-// or video/* (a .wma file reports audio/x-ms-wma but WebView2 cannot decode
-// WMA). The two variants are kept deliberately: folder/recent queries scope
-// each playable extension on `<kind>/*` OR `application/octet-stream`
-// (uploads made by this app store octet-stream; Drive web/uploads report
-// audio/mpeg, video/mp4, video/x-matroska etc.), while the top-level library
-// query matches any mime with a playable name.
+// or video/* (a bare `song` with audio/mpeg and an unverified container are
+// both rejected). The two variants are kept deliberately: folder/recent
+// queries scope each playable extension on `<kind>/*` OR
+// `application/octet-stream` (uploads made by this app store octet-stream;
+// Drive web/uploads report audio/mpeg, video/mp4, video/x-matroska etc.),
+// while the top-level library query matches any mime with a playable name.
 function buildMediaCondition(
   scope: MediaScope,
   includeFolders: boolean,
@@ -194,7 +206,7 @@ export function isVideoFile(
 // extension. The mimeType parameter is kept for call-site stability (delta
 // sync still passes Drive's mime) but is intentionally unused — audio/*
 // alone no longer qualifies: a no-extension "song" with audio/mpeg and a
-// non-playable .wma with audio/x-ms-wma both deliberately return false.
+// container outside the allowlist both deliberately return false.
 export function isAudioFile(
   _mimeType: string | undefined,
   name: string,

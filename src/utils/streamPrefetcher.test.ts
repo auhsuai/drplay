@@ -32,8 +32,8 @@ describe("streamPrefetcher", () => {
     expect(getPrefetchedStreamUrl("a")).toBe("/drive-stream/a");
   });
 
-  it("caches plain URLs for tracks with a non-playable name", () => {
-    prefetchVisibleTracks([{ id: "a", originalName: "song.wma" }]);
+  it("caches plain URLs for tracks whose container is still unverified", () => {
+    prefetchVisibleTracks([{ id: "a", originalName: "song.ape" }]);
     expect(getPrefetchedStreamUrl("a")).toBe("/drive-stream/a");
   });
 
@@ -94,8 +94,9 @@ describe("buildStreamUrl", () => {
     expect(buildStreamUrl("abc")).toBe("/drive-stream/abc");
   });
 
-  it("omits the param for a non-playable extension", () => {
-    expect(buildStreamUrl("abc", "song.wma")).toBe("/drive-stream/abc");
+  it("omits the param for a container that is still unverified", () => {
+    expect(buildStreamUrl("abc", "song.ape")).toBe("/drive-stream/abc");
+    expect(buildStreamUrl("abc", "song.tak")).toBe("/drive-stream/abc");
   });
 
   it("omits the param for a name without an extension", () => {
@@ -108,7 +109,13 @@ describe("buildStreamUrl", () => {
     );
   });
 
-  it("keeps the plain URL when the name has no playable extension (backward compat)", () => {
-    expect(buildStreamUrl("abc", "song.aiff")).toBe("/drive-stream/abc");
+  it("appends ?ext= for the wma/aif/aiff/oga/m4b containers", () => {
+    expect(buildStreamUrl("abc", "song.wma")).toBe("/drive-stream/abc?ext=wma");
+    expect(buildStreamUrl("abc", "song.aif")).toBe("/drive-stream/abc?ext=aif");
+    expect(buildStreamUrl("abc", "song.aiff")).toBe(
+      "/drive-stream/abc?ext=aiff",
+    );
+    expect(buildStreamUrl("abc", "song.oga")).toBe("/drive-stream/abc?ext=oga");
+    expect(buildStreamUrl("abc", "song.m4b")).toBe("/drive-stream/abc?ext=m4b");
   });
 });

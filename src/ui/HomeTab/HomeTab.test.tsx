@@ -535,13 +535,13 @@ describe("HomeTab Recently Added mirror query (db.files source)", () => {
     ]);
   });
 
-  it("M2. filters the mirror to non-folder, non-trashed, playable-extension audio rows", async () => {
+  it("M2. filters the mirror to non-folder, non-trashed, playable-extension rows", async () => {
     mocks.dbFilesToArray.mockResolvedValue([
       mirrorRow({ id: "f1", name: "Song.mp3" }),
       mirrorRow({ id: "f2", name: "Album.mp3", isFolder: true }),
       mirrorRow({ id: "f3", name: "Old.mp3", trashed: true }),
       mirrorRow({ id: "f4", name: "Notes.txt" }),
-      mirrorRow({ id: "f5", name: "Track.wma" }),
+      mirrorRow({ id: "f5", name: "Track.ape" }),
       mirrorRow({ id: "f6", name: "Vibe.flac" }),
     ]);
     render(<HomeTab {...baseProps()} />);
@@ -551,7 +551,7 @@ describe("HomeTab Recently Added mirror query (db.files source)", () => {
     expect(screen.queryByText("Album.mp3")).toBeNull();
     expect(screen.queryByText("Old.mp3")).toBeNull();
     expect(screen.queryByText("Notes.txt")).toBeNull();
-    expect(screen.queryByText("Track.wma")).toBeNull();
+    expect(screen.queryByText("Track.ape")).toBeNull();
   });
 
   it("M3. caps the mirror list at 100 tracks and keeps the overlay contract working", async () => {

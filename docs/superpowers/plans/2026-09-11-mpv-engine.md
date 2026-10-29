@@ -87,7 +87,7 @@ Google Drive ──▶ public/sw.js (SW proxy /drive-stream/{id} → files/{id}?
 1. `rg` KHÔNG có trong PowerShell PATH → dùng grep tool tích hợp hoặc `Select-String`. Gọi `rg` = fail mất vòng.
 2. `metadata.ts` + `driveRangeTokenizer` + `swByteCache` dùng `/drive-stream/` cho METADATA → SW không được xoá.
 3. `symphonia`/`lofty` trong `Cargo.toml:42-43` là dead deps (không file .rs nào tham chiếu) — đừng nhầm là đang decode native.
-4. `buildStreamUrl` tests cho thấy WMA/AIFF chủ động bị strip ext (Chromium không decode) — mpv sẽ mở lại được các format này (không cần làm gì thêm).
+4. `buildStreamUrl` tests cho thấy WMA/AIFF chủ động bị strip ext (thời điểm đó playback còn ở Chromium) — mpv sẽ mở lại được các format này (không cần làm gì thêm). *Cập nhật: cả 5 extension (`wma/aif/aiff/oga/m4b`) đã được bật với bằng chứng decoder-level từ `mpv.exe` shipped.*
 5. `tiny_http` đang dùng cho OAuth callback trong `auth.rs` — tham khảo pattern bind port/reuse, đừng đụng luồng callback.
 6. FakeAudio harness trong `AudioController.test.ts` mock DOM audio — Task 3 phải viết harness mới cho IPC events (mock `invoke`/`listen` của `@tauri-apps/api`), KHÔNG cố tái dùng FakeAudio DOM.
 7. Mọi thay đổi TS phải qua `npx eslint <file>` — husky pre-commit chặn.

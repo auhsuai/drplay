@@ -1,10 +1,11 @@
 export type AudioFormat =
   "mp3" | "flac" | "ogg" | "opus" | "m4a" | "wav" | "aac" | "unknown";
 
-// Canonical extension (no leading dot) -> MIME map, mirroring the 7 playable
-// formats in audioQuery.PLAYABLE_AUDIO_EXTENSIONS. public/sw.js carries an
-// independent copy (the SW cannot import TS); src/utils/swMime.test.ts guards
-// the two in sync.
+// Canonical extension (no leading dot) -> MIME map, mirroring every entry in
+// audioQuery.PLAYABLE_AUDIO_EXTENSIONS. public/sw.js carries an independent
+// copy (the SW cannot import TS); src/utils/swMime.test.ts guards the two in
+// sync. The container is not a codec promise: .m4a can hold AAC or ALAC,
+// .ogg/.oga can hold Vorbis or Opus, and .wma covers every WMA variant.
 export const AUDIO_EXTENSION_TO_MIME = {
   mp3: "audio/mpeg",
   flac: "audio/flac",
@@ -13,6 +14,11 @@ export const AUDIO_EXTENSION_TO_MIME = {
   m4a: "audio/mp4",
   aac: "audio/aac",
   opus: "audio/opus",
+  wma: "audio/x-ms-wma",
+  aif: "audio/aiff",
+  aiff: "audio/aiff",
+  oga: "audio/ogg",
+  m4b: "audio/mp4",
 } as const satisfies Record<string, string>;
 
 const FLAC_MAGIC = 0x664c6143; // 'fLaC'

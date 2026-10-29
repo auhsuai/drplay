@@ -31,13 +31,31 @@ describe("sw.js EXTENSION_TO_MIME guard", () => {
     expect(Object.keys(SW_EXTENSION_TO_MIME).length).toBeGreaterThan(0);
   });
 
-  it("covers exactly the 7 playable extensions", () => {
+  it("covers exactly the playable extensions", () => {
     expect(Object.keys(SW_EXTENSION_TO_MIME).sort()).toEqual(canonicalKeys());
+    expect(Object.keys(SW_EXTENSION_TO_MIME)).toHaveLength(
+      PLAYABLE_AUDIO_EXTENSIONS.length,
+    );
   });
 
   it("maps each extension to the canonical MIME", () => {
     for (const [ext, mime] of Object.entries(AUDIO_EXTENSION_TO_MIME)) {
       expect(SW_EXTENSION_TO_MIME[ext]).toBe(mime);
+    }
+  });
+
+  it("resolves the MIME of every extension added with the libmpv engine", () => {
+    const added: ReadonlyArray<[keyof typeof AUDIO_EXTENSION_TO_MIME, string]> =
+      [
+        ["wma", "audio/x-ms-wma"],
+        ["aif", "audio/aiff"],
+        ["aiff", "audio/aiff"],
+        ["oga", "audio/ogg"],
+        ["m4b", "audio/mp4"],
+      ];
+    for (const [ext, mime] of added) {
+      expect(SW_EXTENSION_TO_MIME[ext], ext).toBe(mime);
+      expect(AUDIO_EXTENSION_TO_MIME[ext], ext).toBe(mime);
     }
   });
 
@@ -159,6 +177,38 @@ describe("sw.js Content-Type override behavior", () => {
     expect(response.headers.get("Content-Type")).toBe(
       "application/octet-stream",
     );
+  });
+
+  it("?ext=wma overrides octet-stream to audio/x-ms-wma on a 2xx response", async () => {
+    const response = await fetchViaSw("?ext=wma");
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Type")).toBe("audio/x-ms-wma");
+    expect(await response.text()).toBe("audio-bytes");
+  });
+
+  it("?ext=aif and ?ext=aiff both override to audio/aiff", async () => {
+    for (const ext of ["aif", "aiff"]) {
+      const response = await fetchViaSw(`?ext=${ext}`);
+      expect(response.status, ext).toBe(206);
+      expect(response.headers.get("Content-Type"), ext).toBe("audio/aiff");
+      expect(await response.text(), ext).toBe("audio-bytes");
+    }
+  });
+
+  it("?ext=oga overrides to audio/ogg and ?ext=m4b to audio/mp4", async () => {
+    const oga = await fetchViaSw("?ext=oga");
+    expect(oga.headers.get("Content-Type")).toBe("audio/ogg");
+    const m4b = await fetchViaSw("?ext=m4b");
+    expect(m4b.headers.get("Content-Type")).toBe("audio/mp4");
+  });
+
+  // EXT_PATTERN = /^[a-z0-9]{2,5}$/ must accept every new extension so the
+  // override is reachable at all (aiff=4, m4b=3, oga=3, wma=3, aif=3).
+  it("EXT_PATTERN accepts every new extension", () => {
+    const pattern = /^[a-z0-9]{2,5}$/;
+    for (const ext of ["wma", "aif", "aiff", "oga", "m4b"]) {
+      expect(pattern.test(ext), ext).toBe(true);
+    }
   });
 
   it("a 401 response is never overridden", async () => {

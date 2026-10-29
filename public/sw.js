@@ -73,7 +73,12 @@ const EXTENSION_TO_MIME = {
   ogg: 'audio/ogg',
   m4a: 'audio/mp4',
   aac: 'audio/aac',
-  opus: 'audio/opus'
+  opus: 'audio/opus',
+  wma: 'audio/x-ms-wma',
+  aif: 'audio/aiff',
+  aiff: 'audio/aiff',
+  oga: 'audio/ogg',
+  m4b: 'audio/mp4'
 };
 const EXT_QUERY_PARAM = 'ext';
 // Lowercase alphanumeric, 2-5 chars — rejects "..", "MP3", oversized junk.

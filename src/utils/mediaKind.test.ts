@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { hasVideoExtension, isVideoNameNoise } from "./audioQuery";
+import {
+  hasAudioExtension,
+  hasVideoExtension,
+  isVideoNameNoise,
+  PLAYABLE_AUDIO_EXTENSIONS,
+} from "./audioQuery";
 import {
   classifyMediaKind,
   isPlayableMediaFile,
@@ -53,15 +58,7 @@ describe("PLAYABLE_VIDEO_EXTENSIONS", () => {
   });
 
   it("holds no audio extension (the audio allowlist is not duplicated here)", () => {
-    for (const ext of [
-      ".mp3",
-      ".flac",
-      ".wav",
-      ".ogg",
-      ".m4a",
-      ".aac",
-      ".opus",
-    ]) {
+    for (const ext of PLAYABLE_AUDIO_EXTENSIONS) {
       expect(PLAYABLE_VIDEO_EXTENSIONS).not.toContain(ext);
     }
   });
@@ -86,6 +83,28 @@ describe("classifyMediaKind", () => {
     expect(classifyMediaKind("Song.m4a")).toBe("audio");
     expect(classifyMediaKind("Song.aac")).toBe("audio");
     expect(classifyMediaKind("Song.opus")).toBe("audio");
+    for (const ext of PLAYABLE_AUDIO_EXTENSIONS) {
+      expect(classifyMediaKind(`Song${ext}`), ext).toBe("audio");
+    }
+  });
+
+  // The five containers added with libmpv: all audio, none video.
+  it("classifies wma/aif/aiff/oga/m4b as audio and never video", () => {
+    for (const ext of [".wma", ".aif", ".aiff", ".oga", ".m4b"]) {
+      expect(PLAYABLE_VIDEO_EXTENSIONS, ext).not.toContain(ext);
+      expect(hasAudioExtension(`Song${ext}`), ext).toBe(true);
+      expect(hasVideoExtension(`Song${ext}`), ext).toBe(false);
+      expect(classifyMediaKind(`Song${ext}`), ext).toBe("audio");
+      expect(classifyMediaKind(`SONG${ext.toUpperCase()}`), ext).toBe("audio");
+      expect(isPlayableMediaFile(`Song${ext}`), ext).toBe(true);
+    }
+  });
+
+  it("keeps .m4a audio while .m4v stays video (mp4 family split)", () => {
+    expect(classifyMediaKind("Song.m4a")).toBe("audio");
+    expect(classifyMediaKind("Song.m4b")).toBe("audio");
+    expect(classifyMediaKind("Movie.m4v")).toBe("video");
+    expect(hasVideoExtension("Song.m4b")).toBe(false);
   });
 
   it("case-insensitive on the extension (Drive preserves the upload's case)", () => {
@@ -102,7 +121,7 @@ describe("classifyMediaKind", () => {
     // opening a video window for something that is not a video.
     expect(classifyMediaKind("notes.txt")).toBe("audio");
     expect(classifyMediaKind("archive.zip")).toBe("audio");
-    expect(classifyMediaKind("Track.wma")).toBe("audio");
+    expect(classifyMediaKind("Track.ape")).toBe("audio");
     expect(classifyMediaKind("noextension")).toBe("audio");
     expect(classifyMediaKind("")).toBe("audio");
     expect(classifyMediaKind("folder")).toBe("audio");
@@ -156,7 +175,7 @@ describe("isPlayableMediaFile", () => {
     for (const name of [
       "notes.txt",
       "archive.zip",
-      "Track.wma",
+      "Track.ape",
       "folder",
       "",
     ]) {

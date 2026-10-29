@@ -272,9 +272,10 @@ describe("delay", () => {
 
 // Task 1 (hide-unplayable-formats): the full-sync pass ends with a one-time
 // cleanup that deletes already-synced rows whose extension is NOT in the
-// playable set (wma/aiff/alac/ape/dsf/dff/wv/tak), because Chromium/WebView2
-// cannot decode them. Folders are never touched (folder rows have no playable
-// extension but isFolder=true).
+// playable set (alac/ape/dsf/dff/wv/tak). `.wma`/.aif/.aiff/.oga/.m4b are
+// playable since the libmpv switch, so `.ape` is the sample shape here.
+// Folders are never touched (folder rows have no playable extension but
+// isFolder=true).
 describe("full-sync cleanup of non-playable rows", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -284,9 +285,9 @@ describe("full-sync cleanup of non-playable rows", () => {
   it("deletes stale non-playable rows at full-sync completion, keeps folders and playable files", async () => {
     await db.files.bulkPut([
       {
-        id: "wma1",
-        name: "old-song.wma",
-        mimeType: "audio/x-ms-wma",
+        id: "ape1",
+        name: "old-song.ape",
+        mimeType: "audio/x-ape",
         parentId: "root",
         size: 1,
         trashed: false,
@@ -350,7 +351,7 @@ describe("full-sync cleanup of non-playable rows", () => {
       data: { type: "sync", token: "test-token", userEmail: FIXTURE_EMAIL },
     } as MessageEvent);
 
-    expect(await db.files.get([FIXTURE_EMAIL, "wma1"])).toBeUndefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "ape1"])).toBeUndefined();
     expect(await db.files.get([FIXTURE_EMAIL, "flac1"])).toBeDefined();
     expect(await db.files.get([FIXTURE_EMAIL, "flac2"])).toBeDefined();
     expect(await db.files.get([FIXTURE_EMAIL, "folder1"])).toBeDefined();
@@ -367,9 +368,9 @@ describe("full-sync cleanup of non-playable rows", () => {
     const OTHER_EMAIL = "other-account@example.com";
     await db.files.bulkPut([
       {
-        id: "wma-A",
-        name: "mine.wma",
-        mimeType: "audio/x-ms-wma",
+        id: "ape-A",
+        name: "mine.ape",
+        mimeType: "audio/x-ape",
         parentId: "root",
         size: 1,
         trashed: false,
@@ -386,9 +387,9 @@ describe("full-sync cleanup of non-playable rows", () => {
         userEmail: FIXTURE_EMAIL,
       },
       {
-        id: "wma-B",
-        name: "theirs.wma",
-        mimeType: "audio/x-ms-wma",
+        id: "ape-B",
+        name: "theirs.ape",
+        mimeType: "audio/x-ape",
         parentId: "root",
         size: 1,
         trashed: false,
@@ -418,12 +419,12 @@ describe("full-sync cleanup of non-playable rows", () => {
 
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
     // Account A: its stale non-playable row goes...
-    expect(await db.files.get([FIXTURE_EMAIL, "wma-A"])).toBeUndefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "ape-A"])).toBeUndefined();
     // ...its folder and freshly synced playable row stay.
     expect(await db.files.get([FIXTURE_EMAIL, "folder-A"])).toBeDefined();
     expect(await db.files.get([FIXTURE_EMAIL, "flac-A"])).toBeDefined();
     // Account B was NOT being synced — its identical non-playable row survives.
-    expect(await db.files.get([OTHER_EMAIL, "wma-B"])).toBeDefined();
+    expect(await db.files.get([OTHER_EMAIL, "ape-B"])).toBeDefined();
   });
 });
 
@@ -1062,9 +1063,9 @@ describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP fa
     await resetSyncTables();
     await db.files.bulkPut([
       {
-        id: "wma-old",
-        name: "old.wma",
-        mimeType: "audio/x-ms-wma",
+        id: "ape-old",
+        name: "old.ape",
+        mimeType: "audio/x-ape",
         parentId: "root",
         size: 1,
         trashed: false,
@@ -1092,7 +1093,7 @@ describe("full-sync reports SYNC_ERROR when a pagination page returns an HTTP fa
     expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toBeUndefined();
     // Cleanup only ever runs at full-sync COMPLETION — a failed pass with a
     // zero-page library must not mass-delete rows it never refreshed.
-    expect(await db.files.get([FIXTURE_EMAIL, "wma-old"])).toBeDefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "ape-old"])).toBeDefined();
   });
 });
 

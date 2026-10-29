@@ -17,19 +17,20 @@ import {
 } from "./audioQuery";
 import { classifyMediaKind, isPlayableMediaFile } from "./mediaKind";
 
-// Query contract (Task 1 — hide-unplayable-formats): only formats Chromium /
-// WebView2 can decode may sync (mp3/flac/wav/ogg/m4a/aac/opus). The
-// `mimeType contains 'audio/'` clause is gone — discrimination is by playable
-// extension only (a .wma reports audio/x-ms-wma but cannot play).
+// Query contract: the sync allowlist is the set the shipped libmpv engine can
+// decode (mp3/flac/wav/ogg/m4a/aac/opus + wma/aif/aiff/oga/m4b), not the
+// WebView2/Chromium codec set. The `mimeType contains 'audio/'` clause is gone
+// — discrimination is by playable extension only (a bare `song` with
+// audio/mpeg is still rejected).
 const AUDIO_QUERY =
-  "trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' or name contains '.flac' or name contains '.wav' or name contains '.ogg' or name contains '.m4a' or name contains '.aac' or name contains '.opus'))";
+  "trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' or name contains '.flac' or name contains '.wav' or name contains '.ogg' or name contains '.m4a' or name contains '.aac' or name contains '.opus' or name contains '.wma' or name contains '.aif' or name contains '.aiff' or name contains '.oga' or name contains '.m4b'))";
 
 const FOLDER_AUDIO_QUERY =
-  "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
+  "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wma' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aif' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aiff' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.oga' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4b' and (mimeType contains 'audio/' or mimeType='application/octet-stream')))";
 
+// Still unsupported: no END-TO-END playback evidence yet (not a Chromium
+// decoder limit). `.wma`/`.aif`/`.aiff`/`.oga`/`.m4b` left this list.
 const NON_PLAYABLE_EXTENSIONS = [
-  ".wma",
-  ".aiff",
   ".alac",
   ".ape",
   ".dsf",
@@ -78,21 +79,35 @@ describe("folder/recent query keeps audio/mpeg coverage (regression v2)", () => 
 });
 
 describe("hasAudioExtension", () => {
-  it("recognizes the 7 playable extensions case-insensitively", () => {
-    expect(hasAudioExtension("song.mp3")).toBe(true);
+  it("recognizes every playable extension case-insensitively", () => {
+    for (const ext of PLAYABLE_AUDIO_EXTENSIONS) {
+      expect(hasAudioExtension(`song${ext}`), ext).toBe(true);
+    }
     expect(hasAudioExtension("song.MP3")).toBe(true);
-    expect(hasAudioExtension("song.flac")).toBe(true);
-    expect(hasAudioExtension("song.wav")).toBe(true);
-    expect(hasAudioExtension("song.ogg")).toBe(true);
-    expect(hasAudioExtension("song.m4a")).toBe(true);
-    expect(hasAudioExtension("song.aac")).toBe(true);
-    expect(hasAudioExtension("song.opus")).toBe(true);
+    expect(hasAudioExtension("song.M4A")).toBe(true);
+    expect(hasAudioExtension("song.WMA")).toBe(true);
+    expect(hasAudioExtension("song.AIFF")).toBe(true);
+    expect(hasAudioExtension("song.OGA")).toBe(true);
+    expect(hasAudioExtension("song.M4B")).toBe(true);
   });
 
-  it("rejects every non-playable audio extension (wma/aiff/alac/ape/dsf/dff/wv/tak)", () => {
+  it("rejects every remaining non-playable audio extension (alac/ape/dsf/dff/wv/tak)", () => {
     for (const ext of NON_PLAYABLE_EXTENSIONS) {
       expect(hasAudioExtension(`song${ext}`)).toBe(false);
     }
+  });
+
+  it("accepts both .aif and .aiff (prefix overlap is harmless: both are audio)", () => {
+    expect(hasAudioExtension("t.aif")).toBe(true);
+    expect(hasAudioExtension("t.AIF")).toBe(true);
+    expect(hasAudioExtension("t.aiff")).toBe(true);
+    expect(hasAudioExtension("t.AIFF")).toBe(true);
+    // '.aiff' also ends with the '.aif' clause — expected, and still audio.
+    expect(hasAudioExtension("t.aiff") && hasAudioExtension("t.aif")).toBe(
+      true,
+    );
+    expect(PLAYABLE_AUDIO_EXTENSIONS).toContain(".aif");
+    expect(PLAYABLE_AUDIO_EXTENSIONS).toContain(".aiff");
   });
 
   it("rejects non-audio names", () => {
@@ -116,6 +131,25 @@ describe("hasAudioExtension", () => {
   });
 });
 
+// One test per enabled container: the runtime predicate, the media-kind
+// classification and the discovery clause must all agree, otherwise the file
+// is either invisible (no query clause) or unplayable (classified as video).
+describe("enabled audio containers", () => {
+  for (const ext of PLAYABLE_AUDIO_EXTENSIONS) {
+    it(`discovers and classifies ${ext} as audio`, () => {
+      expect(hasAudioExtension(`Song${ext}`)).toBe(true);
+      expect(hasAudioExtension(`Song${ext.toUpperCase()}`)).toBe(true);
+      expect(isAudioFile(undefined, `Song${ext}`)).toBe(true);
+      expect(classifyMediaKind(`Song${ext}`)).toBe("audio");
+      expect(classifyMediaKind(`Song${ext.toUpperCase()}`)).toBe("audio");
+      expect(isPlayableMediaFile(`Song${ext}`)).toBe(true);
+      expect(isPlayableMediaFile(`Song${ext.toUpperCase()}`)).toBe(true);
+      expect(getAudioQuery()).toContain(`name contains '${ext}'`);
+      expect(getMediaQuery()).toContain(`name contains '${ext}'`);
+    });
+  }
+});
+
 describe("isAudioFile", () => {
   it("is extension-based only: playable extension wins regardless of mime", () => {
     expect(isAudioFile(undefined, "song.mp3")).toBe(true);
@@ -129,8 +163,15 @@ describe("isAudioFile", () => {
   });
 
   it("rejects non-playable extensions even when the mime says audio", () => {
-    expect(isAudioFile("audio/x-ms-wma", "song.wma")).toBe(false);
-    expect(isAudioFile("audio/x-aiff", "song.aiff")).toBe(false);
+    expect(isAudioFile("audio/x-monkeys-audio", "song.ape")).toBe(false);
+    expect(isAudioFile("audio/x-wavpack", "song.wv")).toBe(false);
+  });
+
+  it("accepts .wma/.aiff regardless of the mime Drive reports", () => {
+    expect(isAudioFile("audio/x-ms-wma", "song.wma")).toBe(true);
+    expect(isAudioFile("audio/x-aiff", "song.aiff")).toBe(true);
+    expect(isAudioFile(undefined, "song.wma")).toBe(true);
+    expect(isAudioFile("application/octet-stream", "song.aiff")).toBe(true);
   });
 
   it("rejects non-audio names", () => {
@@ -257,7 +298,7 @@ describe("getMediaQuery (library union)", () => {
 describe("getFolderMediaQuery (folder union)", () => {
   it("matches the frozen union contract: audio clauses verbatim, then the video clauses", () => {
     expect(getFolderMediaQuery("abc123")).toBe(
-      "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.mkv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mp4' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.webm' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.m4v' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mov' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.avi' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.wmv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.flv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpeg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ogv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.3gp' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.vob' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.asf' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ts' and (mimeType contains 'video/' or mimeType='application/octet-stream')))",
+      "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wma' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aif' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aiff' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.oga' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4b' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.mkv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mp4' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.webm' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.m4v' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mov' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.avi' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.wmv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.flv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpeg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ogv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.3gp' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.vob' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.asf' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ts' and (mimeType contains 'video/' or mimeType='application/octet-stream')))",
     );
   });
 

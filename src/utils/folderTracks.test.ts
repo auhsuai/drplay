@@ -225,7 +225,7 @@ describe("collectFolderTracks", () => {
   it("skips entries whose extension is not playable", async () => {
     entriesByFolder({
       root: [
-        audio({ id: "w1", name: "track.wma", mimeType: "audio/x-ms-wma" }),
+        audio({ id: "w1", name: "track.ape", mimeType: "audio/x-ape" }),
         audio({ id: "m1", name: "ok.mp3" }),
       ],
     });
