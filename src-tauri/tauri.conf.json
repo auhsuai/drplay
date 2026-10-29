@@ -30,8 +30,8 @@
     "targets": "all",
     "windows": {
       "webviewInstallMode": {
-        "type": "fixedRuntime",
-        "path": "./Microsoft.WebView2.FixedVersionRuntime.154.0.4258.62.x64/"
+        "type": "downloadBootstrapper",
+        "silent": true
       }
     },
     "resources": {
