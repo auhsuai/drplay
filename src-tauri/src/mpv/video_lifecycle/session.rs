@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::super::ipc::{EventSink, IpcMessage, MpvIpc};
-use super::super::process::{connect_pipe, new_pipe_name, spawn_mpv, MPV_LOG_FILE_NAME};
+use super::super::process::{connect_pipe, new_pipe_name, spawn_mpv_resolving, MPV_LOG_FILE_NAME};
 use super::observe::first_window;
 use super::READY_TIMEOUT;
 
@@ -35,7 +35,7 @@ impl Session {
         std::fs::create_dir_all(&dir).expect("probe log dir must be creatable");
         let log_path = dir.join(MPV_LOG_FILE_NAME);
         let pipe_name = new_pipe_name();
-        let spawned = spawn_mpv(&pipe_name, Some(log_path.as_path())).expect("sidecar must spawn");
+        let spawned = spawn_mpv_resolving(&pipe_name, Some(log_path.as_path())).expect("sidecar must spawn");
         let pid = spawned.child.id().expect("a spawned child has a pid");
 
         let client = connect_pipe(&pipe_name)

@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 
+use crate::playback_runtime::metadata::MPV_EXE_BYTE_FLOOR;
+
 /// Pipe namespace for the per-session IPC endpoint (mpv `--input-ipc-server`).
 /// Randomized per session on purpose: mpv's IPC accepts arbitrary commands
 /// (including `run`), so the pipe must never be guessable or shared.
@@ -197,29 +199,233 @@ pub(crate) fn mpv_flags(
     flags
 }
 
-/// Locate the sidecar exe where tauri-build stages it: next to the app
-/// binary (dev: `target/debug/mpv.exe`, production: install dir), stepping up
-/// from `deps` when running under `cargo test`.
-pub(crate) fn resolve_mpv_exe() -> Result<PathBuf, String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|exe_error| format!("mpv sidecar: cannot locate app executable: {exe_error}"))?;
-    let mut dir = current_exe
-        .parent()
-        .ok_or_else(|| "mpv sidecar: app executable has no parent directory".to_string())?
-        .to_path_buf();
+/// Environment override for the sidecar executable. Authoritative when set:
+/// an explicit path is never silently replaced by a discovered one.
+pub(crate) const MPV_EXE_ENV: &str = "DRPLAY_MPV_EXE";
+/// Stable, machine-recognizable prefix of every "no fallback engine" error.
+/// Slice 3/5 match this slug; the rest of the message is user-facing prose.
+pub(crate) const FALLBACK_NOT_INSTALLED_SLUG: &str = "fallback-engine-not-installed";
+/// Stable prefix of the "the override is set but unusable" error. Distinct on
+/// purpose: the user asked for a specific binary and must be told it is wrong,
+/// not silently handed a different one.
+const FALLBACK_OVERRIDE_INVALID_SLUG: &str = "fallback-engine-invalid-override";
+/// The sidecar's name once Tauri stages it via `externalBin` (it renames
+/// `mpv-<target-triple>.exe` to `mpv.exe`).
+const MPV_EXE_NAME: &str = "mpv.exe";
+/// The un-renamed bundled name in `src-tauri/bin`. With `externalBin: []`
+/// nothing rewrites it, so a dev checkout keeps this name verbatim.
+const MPV_EXE_BUNDLED_NAME: &str = "mpv-x86_64-pc-windows-msvc.exe";
+
+/// Why a candidate must not be launched, or `None` when it is usable.
+///
+/// "Exists" is not enough: a truncated or interrupted download is a file, and
+/// launching it would fail with an opaque spawn error (or worse, run a stub).
+/// The floor is the same one the installer enforces
+/// ([`crate::playback_runtime::metadata::MPV_EXE_BYTE_FLOOR`]), so the resolver
+/// and the install pipeline can never disagree about "usable".
+fn candidate_reason(path: &Path) -> Option<String> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(stat_error) if stat_error.kind() == std::io::ErrorKind::NotFound => {
+            return Some("missing".to_string())
+        }
+        Err(stat_error) => return Some(format!("cannot be inspected: {stat_error}")),
+    };
+    if !metadata.is_file() {
+        return Some("not a file".to_string());
+    }
+    let size = metadata.len();
+    if size < MPV_EXE_BYTE_FLOOR {
+        return Some(format!(
+            "only {size} bytes, below the {MPV_EXE_BYTE_FLOOR}-byte minimum (truncated or not mpv)"
+        ));
+    }
+    None
+}
+
+/// The actionable, user-facing "nothing to run" message. Names the Settings
+/// location, states the fallback is an optional download, and mentions the
+/// advanced override -- never a build-time instruction (end users get this).
+fn fallback_missing_error(rejected: &[String]) -> String {
+    let mut message = format!(
+        "{FALLBACK_NOT_INSTALLED_SLUG}: the optional mpv.exe fallback engine is not installed. \
+         Install it from Settings > Playback > Fallback engine, or (advanced) point \
+         {MPV_EXE_ENV} at an mpv.exe you already have."
+    );
+    if !rejected.is_empty() {
+        message.push_str(&format!(" Candidates rejected: {}.", rejected.join("; ")));
+    }
+    // Dev-only: this one IS a build-time hint, and only developers see it.
+    if cfg!(debug_assertions) {
+        message.push_str(
+            " [dev] no sidecar found in src-tauri/bin either — run `node scripts/fetch-mpv.mjs` \
+             from the repo root, then rebuild.",
+        );
+    }
+    message
+}
+
+/// Pure candidate scan: the first candidate that is a real file AND clears the
+/// size floor wins. Every rejection is logged with its reason -- the diagnostic
+/// the old single-candidate resolver lacked. No globals, no env reads.
+pub(crate) fn resolve_mpv_exe_in(
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> Result<PathBuf, String> {
+    let mut rejected: Vec<String> = Vec::new();
+    for candidate in candidates {
+        match candidate_reason(&candidate) {
+            None => {
+                log::info!("[mpv] sidecar resolved: {}", candidate.display());
+                return Ok(candidate);
+            }
+            Some(reason) => {
+                log::debug!(
+                    "[mpv] sidecar candidate skipped ({reason}): {}",
+                    candidate.display()
+                );
+                rejected.push(format!("{} ({reason})", candidate.display()));
+            }
+        }
+    }
+    Err(fallback_missing_error(&rejected))
+}
+
+/// Pure resolution core, env-free so the whole policy is unit-testable:
+///
+/// 1. `override_exe` (`DRPLAY_MPV_EXE`) is authoritative. If it is set but
+///    unusable, that is a distinct error -- explicit configuration must never
+///    be silently ignored in favour of some other binary on disk.
+/// 2. The installed per-user fallback (already validated by the caller).
+/// 3. The dev candidates, in order.
+pub(crate) fn resolve_mpv_exe_with(
+    override_exe: Option<PathBuf>,
+    installed: Option<PathBuf>,
+    dev: Vec<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(override_path) = override_exe {
+        return match candidate_reason(&override_path) {
+            None => {
+                log::info!(
+                    "[mpv] sidecar resolved by {MPV_EXE_ENV}: {}",
+                    override_path.display()
+                );
+                Ok(override_path)
+            }
+            Some(reason) => Err(format!(
+                "{FALLBACK_OVERRIDE_INVALID_SLUG}: {MPV_EXE_ENV} is set to {} but it is not \
+                 usable ({reason}). An explicit override is never ignored, so no other mpv.exe \
+                 is tried: fix or unset {MPV_EXE_ENV}.",
+                override_path.display()
+            )),
+        };
+    }
+    resolve_mpv_exe_in(installed.into_iter().chain(dev))
+}
+
+/// Dev/repo candidates, in the same spirit as `resolve_libmpv_dll`:
+/// `<ancestor>/bin/mpv.exe`, `<ancestor>/bin/mpv-x86_64-pc-windows-msvc.exe`
+/// for every ancestor of the app binary's directory, then `<exe-dir>/mpv.exe`
+/// (the historical layout, kept for a Tauri-staged dev build).
+///
+/// The `bin/` walk is gated on the ancestor looking like this repository (it
+/// holds `Cargo.toml` or `src-tauri/`) so a production install under
+/// `C:\Program Files\...` can never pick up an unrelated `bin\mpv.exe` from a
+/// parent directory.
+fn dev_candidates(app_exe_dir: &Path) -> Vec<PathBuf> {
+    let mut dir = app_exe_dir.to_path_buf();
+    // `cargo test` runs the test binary from `<profile>/deps`.
     if dir.ends_with("deps") {
         if let Some(parent) = dir.parent() {
             dir = parent.to_path_buf();
         }
     }
-    let candidate = dir.join("mpv.exe");
-    if !candidate.is_file() {
-        return Err(format!(
-            "mpv sidecar not found at {} — run `node scripts/fetch-mpv.mjs` from the repo root, then rebuild",
-            candidate.display()
-        ));
+    let mut candidates = Vec::new();
+    for ancestor in dir.ancestors() {
+        let looks_like_repo =
+            ancestor.join("Cargo.toml").is_file() || ancestor.join("src-tauri").is_dir();
+        if !looks_like_repo {
+            continue;
+        }
+        let bin = ancestor.join("bin");
+        candidates.push(bin.join(MPV_EXE_NAME));
+        // Not renamed back: `externalBin` is empty in this experiment, so the
+        // checked-in binary keeps its target-triple suffix.
+        candidates.push(bin.join(MPV_EXE_BUNDLED_NAME));
     }
-    Ok(candidate)
+    candidates.push(dir.join(MPV_EXE_NAME));
+    candidates
+}
+
+/// The installed per-user fallback, ONLY if the install pipeline would call it
+/// `Installed`: `status_for` re-checks the size window and reads the Windows
+/// version resource, so a stub or a truncated file is never offered here.
+/// `None` (with a debug line) means "this step contributes no candidate".
+fn installed_sidecar_path(local_data_root: &Path) -> Option<PathBuf> {
+    use crate::playback_runtime::status::{engine_exe_path, FallbackStatus};
+    use crate::playback_runtime::{install, metadata};
+
+    let path = engine_exe_path(local_data_root, metadata::MPV_VERSION);
+    match install::status_for(local_data_root) {
+        FallbackStatus::Installed { .. } => Some(path),
+        other => {
+            log::debug!(
+                "[mpv] installed fallback not usable ({other:?}): {}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// `app_local_data_dir()` for the resolver. Failure is logged and skipped, not
+/// fatal: the dev candidates below can still satisfy a developer machine.
+fn app_local_data_root(app: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+
+    match app.path().app_local_data_dir() {
+        Ok(root) => Some(root),
+        Err(path_error) => {
+            log::warn!(
+                "[mpv] app_local_data_dir unavailable, skipping the installed fallback candidate: \
+                 {path_error}"
+            );
+            None
+        }
+    }
+}
+
+/// Production entry point: gets the per-user root from the `AppHandle` so the
+/// installed fallback can be found. The no-arg [`resolve_mpv_exe`] stays as the
+/// dev/test wrapper (no installed-fallback step, no Tauri dependency).
+pub(crate) fn resolve_mpv_exe_for(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    resolve_mpv_exe_in_root(app_local_data_root(app).as_deref())
+}
+
+/// Locate the sidecar exe, in order: `DRPLAY_MPV_EXE`, the installed per-user
+/// fallback (needs `local_data_root`, i.e. `app_local_data_dir()`), then the
+/// dev/repo layout. `local_data_root` is `None` for tests and for a run where
+/// Tauri could not resolve it -- the last two steps still apply.
+fn resolve_mpv_exe_in_root(local_data_root: Option<&Path>) -> Result<PathBuf, String> {
+    let override_exe = std::env::var_os(MPV_EXE_ENV)
+        .filter(|raw| !raw.is_empty())
+        .map(PathBuf::from);
+    let installed = local_data_root.and_then(installed_sidecar_path);
+    let dev = match std::env::current_exe() {
+        Ok(current_exe) => current_exe.parent().map(dev_candidates).unwrap_or_default(),
+        Err(exe_error) => {
+            log::debug!("[mpv] cannot locate the app executable for dev candidates: {exe_error}");
+            Vec::new()
+        }
+    };
+    resolve_mpv_exe_with(override_exe, installed, dev)
+}
+
+/// Dev/test wrapper: the same policy without the per-user installed step (no
+/// `AppHandle` available). Production always resolves through
+/// [`resolve_mpv_exe_for`].
+#[cfg(test)]
+pub(crate) fn resolve_mpv_exe() -> Result<PathBuf, String> {
+    resolve_mpv_exe_in_root(None)
 }
 
 /// A freshly spawned sidecar plus the kill-on-close job pinning it to the
@@ -232,12 +438,18 @@ pub(crate) struct SpawnedSidecar {
 }
 
 /// Spawn the sidecar detached from any console with the engine flag set.
+/// `exe` is resolved (and validated) by the caller so the launch can never
+/// diverge from the pre-flight check -- this function launches exactly what it
+/// was handed, it never re-resolves.
 /// `mpv_log` names the sidecar log file (see `rotate_mpv_log`); the child joins
 /// a kill-on-close job BEFORE this returns: job creation or assignment failure
 /// kills the partial child and surfaces Err (fail loud — never hand back a
 /// running orphan).
-pub(crate) fn spawn_mpv(pipe_name: &str, mpv_log: Option<&Path>) -> Result<SpawnedSidecar, String> {
-    let exe = resolve_mpv_exe()?;
+pub(crate) fn spawn_mpv(
+    exe: &Path,
+    pipe_name: &str,
+    mpv_log: Option<&Path>,
+) -> Result<SpawnedSidecar, String> {
     if let Some(log_file) = mpv_log {
         // Keep the wedged session's log: mpv truncates the file on open, and
         // the restart that cures a wedge would otherwise erase its evidence.
@@ -260,9 +472,21 @@ pub(crate) fn spawn_mpv(pipe_name: &str, mpv_log: Option<&Path>) -> Result<Spawn
         exe.display(),
         flags.len()
     );
-    let child = launch_child(&exe, &flags)?;
+    let child = launch_child(exe, &flags)?;
     let (child, job) = pin_to_job(child)?;
     Ok(SpawnedSidecar { child, job })
+}
+
+/// Test helper: resolve through the dev/test wrapper (no `AppHandle`, so no
+/// installed-fallback step) and spawn the result. Production must resolve via
+/// [`resolve_mpv_exe_for`] and call [`spawn_mpv`] with that exact path.
+#[cfg(test)]
+pub(crate) fn spawn_mpv_resolving(
+    pipe_name: &str,
+    mpv_log: Option<&Path>,
+) -> Result<SpawnedSidecar, String> {
+    let exe = resolve_mpv_exe()?;
+    spawn_mpv(&exe, pipe_name, mpv_log)
 }
 
 fn launch_child(exe: &Path, flags: &[String]) -> Result<tokio::process::Child, String> {

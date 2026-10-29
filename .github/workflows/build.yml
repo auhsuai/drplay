@@ -61,8 +61,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Fetch mpv sidecar binary
-        run: node scripts/fetch-mpv.mjs
+      - name: Fetch libmpv playback library
+        run: node scripts/fetch-mpv.mjs --libmpv-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

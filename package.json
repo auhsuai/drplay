@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "fetch-mpv": "node scripts/fetch-mpv.mjs",
+    "fetch-mpv:sidecar": "node scripts/fetch-mpv.mjs --with-sidecar",
     "fetch-webview2": "node scripts/fetch-webview2-runtime.mjs",
     "test": "vitest run",
     "lint": "eslint .",

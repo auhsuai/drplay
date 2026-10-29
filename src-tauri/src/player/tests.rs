@@ -13,7 +13,10 @@ use serde_json::Value;
 
 use super::engine::Engine;
 use super::ffi;
-use super::{ensure_spawned, preferred_engine_from, startup_engine, ActiveEngine, EngineSlot};
+use super::{
+    ensure_spawned, preferred_engine_from, startup_engine, ActiveEngine, EngineSlot,
+    UnavailableReason,
+};
 use crate::mpv::IpcMessage;
 
 type Collected = Arc<Mutex<Vec<(IpcMessage, u64, u64)>>>;
@@ -901,14 +904,52 @@ fn preferred_engine_defaults_to_libmpv_and_only_legacy_aliases_opt_out() {
     assert_eq!(preferred_engine_from(Some(" SIDECAR ")), ActiveEngine::Legacy);
 }
 
-/// A legacy preference always stays legacy; a libmpv preference survives only
-/// when the DLL probe succeeded.
+/// The whole startup truth table, over the two probes. `Legacy` now requires a
+/// usable sidecar: with the installer no longer shipping mpv.exe, a libmpv
+/// failure without one used to claim `Legacy` and then fail at spawn.
 #[test]
-fn startup_engine_demotes_to_legacy_only_when_libmpv_probe_fails() {
-    assert_eq!(startup_engine(ActiveEngine::Libmpv, true), ActiveEngine::Libmpv);
-    assert_eq!(startup_engine(ActiveEngine::Libmpv, false), ActiveEngine::Legacy);
-    assert_eq!(startup_engine(ActiveEngine::Legacy, true), ActiveEngine::Legacy);
-    assert_eq!(startup_engine(ActiveEngine::Legacy, false), ActiveEngine::Legacy);
+fn startup_engine_is_exact_over_preference_libmpv_and_sidecar_availability() {
+    // libmpv preferred and ready: the sidecar's presence is irrelevant.
+    assert_eq!(startup_engine(ActiveEngine::Libmpv, true, false), ActiveEngine::Libmpv);
+    assert_eq!(startup_engine(ActiveEngine::Libmpv, true, true), ActiveEngine::Libmpv);
+    // libmpv preferred but unavailable: the sidecar may take over only if it
+    // actually exists.
+    assert_eq!(startup_engine(ActiveEngine::Libmpv, false, true), ActiveEngine::Legacy);
+    assert_eq!(
+        startup_engine(ActiveEngine::Libmpv, false, false),
+        ActiveEngine::Unavailable(UnavailableReason::LibmpvFailedNoSidecar)
+    );
+    // Sidecar explicitly requested: never falls through to libmpv, and a
+    // missing sidecar is reported, not silently ignored.
+    assert_eq!(startup_engine(ActiveEngine::Legacy, true, true), ActiveEngine::Legacy);
+    assert_eq!(startup_engine(ActiveEngine::Legacy, false, true), ActiveEngine::Legacy);
+    assert_eq!(
+        startup_engine(ActiveEngine::Legacy, true, false),
+        ActiveEngine::Unavailable(UnavailableReason::SidecarRequestedButMissing)
+    );
+    assert_eq!(
+        startup_engine(ActiveEngine::Legacy, false, false),
+        ActiveEngine::Unavailable(UnavailableReason::SidecarRequestedButMissing)
+    );
+}
+
+/// The failure states are never `Legacy`, and never `Libmpv`: both must route
+/// to the actionable "install the fallback" error instead of pretending an
+/// engine is up.
+#[test]
+fn unavailable_states_never_impersonate_a_working_engine() {
+    let both_missing = ActiveEngine::Unavailable(UnavailableReason::LibmpvFailedNoSidecar);
+    assert_ne!(both_missing, ActiveEngine::Legacy);
+    assert_ne!(both_missing, ActiveEngine::Libmpv);
+
+    let requested_missing =
+        ActiveEngine::Unavailable(UnavailableReason::SidecarRequestedButMissing);
+    assert_ne!(requested_missing, ActiveEngine::Legacy);
+    assert_ne!(requested_missing, ActiveEngine::Libmpv);
+    assert_ne!(
+        requested_missing, both_missing,
+        "an explicit request that cannot be honoured must stay distinguishable"
+    );
 }
 
 

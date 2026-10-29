@@ -104,6 +104,14 @@ vi.mock("./components/CreditsSection", () => ({ CreditsSection: () => null }));
 vi.mock("./components/ErrorLogSection", () => ({
   ErrorLogSection: () => null,
 }));
+// The optional fallback-engine row queries its status on mount, which would
+// otherwise show up in the global invokeMock/captureError counts this file
+// asserts on for the seed-import and download-path flows. It has its own
+// integration coverage (FallbackEngineSection.test.tsx mounts the real
+// SettingsTab), so stub it here exactly like the other child sections.
+vi.mock("./components/FallbackEngineSection", () => ({
+  FallbackEngineSection: () => null,
+}));
 
 const LONG_PATH = "C:\\Users\\thinkpad\\Desktop\\Antigravity\\drplay\\Music";
 const SHORT_PATH = "C:\\Music";

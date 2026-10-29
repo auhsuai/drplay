@@ -31,6 +31,11 @@ mod pip_window;
 mod pip_window_aspect;
 mod stream_proxy;
 mod path_scope;
+// Optional downloadable mpv.exe fallback (S1 slice): the self-contained
+// download/verify/extract/install service plus its two IPC commands. Engine
+// SELECTION is not here -- `player::engine_state()` is only read.
+#[cfg(windows)]
+mod playback_runtime;
 
 use auth::{login_google_native, refresh_google_token};
 use memory::{apply_window_activity, WindowActivityEvent};
@@ -206,10 +211,26 @@ pub fn run() {
             APP_HANDLE.set(app.handle().clone()).ok();
 
             // One engine decision for the whole session, BEFORE the frontend
-            // acquires the video surface: libmpv by default, sidecar when the
-            // DLL probe fails (or the env var asks for it). No user-visible UI.
+            // acquires the video surface: libmpv by default, the installed
+            // sidecar when the DLL probe fails (or the env var asks for it),
+            // and an explicit "unavailable" when neither can run.
             #[cfg(windows)]
-            crate::player::initialize_engine_state();
+            crate::player::initialize_engine_state(app.handle());
+
+            // A crash during an install leaves a staging directory behind; it
+            // is dead weight (and disk) until the next install. Best effort
+            // only: startup must never be blocked or failed by housekeeping.
+            #[cfg(windows)]
+            if let Ok(local_data) = app.path().app_local_data_dir() {
+                let removed = crate::playback_runtime::cleanup_stale_staging(&local_data);
+                if removed > 0 {
+                    log::info!("[playback_runtime] removed {removed} stale staging directorie(s)");
+                }
+            } else {
+                log::warn!(
+                    "[playback_runtime] app_local_data_dir unavailable - stale staging not cleaned"
+                );
+            }
 
             // WebView2 browser accelerators (Ctrl+P, Ctrl+F, Ctrl+=, F12,
             // Alt+Left/Right, ...) are handled inside WebView2, not reliably
@@ -326,6 +347,10 @@ pub fn run() {
             #[cfg(windows)] pip_set_aspect_cmd,
             #[cfg(windows)] video_surface_retarget_to_pip_cmd,
             #[cfg(windows)] video_surface_retarget_to_main_cmd,
+            // Optional fallback engine: read-only status + the single install
+            // entry point. There is deliberately no "switch engine" command.
+            #[cfg(windows)] playback_runtime::commands::get_mpv_fallback_status,
+            #[cfg(windows)] playback_runtime::commands::install_mpv_fallback,
         ])
         .build(tauri::generate_context!());
 

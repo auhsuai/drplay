@@ -20,8 +20,12 @@ mod tests;
 
 // Engine mode: the single owner of ACTIVE_ENGINE.
 pub(crate) use engine_mode::{
-    initialize_engine_state, is_libmpv_active, set_active_engine, ActiveEngine,
+    active_engine, initialize_engine_state, is_libmpv_active, set_active_engine, ActiveEngine,
 };
+// Slice 3 surface: the read-only snapshot exposed by
+// `playback_runtime::commands::get_mpv_fallback_status`. Nothing here can
+// change the engine decision.
+pub(crate) use engine_mode::{engine_state, EngineState, UnavailableReason};
 // Lifecycle: the single owner of ENGINE + LIFECYCLE_GATE (gate -> slot).
 pub(crate) use lifecycle::{
     command, get_property, has_unresolved_engine_failure, shutdown, spawn, teardown_for_exit,

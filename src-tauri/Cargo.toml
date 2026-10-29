@@ -62,6 +62,20 @@ hmac = "0.12.1"
 sha2 = "0.10.8"
 
 bytes = "1.6.0"
+# Optional mpv.exe fallback (src/playback_runtime): upstream publishes the
+# Windows build as a .7z ONLY, and the zip crate cannot read that container.
+# sevenz-rust2 is the maintained pure-Rust 7z implementation (Apache-2.0, no C
+# toolchain, no bundled 7zr.exe). Default features are OFF: we only read
+# archives, so the encoder (and the aes256/bzip2/ppmd codecs upstream does not
+# use) never enter the release build. Decompression of LZMA2/LZMA/COPY is
+# always compiled in. The dev-dependency below re-adds ONLY the encoder, for
+# tests: the extraction tests build a real 7z fixture at test time. `compress`
+# without `default` (which would drag in aes256/bzip2/ppmd) keeps the graph
+# minimal -- those codecs are neither written nor read by this feature.
+sevenz-rust2 = { version = "0.24", default-features = false }
+
+[dev-dependencies]
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["compress"] }
 
 # Direct access to the WebView2 COM API to set MemoryUsageTargetLevel when the
 # window goes inactive (wry's WebViewExtWindows is not reachable through
@@ -93,7 +107,7 @@ windows-core = "0.62"
 # generated `D3D11CreateDevice` binding is gated on it, and Dxgi_Common
 # because `CreateSurface`/`CreateTexture2D`/`D3D11_TEXTURE2D_DESC` are.
 # Features only — the crate version and the graph are unchanged.
-windows = { version = "0.62", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Com", "Win32_UI_HiDpi"] }
+windows = { version = "0.62", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Com", "Win32_UI_HiDpi", "Win32_Storage_FileSystem"] }
 # Orphan guarantee for the mpv sidecar: Windows Job Object with
 # KILL_ON_JOB_CLOSE (see src/mpv/job.rs). Pinned to 0.59 to reuse the
 # version already in Cargo.lock (no new graph nodes). Win32_UI_WindowsAndMessaging
