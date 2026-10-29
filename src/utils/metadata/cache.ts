@@ -117,7 +117,7 @@ export async function getCacheEntry(
 
 // Shape guard for a cached row: a row whose version happens to match but whose
 // payload is garbage (e.g. data: {} or a string from a partial write) is a
-// MISS, not a hit — parity with parseDiskMetadata, which validates the full
+// MISS, not a hit — the guard validates the full
 // entry before trusting it. The optional full-picture bytes are validated
 // too: a truthy non-Uint8Array (NaN byte accounting in the LRU budget) or an
 // empty array (a 0-byte cover the UI cannot fall back from) makes the whole

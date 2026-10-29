@@ -16,7 +16,7 @@ export function useDownloadPathSetting(): {
   const { t } = useTranslation();
   const [downloadPath, setDownloadPath] = useState<string>("");
   const [isPicking, setIsPicking] = useState(false);
-  // Synchronous re-entrancy guard (mirror useSeedImport): `isPicking` only
+  // Synchronous re-entrancy guard: `isPicking` only
   // flips true after React flushes state, so two clicks in the same tick
   // would still open two native dialogs without the ref.
   const busyRef = useRef(false);

@@ -11,7 +11,6 @@ mod auth;
 mod tray;
 mod memory;
 mod token_store;
-mod seed;
 #[cfg(windows)]
 mod mpv;
 // In-process libmpv engine (S1 migration slice): the default engine; the
@@ -227,12 +226,9 @@ pub fn run() {
                 let covers_root = cache_dir.join("covers");
                 crate::protocol::cover::init_covers_root(covers_root.clone());
                 crate::protocol::cover::spawn_covers_gc(covers_root);
-                // Seed offline import: <app_cache_dir>/metadata holds the
-                // imported metadata JSONs (read disk-first by the pipeline).
-                crate::seed::init_metadata_root(cache_dir.join("metadata"));
             } else {
                 eprintln!(
-                    "[drplay] app_cache_dir unavailable - cover cache, thumbnail GC and seed metadata will not be initialized"
+                    "[drplay] app_cache_dir unavailable - cover cache and thumbnail GC will not be initialized"
                 );
             }
 
@@ -304,8 +300,6 @@ pub fn run() {
             clear_local_cache,
             get_cache_info,
             clear_thumbnail_dir,
-            seed::import_metadata_seed,
-            seed::read_metadata_disk,
             token_store::set_refresh_token,
             token_store::get_refresh_token,
             token_store::delete_refresh_token,

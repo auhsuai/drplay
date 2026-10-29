@@ -43,7 +43,6 @@ import {
 } from "./pipelineHelpers";
 import { networkCooldownUntil, setNetworkCooldown } from "./cooldown";
 import { readCachedEntry } from "./parse";
-export { parseDiskMetadata } from "./parse";
 import { isMetadataFetchEnabled } from "./settings";
 import {
   prefetchAndScanM4aTail,

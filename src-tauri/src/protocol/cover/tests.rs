@@ -55,23 +55,6 @@ async fn cover_cache_evicts_under_byte_capacity() {
 }
 
 #[tokio::test]
-async fn invalidate_all_covers_clears_nocover_marker() {
-    let key = cover_cache_key("r05_probe", true);
-    COVER_CACHE
-        .insert(key.clone(), (COVER_NOCOVER_ETAG.to_string(), Bytes::new()))
-        .await;
-    assert!(
-        COVER_CACHE.get(&key).await.is_some(),
-        "fixture: NoCover marker must be cached"
-    );
-    invalidate_all_covers();
-    assert!(
-        COVER_CACHE.get(&key).await.is_none(),
-        "NoCover marker must be gone after a seed import invalidates the cache"
-    );
-}
-
-#[tokio::test]
 async fn waiters_capped_when_vec_at_cap() {
     const KEY_ID: &str = "cap_test";
     let key = cover_cache_key(KEY_ID, false);
