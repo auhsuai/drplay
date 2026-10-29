@@ -541,7 +541,8 @@ describe("HomeTab Recently Added mirror query (db.files source)", () => {
       mirrorRow({ id: "f2", name: "Album.mp3", isFolder: true }),
       mirrorRow({ id: "f3", name: "Old.mp3", trashed: true }),
       mirrorRow({ id: "f4", name: "Notes.txt" }),
-      mirrorRow({ id: "f5", name: "Track.ape" }),
+      // `.wvx` is a look-alike that stays outside the allowlist.
+      mirrorRow({ id: "f5", name: "Track.wvx" }),
       mirrorRow({ id: "f6", name: "Vibe.flac" }),
     ]);
     render(<HomeTab {...baseProps()} />);
@@ -551,7 +552,7 @@ describe("HomeTab Recently Added mirror query (db.files source)", () => {
     expect(screen.queryByText("Album.mp3")).toBeNull();
     expect(screen.queryByText("Old.mp3")).toBeNull();
     expect(screen.queryByText("Notes.txt")).toBeNull();
-    expect(screen.queryByText("Track.ape")).toBeNull();
+    expect(screen.queryByText("Track.wvx")).toBeNull();
   });
 
   it("M3. caps the mirror list at 100 tracks and keeps the overlay contract working", async () => {

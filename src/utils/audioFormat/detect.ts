@@ -19,6 +19,11 @@ export const AUDIO_EXTENSION_TO_MIME = {
   aiff: "audio/aiff",
   oga: "audio/ogg",
   m4b: "audio/mp4",
+  ape: "audio/x-ape",
+  wv: "audio/x-wavpack",
+  tak: "audio/x-tak",
+  dsf: "audio/x-dsf",
+  dff: "audio/x-dff",
 } as const satisfies Record<string, string>;
 
 const FLAC_MAGIC = 0x664c6143; // 'fLaC'

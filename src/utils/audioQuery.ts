@@ -1,19 +1,35 @@
 import { FOLDER_MIME } from "./driveTypes";
 
+// Every extension below was verified END TO END against real Google Drive
+// samples: discovered by the Drive query, classified as audio, fetched through
+// the real localhost Range proxy (HTTP 206) and played by the shipped libmpv
+// engine, with the SW ?ext= lane supplying the Content-Type. That is runtime
+// playback evidence, not a decoder probe.
+//
 // Playback is the shipped libmpv engine, not the WebView2/Chromium media
 // stack: the decodable set is mpv's FFmpeg build, so Chromium's codec matrix
-// is irrelevant here.
+// is irrelevant here and must never be used to argue an extension in or out.
 //
-// The five appended formats (.wma, .aif/.aiff, .oga, .m4b) were verified at
-// DECODER level with the shipped mpv.exe against real samples (exit 0 and a
-// live AO line), and they travel the same localhost Range proxy + SW ?ext=
-// lane as the original seven. That is decoder evidence, not an end-to-end run.
-//
-// .ape/.wv/.tak/.dsf/.dff stay absent as an EVIDENCE GAP — no sample has been
-// played end to end yet — NOT because of a Chromium decoder limit.
-//
-// The extension is a container, never a codec guarantee: ALAC inside .m4a was
-// separately confirmed decodable, so .m4a is not AAC-only.
+// The verification is PER FILE / PER CODEC, not a guarantee about the
+// container. The traps this list does NOT promise to handle:
+//   .wma  — WMAv1 / WMAv2 / WMA Pro / WMA Lossless are different codecs in one
+//           extension; the shipped sample does not prove the other variants.
+//   .m4a/.m4b — an MP4 container, not a codec: AAC and ALAC were both confirmed
+//           decodable, neither is implied by the extension.
+//   .ogg/.oga — Vorbis or Opus inside Ogg; the container says nothing about
+//           which one, or about chained/multiplexed streams.
+//   .aif/.aiff — the same AIFF container; PCM is typical, others are possible.
+//   .wav  — a RIFF container with many codec tags (PCM, ADPCM, float, ...).
+//   .dsf/.dff — DSD; decodability also depends on output format handling, not
+//           only on the demuxer/decoder.
+// A malformed file can still fail for an ENABLED extension. That is a file
+// defect, not a format limit and not something this list can express: one real
+// DSDIFF (.dff) sample is mispacked — its PROP/SND chunks declare FS with
+// length 4 instead of 8, so the sample rate reads 0 and CHNL yields a
+// nonsensical channel count. Shipped mpv and a standalone ffprobe 9.0.2 both
+// reject it identically (dsd_msbf: Invalid sample rate: 0 → Failed to open
+// codec), while a second .dff plays fine. Never widen or narrow this list from
+// a single failing file.
 export const PLAYABLE_AUDIO_EXTENSIONS = [
   ".mp3",
   ".flac",
@@ -27,6 +43,11 @@ export const PLAYABLE_AUDIO_EXTENSIONS = [
   ".aiff",
   ".oga",
   ".m4b",
+  ".ape",
+  ".wv",
+  ".tak",
+  ".dsf",
+  ".dff",
 ] as const;
 
 const TRASHED = "trashed=false";

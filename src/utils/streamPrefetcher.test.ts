@@ -32,8 +32,9 @@ describe("streamPrefetcher", () => {
     expect(getPrefetchedStreamUrl("a")).toBe("/drive-stream/a");
   });
 
-  it("caches plain URLs for tracks whose container is still unverified", () => {
-    prefetchVisibleTracks([{ id: "a", originalName: "song.ape" }]);
+  it("caches plain URLs for a name outside the playable allowlist", () => {
+    // `.wvx`/`.tak2` are look-alikes, not extensions in the allowlist.
+    prefetchVisibleTracks([{ id: "a", originalName: "song.wvx" }]);
     expect(getPrefetchedStreamUrl("a")).toBe("/drive-stream/a");
   });
 
@@ -94,9 +95,9 @@ describe("buildStreamUrl", () => {
     expect(buildStreamUrl("abc")).toBe("/drive-stream/abc");
   });
 
-  it("omits the param for a container that is still unverified", () => {
-    expect(buildStreamUrl("abc", "song.ape")).toBe("/drive-stream/abc");
-    expect(buildStreamUrl("abc", "song.tak")).toBe("/drive-stream/abc");
+  it("omits the param for a name outside the playable allowlist", () => {
+    expect(buildStreamUrl("abc", "song.wvx")).toBe("/drive-stream/abc");
+    expect(buildStreamUrl("abc", "song.tak2")).toBe("/drive-stream/abc");
   });
 
   it("omits the param for a name without an extension", () => {
@@ -117,5 +118,23 @@ describe("buildStreamUrl", () => {
     );
     expect(buildStreamUrl("abc", "song.oga")).toBe("/drive-stream/abc?ext=oga");
     expect(buildStreamUrl("abc", "song.m4b")).toBe("/drive-stream/abc?ext=m4b");
+  });
+
+  // The APE/WavPack/TAK/DSD containers must travel the ?ext= lane too,
+  // otherwise the SW would keep serving them as application/octet-stream.
+  it("appends ?ext= for the ape/wv/tak/dsf/dff containers", () => {
+    expect(buildStreamUrl("abc", "sh3.ape")).toBe("/drive-stream/abc?ext=ape");
+    expect(buildStreamUrl("abc", "tone.wv")).toBe("/drive-stream/abc?ext=wv");
+    expect(buildStreamUrl("abc", "lostchord.tak")).toBe(
+      "/drive-stream/abc?ext=tak",
+    );
+    expect(buildStreamUrl("abc", "tone.dsf")).toBe("/drive-stream/abc?ext=dsf");
+    expect(buildStreamUrl("abc", "tone.dff")).toBe("/drive-stream/abc?ext=dff");
+  });
+
+  it("appends ?ext= for the ape/wv/tak/dsf/dff containers in mixed case", () => {
+    expect(buildStreamUrl("abc", "SH3.APE")).toBe("/drive-stream/abc?ext=ape");
+    expect(buildStreamUrl("abc", "Tone.DFF")).toBe("/drive-stream/abc?ext=dff");
+    expect(buildStreamUrl("abc", "Tone.WV")).toBe("/drive-stream/abc?ext=wv");
   });
 });

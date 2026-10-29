@@ -223,9 +223,10 @@ describe("collectFolderTracks", () => {
   });
 
   it("skips entries whose extension is not playable", async () => {
+    // `.wvx` is a WavPack look-alike that is NOT in the allowlist.
     entriesByFolder({
       root: [
-        audio({ id: "w1", name: "track.ape", mimeType: "audio/x-ape" }),
+        audio({ id: "w1", name: "track.wvx", mimeType: "audio/x-wavpack" }),
         audio({ id: "m1", name: "ok.mp3" }),
       ],
     });

@@ -59,6 +59,23 @@ describe("sw.js EXTENSION_TO_MIME guard", () => {
     }
   });
 
+  // APE/WavPack/TAK/DSD extensions: the SW map must carry exactly these MIME
+  // values or the override is unreachable.
+  it("resolves the MIME of the APE/WavPack/TAK/DSD extensions", () => {
+    const added: ReadonlyArray<[keyof typeof AUDIO_EXTENSION_TO_MIME, string]> =
+      [
+        ["ape", "audio/x-ape"],
+        ["wv", "audio/x-wavpack"],
+        ["tak", "audio/x-tak"],
+        ["dsf", "audio/x-dsf"],
+        ["dff", "audio/x-dff"],
+      ];
+    for (const [ext, mime] of added) {
+      expect(SW_EXTENSION_TO_MIME[ext], ext).toBe(mime);
+      expect(AUDIO_EXTENSION_TO_MIME[ext], ext).toBe(mime);
+    }
+  });
+
   it("the canonical TS map is itself consistent with PLAYABLE_AUDIO_EXTENSIONS", () => {
     expect(Object.keys(AUDIO_EXTENSION_TO_MIME).sort()).toEqual(
       canonicalKeys(),
@@ -202,11 +219,38 @@ describe("sw.js Content-Type override behavior", () => {
     expect(m4b.headers.get("Content-Type")).toBe("audio/mp4");
   });
 
+  it("?ext= overrides every APE/WavPack/TAK/DSD extension end to end", async () => {
+    const expected: ReadonlyArray<[string, string]> = [
+      ["ape", "audio/x-ape"],
+      ["wv", "audio/x-wavpack"],
+      ["tak", "audio/x-tak"],
+      ["dsf", "audio/x-dsf"],
+      ["dff", "audio/x-dff"],
+    ];
+    for (const [ext, mime] of expected) {
+      const response = await fetchViaSw(`?ext=${ext}`);
+      expect(response.status, ext).toBe(206);
+      expect(response.headers.get("Content-Type"), ext).toBe(mime);
+      // Range/seek headers survive the override for the new extensions too.
+      expect(response.headers.get("Content-Range"), ext).toBe("bytes 0-10/100");
+      expect(await response.text(), ext).toBe("audio-bytes");
+    }
+  });
+
   // EXT_PATTERN = /^[a-z0-9]{2,5}$/ must accept every new extension so the
   // override is reachable at all (aiff=4, m4b=3, oga=3, wma=3, aif=3).
   it("EXT_PATTERN accepts every new extension", () => {
     const pattern = /^[a-z0-9]{2,5}$/;
     for (const ext of ["wma", "aif", "aiff", "oga", "m4b"]) {
+      expect(pattern.test(ext), ext).toBe(true);
+    }
+  });
+
+  // APE/WavPack/TAK/DSD extensions: all lowercase alphanumeric and 2-5 chars,
+  // so the unchanged regex accepts them (ape=3, wv=2, tak=3, dsf=3, dff=3).
+  it("EXT_PATTERN accepts every APE/WavPack/TAK/DSD extension", () => {
+    const pattern = /^[a-z0-9]{2,5}$/;
+    for (const ext of ["ape", "wv", "tak", "dsf", "dff"]) {
       expect(pattern.test(ext), ext).toBe(true);
     }
   });

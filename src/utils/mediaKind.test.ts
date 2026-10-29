@@ -100,6 +100,19 @@ describe("classifyMediaKind", () => {
     }
   });
 
+  // .ape/.wv/.tak/.dsf/.dff: all audio, never video.
+  it("classifies ape/wv/tak/dsf/dff as audio and never video", () => {
+    for (const ext of [".ape", ".wv", ".tak", ".dsf", ".dff"]) {
+      expect(PLAYABLE_AUDIO_EXTENSIONS, ext).toContain(ext);
+      expect(PLAYABLE_VIDEO_EXTENSIONS, ext).not.toContain(ext);
+      expect(hasAudioExtension(`Song${ext}`), ext).toBe(true);
+      expect(hasVideoExtension(`Song${ext}`), ext).toBe(false);
+      expect(classifyMediaKind(`Song${ext}`), ext).toBe("audio");
+      expect(classifyMediaKind(`SONG${ext.toUpperCase()}`), ext).toBe("audio");
+      expect(isPlayableMediaFile(`Song${ext}`), ext).toBe(true);
+    }
+  });
+
   it("keeps .m4a audio while .m4v stays video (mp4 family split)", () => {
     expect(classifyMediaKind("Song.m4a")).toBe("audio");
     expect(classifyMediaKind("Song.m4b")).toBe("audio");
@@ -121,7 +134,12 @@ describe("classifyMediaKind", () => {
     // opening a video window for something that is not a video.
     expect(classifyMediaKind("notes.txt")).toBe("audio");
     expect(classifyMediaKind("archive.zip")).toBe("audio");
+    // `.ape` is temporarily playable; `.ape2` is not, and `.ape` itself must
+    // still be audio (never video) even though it now enters the library.
     expect(classifyMediaKind("Track.ape")).toBe("audio");
+    expect(hasAudioExtension("Track.ape")).toBe(true);
+    expect(classifyMediaKind("Track.ape2")).toBe("audio");
+    expect(hasAudioExtension("Track.ape2")).toBe(false);
     expect(classifyMediaKind("noextension")).toBe("audio");
     expect(classifyMediaKind("")).toBe("audio");
     expect(classifyMediaKind("folder")).toBe("audio");
@@ -175,7 +193,11 @@ describe("isPlayableMediaFile", () => {
     for (const name of [
       "notes.txt",
       "archive.zip",
-      "Track.ape",
+      // `.ape` is now (temporarily) playable, so the negative fixture moved to
+      // a name that is genuinely outside both allowlists: `.tak2` merely looks
+      // like `.tak`, and `.wvx` like `.wv`.
+      "Track.tak2",
+      "Track.wvx",
       "folder",
       "",
     ]) {
