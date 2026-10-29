@@ -6,6 +6,7 @@ import { driveFetch, FOLDER_MIME } from "../utils/driveApi";
 import type { DriveFileItem, DriveFilesListResponse } from "../utils/driveApi";
 import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
 import { getFolderMediaQuery } from "../utils/audioQuery";
+import { isPlayableMediaFile } from "../utils/mediaKind";
 import { useDriveStore } from "../store/driveStore";
 import { captureError } from "../utils/errorLog";
 import {
@@ -124,11 +125,25 @@ export function useDriveOnDemandFetch({
             break;
           }
           const pageFiles = data.files;
+          // Prune input is the UNFILTERED page: the reconcile must consider
+          // every id Drive returned, including rows the playable-name gate
+          // below drops. Otherwise a dropped row would be pruned on listing N
+          // and re-fetched on listing N+1, forever.
           for (const f of pageFiles) seenIds.add(f.id);
+
+          // The listing query matches `name contains '.ext'` (substring), so a
+          // page can carry names that are not playable files (App.tsx for a
+          // future '.ts' scope, photo.avif for '.avi'). Folders always pass;
+          // media rows must pass the same endsWith gate every other ingest
+          // path applies, so a substring leak never becomes a browse row.
+          const playableFiles = pageFiles.filter(
+            (f: DriveFileItem) =>
+              f.mimeType === FOLDER_MIME || isPlayableMediaFile(f.name),
+          );
 
           // Write each page to Dexie immediately instead of accumulating all
           // pages in memory (mirrors proSync.worker.ts full-sync pattern).
-          if (stillMounted() && pageFiles.length > 0) {
+          if (stillMounted() && playableFiles.length > 0) {
             // Canonical-parent rule: parentId is derived INSIDE upsertFileRows
             // from parents[0] of this very response. When Drive omits parents,
             // the listing query ('<folderId>' in parents) itself proves every
@@ -139,7 +154,7 @@ export function useDriveOnDemandFetch({
             // because UpsertableFileRow declares it as a plain optional prop.
             // Schema v10: rows carry the owning account — the helper overwrites
             // the composed userEmail with its own ownerEmail argument.
-            const rowsToUpsert: UpsertableFileRow[] = pageFiles.map(
+            const rowsToUpsert: UpsertableFileRow[] = playableFiles.map(
               (f: DriveFileItem) => ({
                 id: f.id,
                 name: f.name,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hasVideoExtension } from "./audioQuery";
+import { hasVideoExtension, isVideoNameNoise } from "./audioQuery";
 import {
   classifyMediaKind,
   isPlayableMediaFile,
@@ -154,6 +154,41 @@ describe("isPlayableMediaFile", () => {
       "",
     ]) {
       expect(isPlayableMediaFile(name), name).toBe(false);
+    }
+  });
+
+  // The library query matches `name contains '.ext'` (substring), so Drive can
+  // return a name that never ends with a playable extension. These must stay
+  // out of the mirror even though the query surfaced them.
+  it("rejects Drive-substring false positives (leaked rows)", () => {
+    for (const name of [
+      "photo.avif",
+      "App.tsx",
+      "index.d.ts",
+      "bundle.ts.map",
+      "rec.3gpp",
+      "rec.3g2",
+      "render.mpeg4",
+      "Holiday.movie",
+      "Holiday.MOVIE",
+    ]) {
+      expect(isPlayableMediaFile(name), name).toBe(false);
+    }
+  });
+
+  it("does not over-narrow: legit names that merely contain a protected token pass", () => {
+    expect(isPlayableMediaFile("documentary.about.movies.mkv")).toBe(true);
+    expect(isPlayableMediaFile("movie.MKV")).toBe(true);
+    // Today '.ts' is not in the allowlist, so a real .ts sample stays out for
+    // the allowlist reason — not because of the exclusion clause.
+    expect(isPlayableMediaFile("clip.ts")).toBe(false);
+    expect(hasVideoExtension("clip.ts")).toBe(false);
+  });
+
+  it("a rejected noise name is never classified video", () => {
+    for (const name of ["App.tsx", "index.d.ts", "photo.avif"]) {
+      expect(classifyMediaKind(name)).toBe("audio");
+      expect(isVideoNameNoise(name), name).toBe(true);
     }
   });
 });

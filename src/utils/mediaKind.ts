@@ -1,4 +1,5 @@
 import { hasAudioExtension, hasVideoExtension } from "./audioQuery";
+import { isVideoNameNoise } from "./audioQuery";
 import { PLAYABLE_VIDEO_EXTENSIONS } from "./audioQuery";
 
 /** Literal media-kind values. Spelled as literals, not derived, so a consumer
@@ -41,7 +42,14 @@ export function classifyMediaKind(name: string): MediaKind {
  * True when `name` is a playable item of EITHER kind. This is the predicate
  * the sync/browse/queue filters want: "may this file enter the library at
  * all", not "which kind is it".
+ *
+ * The video half also vetoes Drive-substring noise (`isVideoNameNoise`): the
+ * library query matches `name contains '.ext'`, so a row can arrive whose name
+ * does NOT end with a playable extension (`index.d.ts`, `photo.avif`). This
+ * gate is what keeps such a leaked row out of the mirror; the audio half is
+ * untouched, so audio membership is exactly what it always was.
  */
 export function isPlayableMediaFile(name: string): boolean {
-  return hasAudioExtension(name) || hasVideoExtension(name);
+  if (hasAudioExtension(name)) return true;
+  return hasVideoExtension(name) && !isVideoNameNoise(name);
 }

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  DRIVE_SUBSTRING_FALSE_POSITIVES,
   PLAYABLE_AUDIO_EXTENSIONS,
+  buildNameOnlyClause,
   getAudioQuery,
   getFolderAudioQuery,
   getMediaQuery,
@@ -11,6 +13,7 @@ import {
   hasVideoExtension,
   isAudioFile,
   isVideoFile,
+  isVideoNameNoise,
 } from "./audioQuery";
 
 // Query contract (Task 1 — hide-unplayable-formats): only formats Chromium /
@@ -271,6 +274,121 @@ describe("hasVideoExtension / isVideoFile", () => {
       expect(getFolderVideoQuery("abc123")).not.toContain(ext);
       expect(getMediaQuery()).not.toContain(ext);
       expect(getFolderMediaQuery("abc123")).not.toContain(ext);
+    }
+  });
+});
+
+// --- Drive substring collision contract (round 1: hardening only) ---------------
+// Enabling an extension is NOT the same predicate as the Drive query that
+// discovers it: the query is `name contains '.ext'` (substring, anywhere), the
+// runtime check is String.endsWith. DRIVE_SUBSTRING_FALSE_POSITIVES is the
+// single table of the names that only matched by substring; the same table
+// feeds the top-level query clause and the runtime veto.
+describe("DRIVE_SUBSTRING_FALSE_POSITIVES", () => {
+  it("covers the five known collisions and nothing else", () => {
+    expect(Object.keys(DRIVE_SUBSTRING_FALSE_POSITIVES).sort()).toEqual([
+      ".3gp",
+      ".avi",
+      ".mov",
+      ".mpeg",
+      ".ts",
+    ]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".avi"]).toEqual([".avif"]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".ts"]).toEqual([
+      ".tsx",
+      ".d.ts",
+      ".ts.map",
+    ]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".3gp"]).toEqual([".3gpp", ".3g2"]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".mpeg"]).toEqual([".mpeg4"]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".mov"]).toEqual([".movie"]);
+  });
+
+  it("never lists a bare '.ts' exclusion (a real clip.ts must still match)", () => {
+    for (const excluded of DRIVE_SUBSTRING_FALSE_POSITIVES[".ts"] ?? []) {
+      expect(excluded).not.toBe(".ts");
+    }
+  });
+});
+
+describe("buildNameOnlyClause (top-level video clause)", () => {
+  it("emits the narrow '.ts' exclusion clause, never a bare 'not ... .ts'", () => {
+    const clause = buildNameOnlyClause(".ts", DRIVE_SUBSTRING_FALSE_POSITIVES);
+    expect(clause).toBe(
+      "(name contains '.ts' and not name contains '.tsx' and not name contains '.d.ts' and not name contains '.ts.map')",
+    );
+    expect(clause).not.toMatch(/not name contains '\.ts'\)/);
+  });
+
+  it("emits the '.avi' exclusion clause", () => {
+    expect(buildNameOnlyClause(".avi", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "(name contains '.avi' and not name contains '.avif')",
+    );
+  });
+
+  it("emits the remaining exclusion clauses", () => {
+    expect(buildNameOnlyClause(".3gp", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "(name contains '.3gp' and not name contains '.3gpp' and not name contains '.3g2')",
+    );
+    expect(buildNameOnlyClause(".mpeg", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "(name contains '.mpeg' and not name contains '.mpeg4')",
+    );
+    expect(buildNameOnlyClause(".mov", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "(name contains '.mov' and not name contains '.movie')",
+    );
+  });
+
+  it("leaves a collision-free extension as the plain name clause", () => {
+    expect(buildNameOnlyClause(".mkv", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "name contains '.mkv'",
+    );
+    expect(buildNameOnlyClause(".mp4", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "name contains '.mp4'",
+    );
+    expect(buildNameOnlyClause(".flac", undefined)).toBe(
+      "name contains '.flac'",
+    );
+  });
+
+  it("today's enabled allowlist emits no exclusion clause (unchanged queries)", () => {
+    for (const q of [
+      getVideoQuery(),
+      getMediaQuery(),
+      getFolderVideoQuery("abc123"),
+      getFolderMediaQuery("abc123"),
+    ]) {
+      expect(q).not.toContain("not name contains");
+    }
+  });
+});
+
+describe("isVideoNameNoise", () => {
+  it("rejects the Drive-substring false positives, case-insensitively", () => {
+    expect(isVideoNameNoise("photo.avif")).toBe(true);
+    expect(isVideoNameNoise("photo.AVIF")).toBe(true);
+    expect(isVideoNameNoise("App.tsx")).toBe(true);
+    expect(isVideoNameNoise("index.d.ts")).toBe(true);
+    expect(isVideoNameNoise("bundle.ts.map")).toBe(true);
+    expect(isVideoNameNoise("rec.3gpp")).toBe(true);
+    expect(isVideoNameNoise("rec.3g2")).toBe(true);
+    expect(isVideoNameNoise("render.mpeg4")).toBe(true);
+    expect(isVideoNameNoise("Holiday.movie")).toBe(true);
+    expect(isVideoNameNoise("holiday.MOVIE")).toBe(true);
+  });
+
+  it("keeps real playable names — including a legitimate .ts sample", () => {
+    for (const name of [
+      "movie.mkv",
+      "movie.MKV",
+      "movie.mp4",
+      "clip.ts",
+      "clip.TS",
+      "documentary.about.movies.mkv",
+      "song.mp3",
+      "notes.txt",
+      "",
+    ]) {
+      expect(isVideoNameNoise(name), name).toBe(false);
     }
   });
 });

@@ -26,10 +26,30 @@ const OCTET_STREAM_MIME = "application/octet-stream";
 // out of the library until it is verified on the same transport.
 export const PLAYABLE_VIDEO_EXTENSIONS = [".mkv", ".mp4"] as const;
 
+// Drive's `q` is `name contains '.ext'` — a SUBSTRING match anywhere in the
+// name, case-insensitively — while the runtime predicate is String.endsWith.
+// For the video containers above the two are not equivalent predicates: a
+// longer name that merely contains the extension (photo.avif for '.avi',
+// App.tsx for '.ts', rec.3gpp for '.3gp') would be listed as a playable video
+// and then classified as audio. This table is the single source of truth for
+// those collisions: the top-level video query emits one `not name contains`
+// clause per entry and `isVideoNameNoise` mirrors the same data for ingest.
+export const DRIVE_SUBSTRING_FALSE_POSITIVES: Readonly<
+  Record<string, readonly string[]>
+> = {
+  ".avi": [".avif"],
+  ".ts": [".tsx", ".d.ts", ".ts.map"],
+  ".3gp": [".3gpp", ".3g2"],
+  ".mpeg": [".mpeg4"],
+  ".mov": [".movie"],
+};
+
 /** The public part of a media-kind decision: which extensions, which mime scope. */
 interface MediaScope {
   readonly extensions: readonly string[];
   readonly mimePrefix: string;
+  readonly substringFalsePositives?:
+    Readonly<Record<string, readonly string[]>> | undefined;
 }
 
 const AUDIO_SCOPE: MediaScope = {
@@ -37,10 +57,32 @@ const AUDIO_SCOPE: MediaScope = {
   mimePrefix: "audio/",
 };
 
+// Only the video scope carries substring hazards: every audio extension is
+// matched by the same substring rule, but no audio extension is a prefix of a
+// non-audio name in practice, and the audio clause is byte-frozen by tests.
 const VIDEO_SCOPE: MediaScope = {
   extensions: PLAYABLE_VIDEO_EXTENSIONS,
   mimePrefix: "video/",
+  substringFalsePositives: DRIVE_SUBSTRING_FALSE_POSITIVES,
 };
+
+// Top-level (mime-agnostic) name clause for one extension, with the known
+// substring false positives of that extension excluded. Exported so the
+// exclusion rendering is testable for an extension that is not enabled yet:
+// the emitted shape must stay `(name contains '.ts' and not name contains
+// '.tsx' and ...)`, never a bare `not name contains '.ts'` for the extension
+// itself (a real clip.ts must still match).
+export function buildNameOnlyClause(
+  ext: string,
+  falsePositives: Readonly<Record<string, readonly string[]>> | undefined,
+): string {
+  const excluded = falsePositives?.[ext] ?? [];
+  if (excluded.length === 0) return `name contains '${ext}'`;
+  const exclusions = excluded
+    .map((suffix) => ` and not name contains '${suffix}'`)
+    .join("");
+  return `(name contains '${ext}'${exclusions})`;
+}
 
 function buildExtCondition(
   scope: MediaScope,
@@ -50,7 +92,7 @@ function buildExtCondition(
     .map((ext) =>
       octetStreamVariant
         ? `(name contains '${ext}' and (mimeType contains '${scope.mimePrefix}' or mimeType='${OCTET_STREAM_MIME}'))`
-        : `name contains '${ext}'`,
+        : buildNameOnlyClause(ext, scope.substringFalsePositives),
     )
     .join(" or ");
 }
@@ -82,6 +124,19 @@ export function hasAudioExtension(name: string): boolean {
 export function hasVideoExtension(name: string): boolean {
   const lower = name.toLowerCase();
   return PLAYABLE_VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+// Runtime mirror of DRIVE_SUBSTRING_FALSE_POSITIVES: true when the name ends
+// with a suffix that only matched a video extension through Drive's substring
+// `contains` (index.d.ts for '.ts', photo.avif for '.avi'). Case-insensitive
+// like hasVideoExtension. This is a name-level veto only — String.endsWith
+// stays the classification authority, so a name is never promoted to video by
+// this module.
+export function isVideoNameNoise(name: string): boolean {
+  const lower = name.toLowerCase();
+  return Object.values(DRIVE_SUBSTRING_FALSE_POSITIVES).some((suffixes) =>
+    suffixes.some((suffix) => lower.endsWith(suffix)),
+  );
 }
 
 // Playable-extension-only, exactly like isAudioFile: a file is a video iff its

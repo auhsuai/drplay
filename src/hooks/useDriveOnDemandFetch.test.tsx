@@ -133,6 +133,80 @@ describe("useDriveOnDemandFetch", () => {
     ).toBe("folder-9");
   });
 
+  it("root: gates a Drive-substring leak out of the mirror but still counts its id for the prune", async () => {
+    // "Movie.mkv.bak" ends with neither a playable extension nor a known
+    // video-noise suffix, so it is simply not playable. "App.tsx" is the
+    // '.ts' substring hazard. Both are returned by the query and must not be
+    // upserted; the folder and the real media row must be.
+    await db.files.put(cachedRow("leak-already-cached", false));
+    const page = {
+      ok: true,
+      json: () => ({
+        files: [
+          {
+            id: "leak-mkv-bak",
+            name: "Movie.mkv.bak",
+            mimeType: "application/octet-stream",
+            size: "9",
+          },
+          {
+            id: "leak-tsx",
+            name: "App.tsx",
+            mimeType: "application/octet-stream",
+          },
+          {
+            id: "leak-already-cached",
+            name: "App.tsx",
+            mimeType: "application/octet-stream",
+          },
+          {
+            id: "legit-video",
+            name: "Movie.mkv",
+            mimeType: "video/x-matroska",
+            size: "10",
+          },
+          { id: "api-folder", name: "API Folder", mimeType: FOLDER_MIME },
+        ],
+      }),
+    } as unknown as Response;
+    mockedFetch.mockResolvedValue(page);
+
+    renderHook(() => {
+      useDriveOnDemandFetch({ currentFolderId: ROOT_FOLDER_ID, token: "tok" });
+    });
+
+    await waitFor(async () => {
+      expect(
+        await db.files.get([DEFAULT_USER_EMAIL, "legit-video"]),
+      ).toBeDefined();
+      expect(
+        await db.files.get([DEFAULT_USER_EMAIL, "api-folder"]),
+      ).toBeDefined();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Gate: leaked names never become rows.
+    expect(
+      await db.files.get([DEFAULT_USER_EMAIL, "leak-mkv-bak"]),
+    ).toBeUndefined();
+    expect(
+      await db.files.get([DEFAULT_USER_EMAIL, "leak-tsx"]),
+    ).toBeUndefined();
+
+    // Prune got the UNFILTERED id set: a previously cached leak row is still
+    // "seen by Drive" and therefore not deleted (no delete-and-refetch churn).
+    expect(
+      await db.files.get([DEFAULT_USER_EMAIL, "leak-already-cached"]),
+    ).toBeDefined();
+    expect(mockedCaptureError).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "pruned-stale-root-rows",
+        ) as unknown as string,
+      }),
+    );
+  });
+
   it("root: prunes poisoned cached root rows after a complete listing", async () => {
     await db.files.bulkPut([
       cachedRow("poison-folder", true),
