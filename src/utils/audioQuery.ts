@@ -20,11 +20,41 @@ export const PLAYABLE_AUDIO_EXTENSIONS = [
 const TRASHED = "trashed=false";
 const OCTET_STREAM_MIME = "application/octet-stream";
 
-// Video containers mpv decodes from the SAME localhost Range proxy as audio,
-// verified end-to-end on the shipped sidecar (probe.mkv / probe.mp4 open and
-// seek over HTTP 206). Deliberately exactly two: every other container stays
-// out of the library until it is verified on the same transport.
-export const PLAYABLE_VIDEO_EXTENSIONS = [".mkv", ".mp4"] as const;
+// Video containers mpv decodes from the SAME localhost Range proxy as audio.
+// Every extension here was verified END TO END against a real Google Drive
+// sample: discovered by the Drive query, classified as video, fetched through
+// the real localhost Range proxy (HTTP 206) and rendered + played by the
+// shipped mpv engine. .mkv/.mp4 additionally have in-repo transport evidence
+// (probe.mkv / probe-faststart.mp4 / probe-frag.mp4).
+//
+// The verification is PER FILE / PER CODEC, not a guarantee about the
+// container: a passing extension proves that one sample's container + codec
+// combination works on this transport, NOT that the container is universally
+// decodable (libavformat demux support is not decoder support — e.g. a VC-1
+// .wmv may demux and still fail to decode). Never widen this list from a
+// container name alone; a new sample needs its own end-to-end run.
+//
+// Widening this list also widens a Drive `name contains` substring query (see
+// DRIVE_SUBSTRING_FALSE_POSITIVES below) — the collision table must be kept in
+// sync with every extension enabled here, or `.avif` photos / `.tsx` sources
+// start entering the library as playable rows.
+export const PLAYABLE_VIDEO_EXTENSIONS = [
+  ".mkv",
+  ".mp4",
+  ".webm",
+  ".m4v",
+  ".mov",
+  ".avi",
+  ".wmv",
+  ".flv",
+  ".mpeg",
+  ".mpg",
+  ".ogv",
+  ".3gp",
+  ".vob",
+  ".asf",
+  ".ts",
+] as const;
 
 // Drive's `q` is `name contains '.ext'` — a SUBSTRING match anywhere in the
 // name, case-insensitively — while the runtime predicate is String.endsWith.
@@ -34,14 +64,24 @@ export const PLAYABLE_VIDEO_EXTENSIONS = [".mkv", ".mp4"] as const;
 // and then classified as audio. This table is the single source of truth for
 // those collisions: the top-level video query emits one `not name contains`
 // clause per entry and `isVideoNameNoise` mirrors the same data for ingest.
+//
+// Every entry names a DISTINCT suffix — never the extension itself (a real
+// clip.ts must still match) — and never the generic `*.ext.bak/.part/.tmp`
+// family (those are not videos and already fail the endsWith classification).
+// A suffix must either ENCLOSE the extension (longer, e.g. '.avif' for '.avi')
+// or share no trailing run with it ('3g2' vs '3gp'). The latter case is inert:
+// it excludes nothing the extension clause had matched.
 export const DRIVE_SUBSTRING_FALSE_POSITIVES: Readonly<
   Record<string, readonly string[]>
 > = {
   ".avi": [".avif"],
-  ".ts": [".tsx", ".d.ts", ".ts.map"],
+  ".ts": [".tsx", ".d.ts", ".ts.map", ".tsv"],
   ".3gp": [".3gpp", ".3g2"],
   ".mpeg": [".mpeg4"],
+  ".mpg": [".mpga"],
   ".mov": [".movie"],
+  ".vob": [".vobs"],
+  ".webm": [".webmanifest"],
 };
 
 /** The public part of a media-kind decision: which extensions, which mime scope. */

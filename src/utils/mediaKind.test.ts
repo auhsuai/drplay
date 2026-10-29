@@ -8,32 +8,32 @@ import {
   PLAYABLE_VIDEO_EXTENSIONS,
 } from "./mediaKind";
 
-// The video allowlist is deliberately tiny in this phase: exactly the two
-// containers the shipped mpv sidecar was verified to open over the existing
-// localhost Range proxy (probe.mkv + probe.mp4 in the investigation report).
-// Everything else — including other real video containers — must stay OUT
-// until it is verified on the same transport, so the list is asserted exactly
-// and never widened by a "close enough" extension.
-const ACCEPTED_VIDEO_EXTENSIONS = [".mkv", ".mp4"];
-
-// Containers/codecs mpv can open that this phase has NOT verified over the
-// proxy. Each one must classify as audio (the documented default), i.e. it
-// must not enter the library as video.
-const NOT_YET_VIDEO_EXTENSIONS = [
-  ".avi",
-  ".mov",
+// Mirror of the production allowlist: exactly the containers verified
+// end-to-end against real Google Drive samples through the localhost Range
+// proxy and the shipped mpv engine. .mkv/.mp4 stay first because the
+// order-sensitive toEqual below freezes the order — append, never reorder.
+const ACCEPTED_VIDEO_EXTENSIONS = [
+  ".mkv",
+  ".mp4",
   ".webm",
+  ".m4v",
+  ".mov",
+  ".avi",
   ".wmv",
   ".flv",
-  ".m4v",
   ".mpeg",
   ".mpg",
-  ".3gp",
-  ".ts",
   ".ogv",
+  ".3gp",
   ".vob",
-  ".divx",
+  ".asf",
+  ".ts",
 ];
+
+// Containers mpv may well demux that this app has NOT verified end-to-end on
+// the proxy. Each one must classify as audio (the documented default), i.e. it
+// must not enter the library as video.
+const NOT_YET_VIDEO_EXTENSIONS = [".divx", ".xvid", ".m2ts", ".mts", ".f4v"];
 
 // The constants are spelled as literals in mediaKind.ts. Asserting the literal
 // values here (not just `toBe(MEDIA_KIND_VIDEO)`) is deliberate: a missing or
@@ -48,7 +48,7 @@ describe("media kind constants", () => {
 });
 
 describe("PLAYABLE_VIDEO_EXTENSIONS", () => {
-  it("is exactly the two verified containers, in order", () => {
+  it("is exactly the verified containers, in order", () => {
     expect([...PLAYABLE_VIDEO_EXTENSIONS]).toEqual(ACCEPTED_VIDEO_EXTENSIONS);
   });
 
@@ -68,11 +68,14 @@ describe("PLAYABLE_VIDEO_EXTENSIONS", () => {
 });
 
 describe("classifyMediaKind", () => {
-  it("classifies the two video containers as video", () => {
+  it("classifies every enabled video container as video", () => {
     // Compared against the literal "video", not the constant: a broken
     // export would then fail loudly instead of passing on undefined===undefined.
     expect(classifyMediaKind("Movie.mkv")).toBe("video");
     expect(classifyMediaKind("Movie.mp4")).toBe("video");
+    for (const ext of PLAYABLE_VIDEO_EXTENSIONS) {
+      expect(classifyMediaKind(`Movie${ext}`), ext).toBe("video");
+    }
   });
 
   it("classifies every playable audio extension as audio", () => {
@@ -111,7 +114,7 @@ describe("classifyMediaKind", () => {
     expect(classifyMediaKind("archive.mp4x")).toBe("audio");
   });
 
-  it("accepts NO video extension beyond the two verified ones", () => {
+  it("accepts NO video extension beyond the verified list", () => {
     for (const ext of NOT_YET_VIDEO_EXTENSIONS) {
       expect(hasVideoExtension(`Movie${ext}`)).toBe(false);
       expect(classifyMediaKind(`Movie${ext}`)).toBe("audio");
@@ -120,11 +123,15 @@ describe("classifyMediaKind", () => {
 });
 
 describe("hasVideoExtension", () => {
-  it("recognizes exactly the verified video containers, case-insensitively", () => {
+  it("recognizes every enabled video container, case-insensitively", () => {
     expect(hasVideoExtension("Movie.mkv")).toBe(true);
     expect(hasVideoExtension("Movie.MKV")).toBe(true);
     expect(hasVideoExtension("Movie.mp4")).toBe(true);
     expect(hasVideoExtension("Movie.MP4")).toBe(true);
+    for (const ext of PLAYABLE_VIDEO_EXTENSIONS) {
+      expect(hasVideoExtension(`Movie${ext}`), ext).toBe(true);
+      expect(hasVideoExtension(`Movie${ext.toUpperCase()}`), ext).toBe(true);
+    }
   });
 
   it("rejects audio and unknown names", () => {
@@ -171,6 +178,7 @@ describe("isPlayableMediaFile", () => {
       "render.mpeg4",
       "Holiday.movie",
       "Holiday.MOVIE",
+      "VIDEO_TS.vobs",
     ]) {
       expect(isPlayableMediaFile(name), name).toBe(false);
     }
@@ -179,16 +187,50 @@ describe("isPlayableMediaFile", () => {
   it("does not over-narrow: legit names that merely contain a protected token pass", () => {
     expect(isPlayableMediaFile("documentary.about.movies.mkv")).toBe(true);
     expect(isPlayableMediaFile("movie.MKV")).toBe(true);
-    // Today '.ts' is not in the allowlist, so a real .ts sample stays out for
-    // the allowlist reason — not because of the exclusion clause.
-    expect(isPlayableMediaFile("clip.ts")).toBe(false);
-    expect(hasVideoExtension("clip.ts")).toBe(false);
+    // '.ts' is enabled, so a real .ts sample must pass: the exclusion clause is
+    // narrowed to .tsx/.d.ts/.ts.map/.tsv, never '.ts' itself.
+    expect(isPlayableMediaFile("clip.ts")).toBe(true);
+    expect(hasVideoExtension("clip.ts")).toBe(true);
   });
 
-  it("a rejected noise name is never classified video", () => {
-    for (const name of ["App.tsx", "index.d.ts", "photo.avif"]) {
-      expect(classifyMediaKind(name)).toBe("audio");
+  it("accepts every enabled container as a playable media file", () => {
+    for (const ext of PLAYABLE_VIDEO_EXTENSIONS) {
+      expect(isPlayableMediaFile(`Movie${ext}`), ext).toBe(true);
+    }
+  });
+
+  // '.ogv' (video/ogg) vs '.ogg' (audio/ogg): distinct suffixes in both
+  // directions — the one asymmetry the container audit called clean. Enabling
+  // the video container must not swallow the audio one, and vice versa.
+  it("keeps '.ogv' video and '.ogg' audio apart", () => {
+    expect(hasVideoExtension("movie.ogv")).toBe(true);
+    expect(classifyMediaKind("movie.ogv")).toBe("video");
+    expect(isPlayableMediaFile("movie.ogv")).toBe(true);
+
+    expect(hasVideoExtension("song.ogg")).toBe(false);
+    expect(classifyMediaKind("song.ogg")).toBe("audio");
+    expect(isPlayableMediaFile("song.ogg")).toBe(true);
+  });
+
+  // With '.ts' enabled, a `.d.ts` name genuinely ends with an enabled video
+  // extension. `classifyMediaKind` stays an endsWith-only predicate (that is
+  // the documented single classification authority), so such a name is
+  // classified video IF it ever reaches a Track — but `isPlayableMediaFile`
+  // keeps it out of the library, which is the gate every ingest path uses.
+  it("rejects noise names at the ingest gate, even when they end with an enabled extension", () => {
+    for (const name of [
+      "index.d.ts",
+      "photo.avif",
+      "rec.3gpp",
+      "render.mpeg4",
+      "Holiday.movie",
+      "VIDEO_TS.vobs",
+    ]) {
+      expect(isPlayableMediaFile(name), name).toBe(false);
       expect(isVideoNameNoise(name), name).toBe(true);
     }
+    // '.tsx' does not end in '.ts', so it never even classifies as video.
+    expect(classifyMediaKind("App.tsx")).toBe("audio");
+    expect(classifyMediaKind("index.d.ts")).toBe("video");
   });
 });

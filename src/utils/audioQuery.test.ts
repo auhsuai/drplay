@@ -15,6 +15,7 @@ import {
   isVideoFile,
   isVideoNameNoise,
 } from "./audioQuery";
+import { classifyMediaKind, isPlayableMediaFile } from "./mediaKind";
 
 // Query contract (Task 1 — hide-unplayable-formats): only formats Chromium /
 // WebView2 can decode may sync (mp3/flac/wav/ogg/m4a/aac/opus). The
@@ -154,13 +155,52 @@ describe("isAudioFile", () => {
 // shape (frozen above), video queries are built the same way, and the union
 // query is what the library/browse paths use so movies actually show up.
 
-const VIDEO_EXTENSIONS = [".mkv", ".mp4"] as const;
+// Mirror of PLAYABLE_VIDEO_EXTENSIONS (audioQuery.ts), kept in lockstep AND in
+// order: mediaKind.test.ts asserts the exported list with an order-sensitive
+// toEqual, so .mkv/.mp4 stay first and new containers are appended only after
+// they are verified end-to-end on the real transport.
+const VIDEO_EXTENSIONS = [
+  ".mkv",
+  ".mp4",
+  ".webm",
+  ".m4v",
+  ".mov",
+  ".avi",
+  ".wmv",
+  ".flv",
+  ".mpeg",
+  ".mpg",
+  ".ogv",
+  ".3gp",
+  ".vob",
+  ".asf",
+  ".ts",
+] as const;
+
+// Containers that are NOT enabled: mpv can demux some of them, but none has
+// been verified end-to-end on this transport, so none may classify as video.
+// These are the negative control that the predicate is still an explicit
+// allowlist and did not degrade into "matches anything".
+//
+// `.3g2` is deliberately absent from this list even though it is also not
+// enabled: it DOES appear in getVideoQuery() — as the `.3gp` exclusion
+// (`not name contains '.3g2'`) — so a `.not.toContain('.3g2')` assertion would
+// be false. It is covered separately below.
+const NOT_ENABLED_VIDEO_EXTENSIONS = [
+  ".divx",
+  ".xvid",
+  ".m2ts",
+  ".mts",
+  ".f4v",
+  ".rmvb",
+  ".rm",
+];
 
 describe("getVideoQuery", () => {
-  it("matches the two verified video containers, mime-agnostic like getAudioQuery", () => {
+  it("matches the verified video containers, mime-agnostic like getAudioQuery", () => {
     const q = getVideoQuery();
     expect(q).toBe(
-      "trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mkv' or name contains '.mp4'))",
+      "trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mkv' or name contains '.mp4' or (name contains '.webm' and not name contains '.webmanifest') or name contains '.m4v' or (name contains '.mov' and not name contains '.movie') or (name contains '.avi' and not name contains '.avif') or name contains '.wmv' or name contains '.flv' or (name contains '.mpeg' and not name contains '.mpeg4') or (name contains '.mpg' and not name contains '.mpga') or name contains '.ogv' or (name contains '.3gp' and not name contains '.3gpp' and not name contains '.3g2') or (name contains '.vob' and not name contains '.vobs') or name contains '.asf' or (name contains '.ts' and not name contains '.tsx' and not name contains '.d.ts' and not name contains '.ts.map' and not name contains '.tsv')))",
     );
     expect(q).not.toContain("mimeType contains 'video/'");
   });
@@ -170,7 +210,7 @@ describe("getFolderVideoQuery", () => {
   it("scopes each video extension on video/* OR application/octet-stream", () => {
     const q = getFolderVideoQuery("abc123");
     expect(q).toBe(
-      "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mkv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mp4' and (mimeType contains 'video/' or mimeType='application/octet-stream')))",
+      "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mkv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mp4' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.webm' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.m4v' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mov' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.avi' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.wmv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.flv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpeg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ogv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.3gp' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.vob' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.asf' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ts' and (mimeType contains 'video/' or mimeType='application/octet-stream')))",
     );
   });
 });
@@ -217,7 +257,7 @@ describe("getMediaQuery (library union)", () => {
 describe("getFolderMediaQuery (folder union)", () => {
   it("matches the frozen union contract: audio clauses verbatim, then the video clauses", () => {
     expect(getFolderMediaQuery("abc123")).toBe(
-      "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.mkv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mp4' and (mimeType contains 'video/' or mimeType='application/octet-stream')))",
+      "'abc123' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or (name contains '.mp3' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.flac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.wav' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.ogg' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.m4a' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.aac' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.opus' and (mimeType contains 'audio/' or mimeType='application/octet-stream')) or (name contains '.mkv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mp4' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.webm' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.m4v' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mov' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.avi' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.wmv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.flv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpeg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.mpg' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ogv' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.3gp' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.vob' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.asf' and (mimeType contains 'video/' or mimeType='application/octet-stream')) or (name contains '.ts' and (mimeType contains 'video/' or mimeType='application/octet-stream')))",
     );
   });
 
@@ -260,21 +300,105 @@ describe("hasVideoExtension / isVideoFile", () => {
   });
 
   it("accepts no other video container in this phase", () => {
-    for (const ext of [
-      ".avi",
-      ".mov",
-      ".webm",
-      ".wmv",
-      ".flv",
-      ".m4v",
-      ".ts",
-    ]) {
+    for (const ext of NOT_ENABLED_VIDEO_EXTENSIONS) {
       expect(hasVideoExtension(`movie${ext}`)).toBe(false);
       expect(getVideoQuery()).not.toContain(ext);
       expect(getFolderVideoQuery("abc123")).not.toContain(ext);
       expect(getMediaQuery()).not.toContain(ext);
       expect(getFolderMediaQuery("abc123")).not.toContain(ext);
     }
+  });
+
+  // '.3g2' is not enabled, but it DOES occur in the video query — as one of
+  // the '.3gp' exclusions. Enabling it would require removing that exclusion,
+  // so pin both halves: the suffix is not video, and its only appearance is
+  // the exclusion clause.
+  it("keeps '.3g2' excluded-and-disabled rather than silently enabled", () => {
+    expect(hasVideoExtension("clip.3g2")).toBe(false);
+    expect(classifyMediaKind("clip.3g2")).toBe("audio");
+    expect(isPlayableMediaFile("clip.3g2")).toBe(false);
+    expect(getVideoQuery()).toContain("not name contains '.3g2'");
+    expect(getVideoQuery()).not.toContain("name contains '.3g2' or");
+  });
+});
+
+// One test per enabled container: the runtime predicate, the media-kind
+// classification and the discovery clause must all agree, otherwise the file is
+// either invisible (no query clause) or unplayable (classified as audio).
+describe("enabled video containers", () => {
+  for (const ext of VIDEO_EXTENSIONS) {
+    it(`discovers and classifies ${ext} as video`, () => {
+      expect(hasVideoExtension(`Movie${ext}`)).toBe(true);
+      expect(hasVideoExtension(`Movie${ext.toUpperCase()}`)).toBe(true);
+      expect(classifyMediaKind(`Movie${ext}`)).toBe("video");
+      expect(classifyMediaKind(`Movie${ext.toUpperCase()}`)).toBe("video");
+      expect(isPlayableMediaFile(`Movie${ext}`)).toBe(true);
+      expect(isPlayableMediaFile(`Movie${ext.toUpperCase()}`)).toBe(true);
+      expect(getVideoQuery()).toContain(`name contains '${ext}'`);
+      expect(getMediaQuery()).toContain(`name contains '${ext}'`);
+      expect(isVideoFile(undefined, `Movie${ext}`)).toBe(true);
+    });
+  }
+
+  it("keeps the '.ts' exclusions inside its own clause", () => {
+    const exclusions = DRIVE_SUBSTRING_FALSE_POSITIVES[".ts"] ?? [];
+    expect(exclusions).toEqual([".tsx", ".d.ts", ".ts.map", ".tsv"]);
+    // The whole clause, exclusions included, must be emitted verbatim.
+    const clause = buildNameOnlyClause(".ts", DRIVE_SUBSTRING_FALSE_POSITIVES);
+    expect(clause.startsWith("(name contains '.ts'")).toBe(true);
+    for (const excluded of exclusions) {
+      expect(clause).toContain(`and not name contains '${excluded}'`);
+    }
+    expect(getVideoQuery()).toContain(clause);
+    expect(getMediaQuery()).toContain(clause);
+    // The extension itself must never be excluded: a real clip.ts still matches.
+    expect(clause).not.toMatch(/not name contains '\.ts'\)/);
+  });
+
+  // '.ts' is the one enabled container whose suffix is ALSO the suffix of real
+  // source files (`index.d.ts` genuinely ends with '.ts'), so the allowlist
+  // alone cannot separate them. The query exclusions narrow Drive's substring
+  // match and `isPlayableMediaFile` (the ingest gate) vetoes the rest.
+  it("plays a real .ts while rejecting the .ts source-file look-alikes", () => {
+    expect(hasVideoExtension("clip.ts")).toBe(true);
+    expect(hasVideoExtension("clip.TS")).toBe(true);
+    expect(classifyMediaKind("clip.ts")).toBe("video");
+    expect(isPlayableMediaFile("clip.ts")).toBe(true);
+    expect(isPlayableMediaFile("clip.TS")).toBe(true);
+
+    expect(isPlayableMediaFile("index.d.ts")).toBe(false);
+    expect(isPlayableMediaFile("App.tsx")).toBe(false);
+    expect(isPlayableMediaFile("bundle.ts.map")).toBe(false);
+    expect(isPlayableMediaFile("data.tsv")).toBe(false);
+    // '.tsx'/'.ts.map' do not end with '.ts' at all; '.d.ts' does, which is
+    // exactly why the runtime veto — not the suffix test — has to catch it.
+    expect(hasVideoExtension("App.tsx")).toBe(false);
+    expect(hasVideoExtension("bundle.ts.map")).toBe(false);
+    expect(hasVideoExtension("index.d.ts")).toBe(true);
+    expect(isVideoNameNoise("index.d.ts")).toBe(true);
+  });
+
+  // '.ogv' (video/ogg) and '.ogg' (audio/ogg) are distinct suffixes in BOTH
+  // directions — the one asymmetry the audit called clean. Now that '.ogv' is
+  // enabled, lock the pair: enabling the video container must not swallow the
+  // audio one, and the audio container must not classify as video.
+  it("separates the '.ogv' video container from the '.ogg' audio container", () => {
+    expect(hasVideoExtension("movie.ogv")).toBe(true);
+    expect(hasVideoExtension("movie.OGV")).toBe(true);
+    expect(classifyMediaKind("movie.ogv")).toBe("video");
+    expect(isPlayableMediaFile("movie.ogv")).toBe(true);
+
+    expect(hasVideoExtension("song.ogg")).toBe(false);
+    expect(classifyMediaKind("song.ogg")).toBe("audio");
+    expect(isPlayableMediaFile("song.ogg")).toBe(true);
+    expect(hasAudioExtension("song.ogg")).toBe(true);
+
+    // No cross-matching in the discovery clause either: '.ogg' is an audio
+    // clause, not a video one, and '.ogv' is never excluded.
+    expect(getVideoQuery()).not.toContain("name contains '.ogg'");
+    expect(buildNameOnlyClause(".ogv", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "name contains '.ogv'",
+    );
   });
 });
 
@@ -285,23 +409,72 @@ describe("hasVideoExtension / isVideoFile", () => {
 // single table of the names that only matched by substring; the same table
 // feeds the top-level query clause and the runtime veto.
 describe("DRIVE_SUBSTRING_FALSE_POSITIVES", () => {
-  it("covers the five known collisions and nothing else", () => {
+  it("covers the eight known collisions and nothing else", () => {
     expect(Object.keys(DRIVE_SUBSTRING_FALSE_POSITIVES).sort()).toEqual([
       ".3gp",
       ".avi",
       ".mov",
       ".mpeg",
+      ".mpg",
       ".ts",
+      ".vob",
+      ".webm",
     ]);
     expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".avi"]).toEqual([".avif"]);
     expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".ts"]).toEqual([
       ".tsx",
       ".d.ts",
       ".ts.map",
+      ".tsv",
     ]);
     expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".3gp"]).toEqual([".3gpp", ".3g2"]);
     expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".mpeg"]).toEqual([".mpeg4"]);
     expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".mov"]).toEqual([".movie"]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".vob"]).toEqual([".vobs"]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".webm"]).toEqual([".webmanifest"]);
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".mpg"]).toEqual([".mpga"]);
+  });
+
+  it("only names collisions of ENABLED extensions", () => {
+    for (const ext of Object.keys(DRIVE_SUBSTRING_FALSE_POSITIVES)) {
+      expect(hasVideoExtension(`Movie${ext}`), ext).toBe(true);
+    }
+  });
+
+  it("never excludes the extension itself and never a bare token", () => {
+    for (const [ext, suffixes] of Object.entries(
+      DRIVE_SUBSTRING_FALSE_POSITIVES,
+    )) {
+      expect(suffixes.length, ext).toBeGreaterThan(0);
+      for (const suffix of suffixes) {
+        expect(suffix, ext).not.toBe(ext);
+        // A dotted name — excluding a bare token would over-narrow.
+        expect(suffix.startsWith("."), `${ext} -> ${suffix}`).toBe(true);
+        // The safety property that matters: an exclusion must never be able to
+        // drop a name that ends with the extension itself. That holds as soon
+        // as the suffix is distinct from the extension (equal length is fine:
+        // '.3g2' vs '.3gp' share no suffix, so '.3g2' cannot hide a '.3gp').
+        expect(suffix.length, `${ext} -> ${suffix}`).toBeGreaterThanOrEqual(
+          ext.length,
+        );
+        expect(
+          `clip${ext}`.includes(suffix),
+          `${ext} -> ${suffix} must not match clip${ext}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  // '.3g2' is listed under '.3gp' but is NOT a substring superset of it: the
+  // two only share '.3g'. The clause is therefore inert (it excludes nothing
+  // that `name contains '.3gp'` would have matched) rather than wrong. Kept
+  // because it is pre-existing behavior and harmless; removing it would be a
+  // query change with no effect. Pinned here so a future reader does not
+  // mistake it for a live collision.
+  it("documents the inert '.3g2' exclusion rather than pretending it collides", () => {
+    expect(DRIVE_SUBSTRING_FALSE_POSITIVES[".3gp"]).toContain(".3g2");
+    expect("clip.3g2".includes(".3gp")).toBe(false);
+    expect("clip.3gp".includes(".3g2")).toBe(false);
   });
 
   it("never lists a bare '.ts' exclusion (a real clip.ts must still match)", () => {
@@ -315,7 +488,7 @@ describe("buildNameOnlyClause (top-level video clause)", () => {
   it("emits the narrow '.ts' exclusion clause, never a bare 'not ... .ts'", () => {
     const clause = buildNameOnlyClause(".ts", DRIVE_SUBSTRING_FALSE_POSITIVES);
     expect(clause).toBe(
-      "(name contains '.ts' and not name contains '.tsx' and not name contains '.d.ts' and not name contains '.ts.map')",
+      "(name contains '.ts' and not name contains '.tsx' and not name contains '.d.ts' and not name contains '.ts.map' and not name contains '.tsv')",
     );
     expect(clause).not.toMatch(/not name contains '\.ts'\)/);
   });
@@ -336,6 +509,15 @@ describe("buildNameOnlyClause (top-level video clause)", () => {
     expect(buildNameOnlyClause(".mov", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
       "(name contains '.mov' and not name contains '.movie')",
     );
+    expect(buildNameOnlyClause(".vob", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "(name contains '.vob' and not name contains '.vobs')",
+    );
+    expect(buildNameOnlyClause(".webm", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "(name contains '.webm' and not name contains '.webmanifest')",
+    );
+    expect(buildNameOnlyClause(".mpg", DRIVE_SUBSTRING_FALSE_POSITIVES)).toBe(
+      "(name contains '.mpg' and not name contains '.mpga')",
+    );
   });
 
   it("leaves a collision-free extension as the plain name clause", () => {
@@ -350,14 +532,15 @@ describe("buildNameOnlyClause (top-level video clause)", () => {
     );
   });
 
-  it("today's enabled allowlist emits no exclusion clause (unchanged queries)", () => {
-    for (const q of [
-      getVideoQuery(),
-      getMediaQuery(),
-      getFolderVideoQuery("abc123"),
-      getFolderMediaQuery("abc123"),
-    ]) {
-      expect(q).not.toContain("not name contains");
+  it("emits an exclusion clause only for the table's extensions", () => {
+    const hazardous = Object.keys(DRIVE_SUBSTRING_FALSE_POSITIVES);
+    for (const ext of VIDEO_EXTENSIONS) {
+      const clause = buildNameOnlyClause(ext, DRIVE_SUBSTRING_FALSE_POSITIVES);
+      if (hazardous.includes(ext)) {
+        expect(clause, ext).toContain("not name contains");
+      } else {
+        expect(clause, ext).toBe(`name contains '${ext}'`);
+      }
     }
   });
 });
@@ -369,11 +552,15 @@ describe("isVideoNameNoise", () => {
     expect(isVideoNameNoise("App.tsx")).toBe(true);
     expect(isVideoNameNoise("index.d.ts")).toBe(true);
     expect(isVideoNameNoise("bundle.ts.map")).toBe(true);
+    expect(isVideoNameNoise("data.tsv")).toBe(true);
     expect(isVideoNameNoise("rec.3gpp")).toBe(true);
     expect(isVideoNameNoise("rec.3g2")).toBe(true);
     expect(isVideoNameNoise("render.mpeg4")).toBe(true);
     expect(isVideoNameNoise("Holiday.movie")).toBe(true);
     expect(isVideoNameNoise("holiday.MOVIE")).toBe(true);
+    expect(isVideoNameNoise("VIDEO_TS.vobs")).toBe(true);
+    expect(isVideoNameNoise("site.webmanifest")).toBe(true);
+    expect(isVideoNameNoise("SITE.WEBMANIFEST")).toBe(true);
   });
 
   it("keeps real playable names — including a legitimate .ts sample", () => {
