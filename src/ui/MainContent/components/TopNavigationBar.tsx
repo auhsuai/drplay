@@ -1,7 +1,6 @@
 import React from "react";
 import { ArrowLeft, X, Search, FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { SortDropdown } from "../../components/SortDropdown";
 import { MY_DRIVE_TAB, VIRTUAL_ROOT_NAME } from "../../../utils/driveConstants";
 import { useHorizontalScroll } from "../../../hooks/useHorizontalScroll";
 
@@ -16,12 +15,17 @@ interface TopNavigationBarProps {
   onBreadcrumbClick: (id: string, name: string, index: number) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  // Sorting is owned by the FileListHeader column row now; these two stay in
+  // the interface because MainContent/TabContentRouter still thread the same
+  // sortOption + onSortChange chain (the header consumes them directly).
   sortOption: string;
   onSortChange?: ((option: string) => void) | undefined;
   token: string | null;
   onNewFolderClick: () => void;
   // false hides the New Folder action (virtual root: no real parent folder).
   showNewFolderButton?: boolean;
+  // Retained for call-site compatibility (previously drove SortDropdown's
+  // first-frame arrow animation).
   isInitialMount: React.RefObject<boolean>;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -37,12 +41,9 @@ export function TopNavigationBar({
   onBreadcrumbClick,
   searchQuery,
   onSearchChange,
-  sortOption,
-  onSortChange,
   token,
   onNewFolderClick,
   showNewFolderButton = true,
-  isInitialMount,
   searchInputRef,
 }: TopNavigationBarProps) {
   const { t } = useTranslation();
@@ -61,14 +62,11 @@ export function TopNavigationBar({
     return name;
   };
 
-  const sortOptions = [
-    { id: "name", label: t("sort.name") },
-    { id: "modifiedTime", label: t("sort.date"), defaultDesc: true },
-    { id: "size", label: t("sort.size") },
-  ];
-
   return (
-    <div className="flex items-center justify-between gap-4">
+    // Visual-only -2px nudge (relative + -top-0.5, not a negative margin):
+    // the toolbar paints 2px higher while normal flow is untouched, so the
+    // FileListHeader row below keeps its exact position and mt-2 spacing.
+    <div className="relative -top-0.5 flex items-center justify-between gap-4">
       {isSelectionMode ? (
         <div className="flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-left-4 duration-300 flex-1 min-w-0">
           <button
@@ -155,17 +153,9 @@ export function TopNavigationBar({
             )}
           </div>
 
-          {/* Sort Dropdown */}
-          {token && (
-            <SortDropdown
-              sortOption={sortOption}
-              onSortChange={onSortChange}
-              options={sortOptions}
-              fallbackLabel={t("drive.sort")}
-              isInitialMount={isInitialMount}
-            />
-          )}
-
+          {/* Sorting lives in the FileListHeader column row now — the old
+              SortDropdown was removed from this toolbar (the Recent tab's
+              FullRecentView keeps its own dropdown). */}
           {token && showNewFolderButton && (
             <button
               onClick={onNewFolderClick}

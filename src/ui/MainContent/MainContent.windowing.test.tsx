@@ -8,6 +8,7 @@ import {
   fireEvent,
 } from "@testing-library/react";
 import { MainContent } from "./MainContent";
+import { HEADER_CHROME_HEIGHT_PX } from "./hooks/useSkeletonRows";
 import type { DriveItem } from "../../types";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 
@@ -190,7 +191,7 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
     expect(status.getAttribute("aria-label")).toBe("loading");
     const expectedRows = Math.max(
       4,
-      Math.ceil((window.innerHeight - 140) / 72),
+      Math.ceil((window.innerHeight - HEADER_CHROME_HEIGHT_PX) / 72),
     );
     expect(screen.getAllByTestId("skeleton-row")).toHaveLength(expectedRows);
     // The old centered spinner (LoaderCircle with animate-spin) must be gone.
@@ -216,12 +217,15 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
     render(<MainContent {...baseProps} isLoading={true} />);
     const status = screen.getByRole("status", { name: "loading" });
     // Row height must be deterministic: nothing may depend on the WebView
-    // resolving min-height:calc(100% - 140px) inside the auto-height
-    // [data-drop-region] container.
+    // resolving min-height:calc(100% - HEADER_CHROME_HEIGHT_PX) inside the
+    // auto-height [data-drop-region] container.
     expect(status.style.minHeight).toBe("");
     const rows = screen.getAllByTestId("skeleton-row");
     expect(rows).toHaveLength(
-      Math.max(4, Math.ceil((window.innerHeight - 140) / 72)),
+      Math.max(
+        4,
+        Math.ceil((window.innerHeight - HEADER_CHROME_HEIGHT_PX) / 72),
+      ),
     );
     for (const row of rows) {
       expect(row.className).not.toContain("flex-1");
@@ -252,7 +256,7 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
       setInnerHeight(768);
       render(<MainContent {...baseProps} isLoading={true} />);
       expect(screen.getAllByTestId("skeleton-row")).toHaveLength(
-        Math.max(4, Math.ceil((768 - 140) / 72)),
+        Math.max(4, Math.ceil((768 - HEADER_CHROME_HEIGHT_PX) / 72)),
       );
 
       act(() => {
@@ -261,7 +265,7 @@ describe("MainContent loading state (skeleton rows replace centered spinner)", (
       });
 
       expect(screen.getAllByTestId("skeleton-row")).toHaveLength(
-        Math.max(4, Math.ceil((400 - 140) / 72)),
+        Math.max(4, Math.ceil((400 - HEADER_CHROME_HEIGHT_PX) / 72)),
       );
     } finally {
       setInnerHeight(originalHeight);

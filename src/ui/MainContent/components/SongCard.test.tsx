@@ -17,6 +17,7 @@ import {
   fireEvent,
 } from "@testing-library/react";
 import { SongCard } from "./SongCard";
+import { LIST_DATE_TRACK, LIST_SIZE_TRACK } from "./listColumnLayout";
 import { getTrackMetadata } from "../../../utils/metadata";
 import type { MockInstance } from "vitest";
 import type { DriveItem } from "../../../types";
@@ -807,7 +808,7 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
   });
 });
 
-describe("SongCard size text uses shared formatBytes semantics (not the old MB-only formatSize)", () => {
+describe("SongCard size display uses shared formatBytes semantics (subtitle → dedicated column)", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
   });
@@ -816,9 +817,10 @@ describe("SongCard size text uses shared formatBytes semantics (not the old MB-o
     cleanup();
   });
 
-  // Metadata drives meta.size via getTrackMetadata; the card must render the
-  // size span with the shared util's semantics ("500 KB", "5 MB", "0 B").
-  const renderWithMetaSize = (size: number, duration = 123) => {
+  // The size display moved from the subtitle (meta.size, gated on the async
+  // metadata load) to the dedicated Size column (item.size, always visible).
+  // The shared formatBytes semantics must survive the move.
+  const renderWithSize = (size: number, duration = 123) => {
     mockedFetch.mockResolvedValue({
       title: "Fetched Title",
       artist: null,
@@ -827,14 +829,16 @@ describe("SongCard size text uses shared formatBytes semantics (not the old MB-o
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    return render(<SongCard {...baseProps} item={makeItem()} />);
+    return render(<SongCard {...baseProps} item={makeItem({ size })} />);
   };
 
-  it('size 0 → shows "0 B" (old formatSize returned "0 MB"; guard hid the span entirely)', async () => {
-    renderWithMetaSize(0, 0);
+  it('size 0 → shows "0 B" in the column (old formatSize returned "0 MB")', async () => {
+    renderWithSize(0, 0);
     expect(await screen.findByText("0 B")).not.toBeNull();
     // Fix F: a 0/estimated duration renders "–", never the fake "00:00:00".
-    expect(screen.getByText("–")).not.toBeNull();
+    // Awaited: the column renders synchronously now, but the duration span
+    // still waits for the debounced metadata fetch.
+    expect(await screen.findByText("–")).not.toBeNull();
     expect(screen.queryByText("00:00:00")).toBeNull();
   });
 
@@ -848,7 +852,7 @@ describe("SongCard size text uses shared formatBytes semantics (not the old MB-o
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    render(<SongCard {...baseProps} item={makeItem()} />);
+    render(<SongCard {...baseProps} item={makeItem({ size: 500 * 1024 })} />);
     expect(await screen.findByText("00:02:03")).not.toBeNull();
     expect(screen.queryByText("–")).toBeNull();
   });
@@ -863,32 +867,29 @@ describe("SongCard size text uses shared formatBytes semantics (not the old MB-o
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    render(<SongCard {...baseProps} item={makeItem()} />);
+    render(<SongCard {...baseProps} item={makeItem({ size: 0 })} />);
     expect(await screen.findByText("–")).not.toBeNull();
     expect(screen.queryByText("00:00:00")).toBeNull();
   });
 
   it('500 KB (512000 B) → shows "500 KB", not "0.5 MB"', async () => {
-    renderWithMetaSize(500 * 1024);
+    renderWithSize(500 * 1024);
     expect(await screen.findByText("500 KB")).not.toBeNull();
     expect(screen.queryByText("0.5 MB")).toBeNull();
   });
 
   it('5 MB → shows "5 MB", not "5.0 MB" (shared util trims trailing .0)', async () => {
-    renderWithMetaSize(5 * 1024 * 1024);
+    renderWithSize(5 * 1024 * 1024);
     expect(await screen.findByText("5 MB")).not.toBeNull();
     expect(screen.queryByText("5.0 MB")).toBeNull();
   });
 
   it('1.5 MB (1536 KB) → shows "1.5 MB" (fraction digits preserved for non-whole units)', async () => {
-    renderWithMetaSize(1536 * 1024);
+    renderWithSize(1536 * 1024);
     expect(await screen.findByText("1.5 MB")).not.toBeNull();
   });
 
-  // Regression: makePlaceholder dropped `size`, so every failed metadata
-  // fetch rendered "0 B" next to real sizes. A placeholder that carries the
-  // size must render the real size, not "0 B".
-  it('placeholder metadata with size renders the real size, not "0 B"', async () => {
+  it("a metadata size that disagrees with the listing size is ignored (column reads item.size)", async () => {
     mockedFetch.mockResolvedValue({
       title: "Fetched Title",
       artist: null,
@@ -898,26 +899,313 @@ describe("SongCard size text uses shared formatBytes semantics (not the old MB-o
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    render(<SongCard {...baseProps} item={makeItem()} />);
-    expect(await screen.findByText("4 KB")).not.toBeNull();
-    expect(screen.queryByText("0 B")).toBeNull();
+    render(<SongCard {...baseProps} item={makeItem({ size: 8192 })} />);
+    expect(await screen.findByText("8 KB")).not.toBeNull();
+    expect(screen.queryByText("4 KB")).toBeNull();
   });
+});
 
-  // Older cached placeholders (pre-fix) still lack the size field — the card
-  // must fall back to the Drive listing size instead of showing "0 B".
-  it("placeholder metadata without size falls back to the Drive listing size", async () => {
+// Trash-parity icon set for the Drive list: video files render the inline
+// film SVG (same artwork TrashItemRow ships), music files keep Music, folders
+// keep Folder, and cover art still wins over every icon.
+describe("SongCard video icon (film, Trash parity)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
       title: "Fetched Title",
       artist: null,
       duration: 0,
-      durationEstimated: true,
+      size: 0,
       pictureData: null,
       pictureFormat: undefined,
     } as never);
-    const item = makeItem();
-    (item.trackInfo as { size?: number }).size = 4096;
-    render(<SongCard {...baseProps} item={item} />);
-    expect(await screen.findByText("4 KB")).not.toBeNull();
-    expect(screen.queryByText("0 B")).toBeNull();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each(["movie.mkv", "clip.mp4"])(
+    "renders the film SVG with rect artwork for %s",
+    (name) => {
+      const { container } = render(
+        <SongCard
+          {...baseProps}
+          item={makeItem({
+            trackInfo: {
+              ...makeItem().trackInfo,
+              originalName: name,
+            } as NonNullable<DriveItem["trackInfo"]>,
+          })}
+        />,
+      );
+      const film = container.querySelector("svg.lucide-film");
+      expect(film).not.toBeNull();
+      expect(film?.getAttribute("viewBox")).toBe("0 0 24 24");
+      expect(film?.querySelector("rect")).not.toBeNull();
+    },
+  );
+
+  it("keeps Music for song.mp3 (no film icon)", () => {
+    const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(container.querySelector("svg.lucide-film")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
+  });
+
+  it("keeps Music for an extension-less non-folder", () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({
+          trackInfo: {
+            ...makeItem().trackInfo,
+            originalName: "extensionless",
+          } as NonNullable<DriveItem["trackInfo"]>,
+        })}
+      />,
+    );
+    expect(container.querySelector("svg.lucide-film")).toBeNull();
+    expect(container.querySelector(".lucide-music")).not.toBeNull();
+  });
+
+  it("folders keep the Folder icon (no film)", () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({ isFolder: true, trackInfo: undefined })}
+      />,
+    );
+    expect(container.querySelector("svg.lucide-film")).toBeNull();
+    expect(container.querySelector(".lucide-folder")).not.toBeNull();
+  });
+
+  it("cover art still wins over the film icon", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      size: 0,
+      pictureData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      pictureFormat: "image/png",
+    } as never);
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({
+          trackInfo: {
+            ...makeItem().trackInfo,
+            originalName: "movie.mkv",
+          } as NonNullable<DriveItem["trackInfo"]>,
+        })}
+      />,
+    );
+    await screen.findByAltText("Fetched Title");
+    expect(container.querySelector("svg.lucide-film")).toBeNull();
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+});
+
+// Date column: every row (folders included) renders its real modifiedTime in
+// a dedicated column; missing/malformed timestamps render "—", never a
+// fabricated date (same policy as TrashItemRow.formatDeletedDate).
+describe("SongCard date column", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      size: 0,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the real modifiedTime via the same zero-padded locale expression", () => {
+    const raw = "2026-03-01T12:34:56.000Z";
+    const expected = new Date(raw).toLocaleDateString(undefined, {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ modifiedTime: raw })} />,
+    );
+    expect(screen.getByText(expected)).not.toBeNull();
+    // The date lives in the shared Date track (LIST_DATE_TRACK), so header and
+    // row stay in lockstep — assert the token's own class string, not a raw
+    // arbitrary-value selector.
+    const dateCells = Array.from(container.querySelectorAll("span")).filter(
+      (el) => el.className.includes(LIST_DATE_TRACK.split(" ")[1] ?? ""),
+    );
+    expect(dateCells).toHaveLength(1);
+    expect(dateCells[0]?.textContent).toBe(expected);
+  });
+
+  it("zero-pads single-digit day and month (01/03, not 1/3)", () => {
+    const raw = "2026-03-01T12:00:00.000Z";
+    render(<SongCard {...baseProps} item={makeItem({ modifiedTime: raw })} />);
+
+    const date = new Date(raw);
+    const padded = date.toLocaleDateString(undefined, {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+    const unpadded = date.toLocaleDateString();
+    expect(padded).not.toBe(unpadded);
+    expect(screen.getByText(padded)).not.toBeNull();
+    expect(screen.queryByText(unpadded)).toBeNull();
+  });
+
+  it("folders show their real modifiedTime too", () => {
+    const raw = "2026-02-15T08:00:00.000Z";
+    const expected = new Date(raw).toLocaleDateString(undefined, {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+    render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({
+          isFolder: true,
+          trackInfo: undefined,
+          modifiedTime: raw,
+        })}
+      />,
+    );
+    expect(screen.getByText(expected)).not.toBeNull();
+  });
+
+  it('missing modifiedTime renders "—" (never fabricates a date)', () => {
+    render(<SongCard {...baseProps} item={makeItem({})} />);
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('malformed modifiedTime renders "—"', () => {
+    render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({ modifiedTime: "not-a-date" })}
+      />,
+    );
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("memo: rerender with same id + changed modifiedTime updates the rendered date", () => {
+    const old = "2026-01-01T00:00:00.000Z";
+    const changed = "2026-06-15T00:00:00.000Z";
+    const dateOpts = {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    } as const;
+    const { rerender } = render(
+      <SongCard {...baseProps} item={makeItem({ modifiedTime: old })} />,
+    );
+    expect(
+      screen.getByText(new Date(old).toLocaleDateString(undefined, dateOpts)),
+    ).toBeTruthy();
+    rerender(
+      <SongCard {...baseProps} item={makeItem({ modifiedTime: changed })} />,
+    );
+    expect(
+      screen.getByText(
+        new Date(changed).toLocaleDateString(undefined, dateOpts),
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(new Date(old).toLocaleDateString(undefined, dateOpts)),
+    ).toBeNull();
+  });
+});
+
+// Size column: driven by the listing's item.size (number), independent of the
+// async metadata load — the subtitle no longer shows a size at all (the user
+// moved size out of the subtitle into its own column).
+describe("SongCard size column", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      size: 0,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders formatBytes(item.size) for a numeric size", () => {
+    render(
+      <SongCard {...baseProps} item={makeItem({ size: 5 * 1024 * 1024 })} />,
+    );
+    expect(screen.getByText("5 MB")).not.toBeNull();
+  });
+
+  it("renders formatBytes for 0-byte files (0 B, not an em dash)", () => {
+    render(<SongCard {...baseProps} item={makeItem({ size: 0 })} />);
+    expect(screen.getByText("0 B")).not.toBeNull();
+  });
+
+  it('folders and missing size render "—" in the shared Size track', () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({
+          isFolder: true,
+          trackInfo: undefined,
+          size: undefined,
+        })}
+      />,
+    );
+    // Size cell identified via the shared LIST_SIZE_TRACK width token so a
+    // future track change does not silently break this assertion.
+    const sizeWidth = LIST_SIZE_TRACK.split(" ")[0] ?? "";
+    const sizeCells = Array.from(container.querySelectorAll("span")).filter(
+      (el) =>
+        el.className.includes(sizeWidth) && el.className.includes("text-right"),
+    );
+    expect(sizeCells).toHaveLength(1);
+    expect(sizeCells[0]?.textContent).toBe("—");
+  });
+
+  it("a file with missing size renders — as well (no fabricated 0 B)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ size: undefined })} />,
+    );
+    const sizeWidth = LIST_SIZE_TRACK.split(" ")[0] ?? "";
+    const sizeCells = Array.from(container.querySelectorAll("span")).filter(
+      (el) =>
+        el.className.includes(sizeWidth) && el.className.includes("text-right"),
+    );
+    expect(sizeCells).toHaveLength(1);
+    expect(sizeCells[0]?.textContent).toBe("—");
+  });
+
+  it("subtitle no longer contains a size (duration only when metadata loads)", async () => {
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 123,
+      durationEstimated: false,
+      size: 4096,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+    render(<SongCard {...baseProps} item={makeItem({ size: 4096 })} />);
+    expect(await screen.findByText("00:02:03")).not.toBeNull();
+    // The duration-only subtitle must not grow a size segment next to it.
+    // ("4 KB" appears exactly once — in the dedicated Size column.)
+    expect(screen.getAllByText("4 KB")).toHaveLength(1);
   });
 });

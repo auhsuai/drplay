@@ -1104,7 +1104,13 @@ describe("TrashItemRow metadata columns", () => {
 
     expect(screen.getByText("1 MB")).not.toBeNull();
     expect(
-      screen.getByText(new Date(modifiedTime).toLocaleDateString()),
+      screen.getByText(
+        new Date(modifiedTime).toLocaleDateString(undefined, {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        }),
+      ),
     ).not.toBeNull();
   });
 
@@ -1185,6 +1191,16 @@ describe("TrashItemRow video icon", () => {
 // Deleted-date fallback chain: deletedAt (exact, from the appProperties
 // timestamp) → trashedTime (shared drives only) → modifiedTime (documented
 // approximation) → "—". Never fabricate a timestamp.
+// Zero-padded locale date, exactly as TrashItemRow.formatDeletedDate renders
+// it (01/01/2026, not 1/1/2026). Kept as one expression so the assertions can
+// never drift from the shipped formatter.
+const deletedDate = (raw: string | Date): string =>
+  new Date(raw).toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+
 describe("TrashItemRow deleted-date fallback chain", () => {
   interface DateInput {
     deletedAt?: string;
@@ -1217,12 +1233,8 @@ describe("TrashItemRow deleted-date fallback chain", () => {
       trashedTime: "2026-05-01T00:00:00.000Z",
       modifiedTime: "2026-06-01T00:00:00.000Z",
     });
-    expect(
-      screen.getByText(new Date(deletedAt).toLocaleDateString()),
-    ).not.toBeNull();
-    expect(
-      screen.queryByText(new Date("2026-05-01").toLocaleDateString()),
-    ).toBeNull();
+    expect(screen.getByText(deletedDate(deletedAt))).not.toBeNull();
+    expect(screen.queryByText(deletedDate("2026-05-01"))).toBeNull();
   });
 
   it("falls back to trashedTime when deletedAt is absent", () => {
@@ -1231,17 +1243,13 @@ describe("TrashItemRow deleted-date fallback chain", () => {
       trashedTime,
       modifiedTime: "2026-06-01T00:00:00.000Z",
     });
-    expect(
-      screen.getByText(new Date(trashedTime).toLocaleDateString()),
-    ).not.toBeNull();
+    expect(screen.getByText(deletedDate(trashedTime))).not.toBeNull();
   });
 
   it("falls back to modifiedTime when deletedAt and trashedTime are absent", () => {
     const modifiedTime = "2026-06-01T00:00:00.000Z";
     renderRow("Track", { modifiedTime });
-    expect(
-      screen.getByText(new Date(modifiedTime).toLocaleDateString()),
-    ).not.toBeNull();
+    expect(screen.getByText(deletedDate(modifiedTime))).not.toBeNull();
   });
 
   it("renders — when nothing is available (never fabricates a date)", () => {
@@ -1324,8 +1332,8 @@ describe("Trash header sorting", () => {
   it("orders rows by the chosen column: Date-added desc by default, toggle flips, Name applies asc", async () => {
     const alpha = "2026-02-01T00:00:00.000Z";
     const omega = "2026-02-03T00:00:00.000Z";
-    const alphaDate = new Date(alpha).toLocaleDateString();
-    const omegaDate = new Date(omega).toLocaleDateString();
+    const alphaDate = deletedDate(alpha);
+    const omegaDate = deletedDate(omega);
     await renderWithItems([
       {
         id: "f1",
@@ -1405,8 +1413,8 @@ describe("Trash header sorting", () => {
   it("trash date rows sort on the same effective date the rows display (fallback chain)", async () => {
     const early = "2026-01-05T00:00:00.000Z";
     const late = "2026-01-25T00:00:00.000Z";
-    const earlyDate = new Date(early).toLocaleDateString();
-    const lateDate = new Date(late).toLocaleDateString();
+    const earlyDate = deletedDate(early);
+    const lateDate = deletedDate(late);
     await renderWithItems([
       {
         id: "f1",
@@ -1440,8 +1448,8 @@ describe("Trash header sorting", () => {
   it("sorts items deleted after this feature exactly like fallback rows (deletedAt path)", async () => {
     const early = "2026-01-05T00:00:00.000Z";
     const late = "2026-01-25T00:00:00.000Z";
-    const earlyDate = new Date(early).toLocaleDateString();
-    const lateDate = new Date(late).toLocaleDateString();
+    const earlyDate = deletedDate(early);
+    const lateDate = deletedDate(late);
     await renderWithItems([
       {
         id: "f1",

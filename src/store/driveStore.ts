@@ -94,7 +94,11 @@ export const useDriveStore = create<DriveState>((set) => ({
   currentFolderId: ROOT_FOLDER_ID,
   currentFolderName: MY_DRIVE_TAB,
   folderHistory: [],
-  sortOption: "name",
+  // Fresh-install default: Date modified, newest first (Google Drive pattern).
+  // Existing users keep their saved choice — useDriveInit restores
+  // drplay_sort_option from LS on every boot, overwriting this only when a
+  // value exists.
+  sortOption: "modifiedTime desc",
   // Loading starts TRUE so the first committed frame of My Drive is the
   // skeleton — useDriveExplorer turns it off once the folder fetch settles.
   // Starting false flashed the "no audio" empty state for one frame (RC-B).

@@ -1,9 +1,13 @@
 import { useSyncExternalStore } from "react";
 
-// Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar)
-// — the file-list container sizes itself to fill the viewport below it
-// (applied as min-height: calc(100% - 140px) on the [data-drop-region] div).
-export const HEADER_CHROME_HEIGHT_PX = 140;
+// Estimated height of the sticky header chrome (TopNavigationBar + SelectionToolbar
+// + the Trash-style FileListHeader column row, h-9) — the file-list container
+// sizes itself to fill the viewport below it (applied as min-height:
+// calc(100% - 176px) on the [data-drop-region] div). The header only renders
+// in the loaded list state, so the estimate matches the POST-load chrome:
+// sizing the skeleton against the smaller toolbar-only height would overflow
+// the list area by the header's height and jump when loading finishes.
+export const HEADER_CHROME_HEIGHT_PX = 176;
 
 // Skeleton row ≈ 72px tall: 48px icon + p-3 (12px) padding top/bottom.
 const SKELETON_ROW_HEIGHT_PX = 72;

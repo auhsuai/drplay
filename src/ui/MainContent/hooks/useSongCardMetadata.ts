@@ -15,7 +15,6 @@ type SongCardMeta = {
   artist: string | null;
   duration: number;
   durationEstimated: boolean;
-  size: number;
   loaded: boolean;
 };
 
@@ -38,15 +37,16 @@ export function useSongCardMetadata({
   coverUrl: string | null;
   clearCover: () => void;
 } {
-  // loaded=true only after getTrackMetadata resolves, so the meta row (duration
-  // • size) appears only for real metadata — the old size>0 guard also hid
-  // legitimate 0-byte files, which must show "0 B" (formatBytes semantics).
+  // loaded=true only after getTrackMetadata resolves, so the duration span
+  // appears only for real metadata. (Size used to ride along here with a
+  // fallback chain to item.trackInfo?.size — it moved to the dedicated Size
+  // column in SongCard, which reads item.size directly, so this hook no
+  // longer tracks it.)
   const [meta, setMeta] = useState<SongCardMeta>({
     title: item.title,
     artist: null,
     duration: 0,
     durationEstimated: false,
-    size: 0,
     loaded: false,
   });
 
@@ -57,11 +57,6 @@ export function useSongCardMetadata({
         artist: metadata.artist || null,
         duration: metadata.duration || 0,
         durationEstimated: metadata.durationEstimated,
-        // Old cached placeholders (pre-fix) carry no size — fall back to
-        // the Drive listing size so a failed metadata fetch never shows
-        // "0 B" next to real sizes (a true 0-byte file keeps "0 B": ?? only
-        // falls back on null/undefined, not on a real 0).
-        size: metadata.size ?? item.trackInfo?.size ?? 0,
         loaded: true,
       };
       setMeta((prev) => {
@@ -70,7 +65,6 @@ export function useSongCardMetadata({
           newMeta.artist === prev.artist &&
           newMeta.duration === prev.duration &&
           newMeta.durationEstimated === prev.durationEstimated &&
-          newMeta.size === prev.size &&
           newMeta.loaded === prev.loaded
         ) {
           return prev;
@@ -78,7 +72,7 @@ export function useSongCardMetadata({
         return newMeta;
       });
     },
-    [item.title, item.trackInfo?.size],
+    [item.title],
   );
 
   const onError = useCallback(

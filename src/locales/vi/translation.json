@@ -113,7 +113,10 @@
     "folder_name_invalid": "Tên thư mục chứa ký tự không hợp lệ",
     "sort": "Sắp xếp",
     "unknown_folder": "Thư mục không xác định",
-    "song_list": "Danh sách bài hát"
+    "song_list": "Danh sách bài hát",
+    "col_name": "Tên",
+    "col_date_modified": "Ngày sửa đổi",
+    "col_size": "Kích thước"
   },
   "liked_songs": {
     "title": "Bài hát đã thích",

@@ -30,6 +30,15 @@ describe("driveStore rootFolders contract", () => {
     expect(freshStore.getState().rootFolders).toEqual([]);
   });
 
+  // Fresh-install default: My Drive opens sorted by Date modified, newest
+  // first. Existing users are unaffected — useDriveInit restores the saved
+  // drplay_sort_option from LS over this default.
+  it("ships with sortOption = 'modifiedTime desc' (date-modified, newest first)", async () => {
+    vi.resetModules();
+    const { useDriveStore: freshStore } = await import("./driveStore");
+    expect(freshStore.getState().sortOption).toBe("modifiedTime desc");
+  });
+
   it("setRootFolders stores the ordered list as given", () => {
     useDriveStore.setState({ rootFolders: [] });
     useDriveStore.getState().setRootFolders([

@@ -49,12 +49,18 @@ function formatSize(size?: string): string {
 // Exact-when-available deleted date: deletedAt (appProperties timestamp) →
 // trashedTime (shared drives only) → modifiedTime (approximation, NOT the
 // trashed time) → "—" when nothing is available. Never fabricate a date.
+// Zero-padded day/month for app-wide consistency with the My Drive Date
+// column (01/01/2025, not 1/1/2025); the locale still owns the field order.
 function formatDeletedDate(item: TrashItemData): string {
   const raw = item.deletedAt ?? item.trashedTime ?? item.modifiedTime;
   if (raw === undefined || raw === "") return "—";
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 // Inline film icon for files the shared isVideoFile allowlist classifies as

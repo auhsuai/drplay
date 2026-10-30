@@ -42,12 +42,12 @@ function SortIndicator({ direction }: { direction: TrashSortDirection }) {
   return (
     <span
       aria-hidden="true"
-      className="flex w-4 h-4 shrink-0 items-center justify-center rounded-full bg-brand-primary text-white"
+      className="flex w-[22px] h-[22px] shrink-0 items-center justify-center rounded-full bg-brand-primary text-white"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        width="10"
-        height="10"
+        width="16"
+        height="16"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"

@@ -23,6 +23,7 @@ import { useMainContentKeyboard } from "./hooks/useMainContentKeyboard";
 
 import { TopNavigationBar } from "./components/TopNavigationBar";
 import { SelectionToolbar } from "./components/SelectionToolbar";
+import { FileListHeader } from "./components/FileListHeader";
 import { PaginationControls } from "./components/PaginationControls";
 import { SkeletonRowList } from "../components/Skeleton";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
@@ -260,6 +261,46 @@ export const MainContent = React.memo(function MainContent({
           onBulkMoveClick={handleBulkMoveClick}
           onBulkDeleteClick={handleBulkDeleteClick}
         />
+
+        {/* Trash-style sortable column header, living INSIDE the sticky
+            chrome so it inherits stickiness with zero offset math (a second
+            sticky band would double the sticky offset for rows). Guards,
+            each mirroring an existing precedent:
+            - isVirtualRoot: root rows are all folders with no date/size
+              (precedent: showNewFolderButton).
+            - searchQuery: search results are relevance-ordered and ignore
+              sortOption (useDriveSearch) — a clickable header that does
+              nothing would be a lie.
+            - isSelectionMode: selection checkboxes lead every row and would
+              misalign the columns, so the header hides (it is the only sort
+              control in this view now — the toolbar dropdown was removed).
+            - onSortChange: render only when a callback is wired (defensive,
+              mirrors the prop's optionality). The list-branch guards (not
+              loading skeleton, not empty) come from the render site below.
+            Changing the sort clears selection and resets the page — the
+            existing useDriveExplorer contract. */}
+        {!isVirtualRoot &&
+          !explorer.isSelectionMode &&
+          explorer.searchQuery.trim() === "" &&
+          onSortChange !== undefined && (
+            <>
+              {/* Toolbar divider. Edges are pinned to the toolbar's own
+                  elements, not to the chrome padding: the Back icon starts
+                  6px inside its p-1.5 button, so ml-[6px] lands the divider's
+                  left edge exactly on the icon; the New Folder button is the
+                  toolbar's last child (justify-between) and its right edge is
+                  the chrome's pr-4, so mr-0 is exact. Change this if the
+                  toolbar's leading/trailing furniture changes. */}
+              <div
+                aria-hidden="true"
+                className="mt-2 ml-[6px] h-px shrink-0 bg-gray-200 dark:bg-[#2A2A2A]"
+              />
+              <FileListHeader
+                sortOption={sortOption}
+                onSortChange={onSortChange}
+              />
+            </>
+          )}
       </div>
 
       <div

@@ -74,7 +74,6 @@ vi.mock("../hooks/useSongCardMetadata", () => ({
       artist: null,
       duration: 0,
       durationEstimated: false,
-      size: 0,
       loaded: false,
     },
     coverUrl: null,

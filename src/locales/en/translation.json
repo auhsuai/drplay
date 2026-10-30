@@ -113,7 +113,10 @@
     "folder_name_invalid": "Folder name contains invalid characters",
     "sort": "Sort",
     "unknown_folder": "Unknown Folder",
-    "song_list": "Song list"
+    "song_list": "Song list",
+    "col_name": "Name",
+    "col_date_modified": "Date modified",
+    "col_size": "Size"
   },
   "liked_songs": {
     "title": "Liked Songs",

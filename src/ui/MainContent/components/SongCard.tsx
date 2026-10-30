@@ -4,9 +4,18 @@ import { useTranslation } from "react-i18next";
 import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
 import { formatBytes } from "../../../utils/formatBytes";
+import { isVideoFile } from "../../../utils/audioQuery";
 import { MoreMenu } from "../../components/MoreMenu";
 import type { MoreMenuVariant } from "../../components/MoreMenu";
 import { formatDuration } from "../utils/formatDuration";
+import {
+  LIST_ACTIONS_TRACK,
+  LIST_DATE_TRACK,
+  LIST_GAP,
+  LIST_ICON_TRACK,
+  LIST_ROW_PADDING,
+  LIST_SIZE_TRACK,
+} from "./listColumnLayout";
 import {
   useHighlightFlash,
   ACCENT_CARD_TINT,
@@ -60,6 +69,61 @@ function cardStateClass(
   if (isSelected) return CARD_STATE_CLASSES.selected;
   if (isPlaying) return CARD_STATE_CLASSES.playing;
   return CARD_STATE_CLASSES.idle;
+}
+
+// DriveItem.size is the listing's parsed byte count (number | undefined);
+// folders and missing values have none. Malformed values fall back to "—"
+// instead of formatBytes' "0 B" (same policy as TrashItemRow.formatSize).
+function formatSize(size?: number): string {
+  if (size === undefined || !Number.isFinite(size)) return "—";
+  return formatBytes(size);
+}
+
+// Real modifiedTime in the Date column: locale date for every row (folders
+// included), "—" for missing/malformed — never a fabricated date (same
+// policy as TrashItemRow.formatDeletedDate). Zero-padded day/month
+// (01/01/2025, not 1/1/2025); the locale still owns the field order.
+function formatModifiedDate(raw?: string): string {
+  if (raw === undefined || raw === "") return "—";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+// Inline film icon for files the shared isVideoFile allowlist classifies as
+// video. Exact lucide `film` artwork (lucide.dev/icons/film, ISC license) —
+// rendered inline so the classification and artwork live next to the card's
+// other icons without a second lucide import. Same artwork TrashItemRow
+// ships; w-6 h-6 because this card's tile is w-12 (Trash's tile is w-8 with
+// w-4 icons — same proportion).
+function FilmIcon(): React.JSX.Element {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="lucide lucide-film w-6 h-6"
+    >
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M7 3v18" />
+      <path d="M3 7.5h4" />
+      <path d="M3 12h18" />
+      <path d="M3 16.5h4" />
+      <path d="M17 3v18" />
+      <path d="M17 7.5h4" />
+      <path d="M17 16.5h4" />
+    </svg>
+  );
 }
 
 export const SongCard = React.memo(
@@ -156,7 +220,7 @@ export const SongCard = React.memo(
           className={`group w-full rounded-xl cursor-pointer`}
         >
           <div
-            className={`p-3 rounded-xl transition-all duration-300 flex items-center gap-4 active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${cardStateClass(isFlashOn, isSelected, isPlaying)}`}
+            className={`${LIST_ROW_PADDING} rounded-xl transition-all duration-300 flex items-center ${LIST_GAP} active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${cardStateClass(isFlashOn, isSelected, isPlaying)}`}
           >
             {isSelectionMode && (
               <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
@@ -168,7 +232,7 @@ export const SongCard = React.memo(
               </div>
             )}
             <div
-              className={`relative w-12 h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-text ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-text!" : "text-gray-400"}`}`}
+              className={`relative ${LIST_ICON_TRACK} h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-text ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-text!" : "text-gray-400"}`}`}
             >
               {coverUrl && !item.isFolder ? (
                 <img
@@ -187,6 +251,8 @@ export const SongCard = React.memo(
                 />
               ) : item.isFolder ? (
                 <Folder className="w-6 h-6" fill="currentColor" />
+              ) : isVideoFile(undefined, item.trackInfo?.originalName ?? "") ? (
+                <FilmIcon />
               ) : (
                 <Music className="w-6 h-6 opacity-80" />
               )}
@@ -198,31 +264,46 @@ export const SongCard = React.memo(
                   <span className="truncate">{t("drive.folders")}</span>
                 ) : (
                   <div className="flex items-center truncate">
+                    {/* Duration-only subtitle: the size moved to the Size
+                        column (item.size, always visible) so it no longer
+                        waits for the async metadata load here. */}
                     {meta.loaded && (
-                      <>
-                        <span className="text-[11px] font-medium tracking-wide">
-                          {/* Fix F: a 0/estimated duration is unknown — render
-                              "–" instead of the fake "00:00:00" a placeholder
-                              used to show. */}
-                          {meta.duration > 0 && !meta.durationEstimated
-                            ? formatDuration(meta.duration)
-                            : "–"}
-                        </span>
-                        <span className="mx-2 text-gray-300 dark:text-gray-600">
-                          •
-                        </span>
-                        <span className="text-[11px] font-medium tracking-wide">
-                          {formatBytes(meta.size)}
-                        </span>
-                      </>
+                      <span className="text-[11px] font-medium tracking-wide">
+                        {/* Fix F: a 0/estimated duration is unknown — render
+                            "–" instead of the fake "00:00:00" a placeholder
+                            used to show. */}
+                        {meta.duration > 0 && !meta.durationEstimated
+                          ? formatDuration(meta.duration)
+                          : "–"}
+                      </span>
                     )}
                   </div>
                 )}
               </div>
             </div>
+            {/* Date + Size columns. Typography matches the filename
+                (text-sm font-medium) with its exact color tokens
+                (text-gray-800 dark:text-gray-200 via titleClass) — one tone
+                dimmer, not a separate secondary style. Tracks come from the
+                shared column grid (listColumnLayout.ts) so this row and the
+                FileListHeader stay pixel-aligned. Data renders straight from
+                the listing — no metadata-load gate — so every row shows its
+                date/size immediately. */}
+            <span
+              className={`${LIST_DATE_TRACK} text-sm font-medium text-gray-700 dark:text-gray-300 tabular-nums`}
+            >
+              {formatModifiedDate(item.modifiedTime)}
+            </span>
+            <span
+              className={`${LIST_SIZE_TRACK} text-sm font-medium text-gray-700 dark:text-gray-300 tabular-nums`}
+            >
+              {formatSize(item.size)}
+            </span>
             {!hideMenu && (
+              // Same fixed actions box as the header's trailing spacer (36px);
+              // the parent gap-4 provides the spacing, so no ml-2 here.
               <div
-                className={`transition-opacity ml-2 shrink-0 ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                className={`${LIST_ACTIONS_TRACK} flex items-center justify-end shrink-0 transition-opacity ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
               >
                 <MoreMenu
                   track={item.trackInfo}
@@ -264,6 +345,10 @@ export const SongCard = React.memo(
       prev.item.trackInfo?.id === next.item.trackInfo?.id &&
       prev.item.trackInfo?.queueItemId === next.item.trackInfo?.queueItemId &&
       prev.item.size === next.item.size &&
+      // The Date column renders modifiedTime — without this check a
+      // delta-sync update that changes it re-sorts the list but leaves the
+      // mounted card rendering the stale date.
+      prev.item.modifiedTime === next.item.modifiedTime &&
       prev.isPlaying === next.isPlaying &&
       prev.isSelected === next.isSelected &&
       prev.isSelectionMode === next.isSelectionMode &&
