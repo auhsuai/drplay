@@ -57,16 +57,6 @@ function formatDeletedDate(item: TrashItemData): string {
   return date.toLocaleDateString();
 }
 
-// Subtle extension badge text from the filename's last dot segment. Hidden
-// files (".gitignore" — no name before the dot), folders and extension-less
-// names show nothing. Pure display: video classification stays with the
-// isVideoFile allowlist.
-function fileExtension(name: string): string {
-  const dot = name.lastIndexOf(".");
-  if (dot <= 0) return "";
-  return name.slice(dot);
-}
-
 // Inline film icon for files the shared isVideoFile allowlist classifies as
 // video. Exact lucide `film` artwork (lucide.dev/icons/film, ISC license) —
 // rendered inline so the classification and artwork live next to the row's
@@ -109,7 +99,6 @@ export function TrashItemRow({
   const { t } = useTranslation();
   const isFolder = item.mimeType === FOLDER_MIME;
   const isBusy = isRestoring || isDeleting;
-  const extension = isFolder ? "" : fileExtension(item.name);
   return (
     <div
       data-testid="trash-row"
@@ -147,14 +136,6 @@ export function TrashItemRow({
       </div>
       <p className="flex-1 min-w-0 truncate text-sm font-medium text-gray-900 dark:text-gray-100">
         {item.name}
-        {extension !== "" && (
-          <span
-            data-testid="trash-extension"
-            className="ml-1.5 text-xs font-normal text-gray-500 dark:text-gray-400"
-          >
-            {extension}
-          </span>
-        )}
       </p>
       <span className="hidden sm:block w-24 shrink-0 text-xs text-gray-500 tabular-nums">
         {formatDeletedDate(item)}

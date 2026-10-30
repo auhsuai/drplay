@@ -1252,48 +1252,10 @@ describe("TrashItemRow deleted-date fallback chain", () => {
   });
 });
 
-// File extension badge: derived from the last dot segment of the filename.
-// Hidden files (".gitignore") and folders show none.
-describe("TrashItemRow file extension badge", () => {
-  const renderRow = (name: string, mimeType: string) =>
-    render(
-      <TrashItemRow
-        item={{ id: "f1", name, mimeType }}
-        isSelected={false}
-        isRestoring={false}
-        isDeleting={false}
-        onToggle={vi.fn()}
-        onRestore={vi.fn(() => Promise.resolve())}
-        onDelete={vi.fn()}
-      />,
-    );
-
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("shows the extension for a regular file", () => {
-    renderRow("song.mp3", "audio/mpeg");
-    expect(screen.getByText(".mp3")).not.toBeNull();
-  });
-
-  it("shows no extension for hidden files, folders and extension-less names", () => {
-    renderRow(".gitignore", "text/plain");
-    expect(screen.queryByTestId("trash-extension")).toBeNull();
-
-    cleanup();
-    renderRow("Folder", "application/vnd.google-apps.folder");
-    expect(screen.queryByTestId("trash-extension")).toBeNull();
-
-    cleanup();
-    renderRow("extensionless", "application/octet-stream");
-    expect(screen.queryByTestId("trash-extension")).toBeNull();
-  });
-});
-
 // Sticky header sorting: column headers drive a props-driven sort owned by
-// TrashScreen. Defaults: Name asc, Date desc, Size desc; clicking the active
-// column toggles direction; aria-sort reflects the state on each column.
+// TrashScreen. Defaults: Date added desc (newest first), Name asc, Size desc;
+// clicking the active column toggles direction; aria-sort reflects the state
+// on each column.
 describe("Trash header sorting", () => {
   beforeEach(() => {
     deferredCalls = [];
