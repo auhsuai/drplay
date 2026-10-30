@@ -181,7 +181,7 @@ api.ts:32  getTrackMetadata(fileId, token?, size?, name?, signal?, forceNetwork=
 fetchPipeline.ts:52  getTrackMetadataImpl
    |-- :61-64  mem cache (lần 2, phòng race)
    |-- :68     readCachedEntry()
-   |             parse.ts:22-53  IDB row `metadata_<fileId>` (+ LRU full-picture restore)
+   |             parse.ts:16-48  IDB row `metadata_<fileId>` (+ LRU full-picture restore)
    |-- :73-80  size<=0 -> placeholder v:9, setMetadataCache, return (no network)
    |-- :86-95  per-file network cooldown 60s (cooldown.ts) -> placeholder, no network
    |-- :97-110 LARGE_FILE_THRESHOLD 100MB -> clamp parse size = HEAD_BYTES 128KB
@@ -227,7 +227,7 @@ Không còn entry point nào khác (các match còn lại của grep nằm trong
   3. Defer-until-first-audio: `src/hooks/player/deferOnce.ts:28-74` (`onceAfterFirstAudio` — fire đúng 1 lần khi `first-audio` hoặc fallback timer; drop khi `error`/abort/unmount). Dùng 2 chỗ trong `usePlayerTrackPlayback.ts`: metadata `:186-230` (fallback 9s) và SW prefetch next track `:244-262` (KHÔNG fallback — chờ signal mãi). Test: `usePlayer.metadataDefer.test.ts` + `usePlayer.prefetchDefer.test.ts`.
   4. Per-file network cooldown 60s — `metadata/cooldown.ts:15-37`; hằng số `constants.ts:44` (`METADATA_NETWORK_COOLDOWN_MS = 60_000`).
   5. Circuit breaker Drive toàn app — `driveRangeCircuitBreaker.ts:14-16` (3 failures / 30s → mở 60s, fail-fast).
-  6. `forceNetwork` param — `api.ts:38` bypass mem cache + IDB/disk (`parse.ts:22,61`) + cooldown (`fetchPipeline.ts:62,86`). Grep production: **không có UI nào gọi `forceNetwork=true`** (chỉ test + comment nhắc "RefreshCw button" — nguồn có thể đã lỗi thời, xem mục 10).
+  6. `forceNetwork` param — `api.ts:38` bypass mem cache + IDB (`parse.ts:17`) + cooldown (`fetchPipeline.ts:62,86`). Grep production: **không có UI nào gọi `forceNetwork=true`** (chỉ test + comment nhắc "RefreshCw button" — nguồn có thể đã lỗi thời, xem mục 10).
 
 **Cảnh báo thiết kế quan trọng (từ code thật):** trong `usePlayerTrackPlayback.ts`, `setIsDownloading(false)` nằm BÊN TRONG `onFire` (`:194`) và `onDrop` (`:227-229`). Nếu feature tắt metadata bằng cách bỏ qua hẳn `onceAfterFirstAudio(...)` (khối :186-230) thì spinner/khóa nút play (`setIsDownloading(true)` ở `:140`) sẽ KHÔNG bao giờ được gỡ. Muốn tắt fetch nhưng vẫn giữ UX loading, phải giữ đường thoát: ví dụ vẫn gọi `onceAfterFirstAudio` với `onFire` chỉ `setIsDownloading(false)`, hoặc chuyển `setIsDownloading(false)` ra ngoài nhánh metadata.
 
@@ -308,7 +308,7 @@ Các case (assert nguyên văn):
 ## 10. Rủi ro / điểm mù (cần main agent chốt hoặc xác minh thêm)
 
 1. **Không có store/subscription settings sẵn** — repo chỉ có prop-drilling (minimizeToTray) và localStorage lazy-read (theme). Nếu toggle cần được module ngoài React (`utils/metadata`) đọc và phản ứng tức thời, phải chọn 1 trong: (a) module setting utils + CustomEvent (precedent `favorites-updated`), (b) đọc localStorage tại từng entry point (chậm 1 nhịp, không có event), (c) thêm zustand store mới (repo chưa có settings store). Chưa có precedent trực tiếp cho "settings toàn cục" → cần main agent quyết định kiến trúc.
-2. **Định nghĩa "tắt fetch"**: chỉ chặn NETWORK hay chặn luôn CACHE? `readCachedEntry` (chỉ IDB) chạy trước network và không phân biệt lý do (`parse.ts:22-53`). Nếu chỉ chặn network, file đã cache vẫn hiển thị metadata cũ (kể cả cover/palette) — có thể lệch kỳ vọng user "tắt metadata". Nếu chặn tất, cần sửa cả `useTrackMetadata` (đang nhận entry từ cache như nhau) và các nhánh `readCachedEntry`.
+2. **Định nghĩa "tắt fetch"**: chỉ chặn NETWORK hay chặn luôn CACHE? `readCachedEntry` (chỉ IDB) chạy trước network và không phân biệt lý do (`parse.ts:12-51`). Nếu chỉ chặn network, file đã cache vẫn hiển thị metadata cũ (kể cả cover/palette) — có thể lệch kỳ vọng user "tắt metadata". Nếu chặn tất, cần sửa cả `useTrackMetadata` (đang nhận entry từ cache như nhau) và các nhánh `readCachedEntry`.
 3. **Spinner/loading state** (đã nêu mục 5): bỏ `onceAfterFirstAudio` metadata phải giữ `setIsDownloading(false)`; nếu không nút play kẹt trạng thái loading.
 4. **Bật lại giữa chừng**: `useTrackMetadata` chỉ fetch trong effect theo deps (`useTrackMetadata.ts:178-190`). Nếu toggle không được truyền vào deps/không ép remount, card đang mount sẽ không tự fetch lại; cần thiết kế (prop `enabled` xuống tận hook, hoặc event → `refreshKey`, hoặc remount Settings/grid). Chưa xác minh cách nào khả thi nhất vì phụ thuộc kiến trúc toggle được chọn.
 5. **Session restore**: track khôi phục từ session (`usePlayerSession.ts:106` set `restoreDuration`) không tự fetch metadata khi bật toggle vì pipeline B chỉ chạy lúc play. Chấp nhận hay không cần chốt.

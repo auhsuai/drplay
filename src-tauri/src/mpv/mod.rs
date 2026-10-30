@@ -78,6 +78,13 @@ pub(crate) fn event_sink(app: tauri::AppHandle) -> EventSink {
     })
 }
 
+/// Resolve the sidecar executable the same way `mpv_spawn` will, for the
+/// engine-selection probe in `player::engine_mode`. Read-only: no process is
+/// started. Returns the same actionable error `mpv_spawn` would.
+pub(crate) fn resolve_sidecar_exe(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    process::resolve_mpv_exe_for(app)
+}
+
 /// Spawn the mpv sidecar, connect the JSON IPC pipe and start observing the
 /// default property set. Idempotent: a healthy running sidecar makes this a
 /// no-op; a crashed one is reaped and replaced. The reply carries the
@@ -86,8 +93,10 @@ pub(crate) fn event_sink(app: tauri::AppHandle) -> EventSink {
 #[tauri::command]
 pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
     // Engine selection is a runtime decision (startup probe + spawn fallback):
-    // libmpv is the default; a failed spawn silently hands over to the legacy
-    // sidecar after reconstructing the native video host it needs.
+    // libmpv is the default; a failed spawn hands over to the legacy sidecar
+    // after reconstructing the native video host it needs -- but ONLY when that
+    // sidecar is actually installed. With the installer no longer shipping
+    // mpv.exe, falling back blindly meant launching a missing exe.
     if crate::player::is_libmpv_active() {
         match crate::player::spawn(&app).await {
             Ok(value) => return Ok(value),
@@ -103,15 +112,44 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
                         "libmpv engine is still shutting down or failed to tear down; refusing to start a second engine: {error}"
                     ));
                 }
+                // Never launch what is not there: resolve BEFORE recording
+                // `Legacy`, so the engine state never claims a sidecar that
+                // cannot start.
+                let sidecar_exe = match process::resolve_mpv_exe_for(&app) {
+                    Ok(exe) => exe,
+                    Err(resolve_error) => {
+                        // Record the honest state: libmpv just failed and there
+                        // is no sidecar, so NOTHING can play. Leaving the
+                        // decision on `Libmpv` would route every later control
+                        // call to a dead engine instead of the actionable error.
+                        log::error!(
+                            "[mpv] libmpv failed ({error}) and the fallback sidecar is not usable; \
+                             refusing to spawn: {resolve_error}"
+                        );
+                        crate::player::set_active_engine(crate::player::ActiveEngine::Unavailable(
+                            crate::player::UnavailableReason::LibmpvFailedNoSidecar,
+                        ));
+                        return Err(resolve_error);
+                    }
+                };
                 log::error!(
                     "[mpv] libmpv engine failed to start, falling back to the legacy sidecar: {error}"
                 );
                 crate::player::set_active_engine(crate::player::ActiveEngine::Legacy);
                 crate::player::replay_surface_after_fallback(&app).await;
+                return spawn_sidecar(&app, &sidecar_exe).await;
             }
         }
     }
-    let state = mpv_state(&app);
+    let sidecar_exe = process::resolve_mpv_exe_for(&app)?;
+    spawn_sidecar(&app, &sidecar_exe).await
+}
+
+/// The legacy path proper: one resolved, validated exe -> running sidecar.
+/// Split out so the libmpv fallback can hand over the exe it already probed
+/// (one resolution, no re-stat between the check and the launch).
+async fn spawn_sidecar(app: &tauri::AppHandle, sidecar_exe: &std::path::Path) -> Result<Value, String> {
+    let state = mpv_state(app);
     let mut slot = state.lock().await;
 
     if let Some(handle) = slot.as_mut() {
@@ -144,7 +182,7 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
     if mpv_log.is_none() {
         log::warn!("[mpv] app log dir unavailable — the sidecar will run without its own log");
     }
-    let spawned = process::spawn_mpv(&pipe_name, mpv_log.as_deref())?;
+    let spawned = process::spawn_mpv(sidecar_exe, &pipe_name, mpv_log.as_deref())?;
     let mut child = spawned.child;
     let mut job = spawned.job;
     let client = match process::connect_pipe(&pipe_name).await {
@@ -192,6 +230,22 @@ pub async fn mpv_spawn(app: tauri::AppHandle) -> Result<Value, String> {
     Ok(reply)
 }
 
+/// Refuse the legacy commands while no engine can run, with the same
+/// actionable error the spawn path gives. Without this, a user whose libmpv is
+/// broken and who never installed the fallback would see a bare "no sidecar has
+/// been spawned yet" from every control call.
+fn require_legacy_engine() -> Result<(), String> {
+    match crate::player::active_engine() {
+        crate::player::ActiveEngine::Unavailable(_) => Err(format!(
+            "{}: no playback engine is available. Install the optional fallback engine from \
+             Settings > Playback > Fallback engine, or (advanced) point {} at an mpv.exe you \
+             already have.",
+            process::FALLBACK_NOT_INSTALLED_SLUG, process::MPV_EXE_ENV
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Run one mpv IPC command, e.g. `["loadfile", url, "replace"]` or
 /// `["seek", "42", "absolute"]`. Returns `{ "data": <mpv data>, "load_epoch":
 /// <u64> }`: `data` keeps mpv's payload (unchanged), `load_epoch` is the
@@ -203,6 +257,7 @@ pub async fn mpv_command(cmd: Vec<String>) -> Result<Value, String> {
     if crate::player::is_libmpv_active() {
         return crate::player::command(cmd).await;
     }
+    require_legacy_engine()?;
     let args: Vec<Value> = cmd.into_iter().map(Value::String).collect();
     let ipc = running_ipc().await?;
     let data = ipc.send_command(args).await?;
@@ -215,6 +270,7 @@ pub async fn mpv_get_property(prop: String) -> Result<Value, String> {
     if crate::player::is_libmpv_active() {
         return crate::player::get_property(prop).await;
     }
+    require_legacy_engine()?;
     let ipc = running_ipc().await?;
     ipc.send_command(vec![json!("get_property"), json!(prop)]).await
 }

@@ -45,6 +45,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../../utils/cache", () => ({
   clearAppCache: vi.fn(),
   getCacheSizes: vi.fn(),
+  getFallbackEngineSize: vi.fn().mockResolvedValue(null),
+  removeFallbackEngine: vi.fn(),
+  FALLBACK_ENGINE_ID: "fallback_engine",
   CACHE_CATEGORY_LABELS: {
     metadata: "Metadata cache",
     files: "File listing cache",
@@ -100,15 +103,15 @@ describe("Clear Cache flow renders a real success toast", () => {
   it("appends an .app-toast--success element to document.body after confirming in the modal", async () => {
     render(<SettingsTab {...baseProps} />);
     // Settings trigger → modal opens (all categories default-checked).
-    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
     const modal = await screen.findByTestId("cache-manager-modal");
     await screen.findByText("Metadata cache");
-    fireEvent.click(within(modal).getByRole("button", { name: "Clear Cache" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "Clear Data" }));
 
     await waitFor(() => {
       const successToast = document.querySelector(".app-toast--success");
       expect(successToast).not.toBeNull();
-      expect(successToast?.textContent).toBe("Cache cleared");
+      expect(successToast?.textContent).toBe("App data cleared");
     });
     expect(document.querySelector(".app-toast--error")).toBeNull();
   });

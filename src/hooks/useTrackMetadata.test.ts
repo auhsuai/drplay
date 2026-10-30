@@ -338,7 +338,7 @@ describe("useTrackMetadata cover blob URL", () => {
   });
 });
 
-describe("useTrackMetadata coverOnDisk (seed offline drplay:// covers)", () => {
+describe("useTrackMetadata coverOnDisk (drplay:// disk covers)", () => {
   it("renders the drplay:// GET URL (thumb=true) for a disk entry with no full picture", async () => {
     mockedFetch.mockResolvedValue(makeMetadata({ coverOnDisk: true }));
     const { result, onMetadata } = renderTrackMetadata();

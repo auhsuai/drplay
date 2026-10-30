@@ -12,6 +12,8 @@ import en from "../../../locales/en/translation.json";
 import {
   getCacheSizes,
   clearAppCache,
+  getFallbackEngineSize,
+  removeFallbackEngine,
   type CacheCategoryId,
   type CacheCategoryInfo,
 } from "../../../utils/cache";
@@ -50,6 +52,9 @@ vi.mock("lucide-react", () => {
 vi.mock("../../../utils/cache", () => ({
   getCacheSizes: vi.fn(),
   clearAppCache: vi.fn(),
+  getFallbackEngineSize: vi.fn(),
+  removeFallbackEngine: vi.fn(),
+  FALLBACK_ENGINE_ID: "fallback_engine",
   CACHE_CATEGORY_LABELS: {
     metadata: "Metadata cache",
     files: "File listing cache",
@@ -96,7 +101,14 @@ describe("CacheManagerModal", () => {
   beforeEach(() => {
     vi.mocked(getCacheSizes).mockReset();
     vi.mocked(clearAppCache).mockReset();
+    vi.mocked(getFallbackEngineSize).mockReset();
+    vi.mocked(removeFallbackEngine).mockReset();
     vi.mocked(getCacheSizes).mockResolvedValue(SIZES);
+    // Default fixture: no fallback engine installed, so the extra row is absent
+    // and the pre-existing four-row assertions keep their meaning.
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(null);
+    vi.mocked(clearAppCache).mockResolvedValue(undefined);
+    vi.mocked(removeFallbackEngine).mockResolvedValue(undefined);
     showErrorToast.mockReset();
     showSuccessToast.mockReset();
     captureError.mockReset();
@@ -182,7 +194,7 @@ describe("CacheManagerModal", () => {
     checkboxes.forEach((cb) => fireEvent.click(cb));
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
-        name: "Clear Cache",
+        name: "Clear Data",
       }).disabled,
     ).toBe(true);
   });
@@ -195,7 +207,7 @@ describe("CacheManagerModal", () => {
     const coversCheckbox = checkboxes[1];
     if (coversCheckbox === undefined) throw new Error("expected checkbox");
     fireEvent.click(coversCheckbox);
-    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
     await waitFor(() => {
       expect(clearAppCache).toHaveBeenCalledWith([
         "metadata",
@@ -219,9 +231,9 @@ describe("CacheManagerModal", () => {
     const onClose = vi.fn();
     renderOpen(onClose);
     await screen.findByText("Metadata cache");
-    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
     await waitFor(() => {
-      expect(showSuccessToast).toHaveBeenCalledWith("Cache cleared");
+      expect(showSuccessToast).toHaveBeenCalledWith("App data cleared");
     });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(showErrorToast).not.toHaveBeenCalled();
@@ -231,14 +243,14 @@ describe("CacheManagerModal", () => {
     vi.mocked(clearAppCache).mockRejectedValue(new Error("boom"));
     renderOpen();
     await screen.findByText("Metadata cache");
-    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
     await waitFor(() => {
       expect(showErrorToast).toHaveBeenCalledWith(
-        "Couldn't clear cache. Try again.",
+        "Couldn't clear app data. Try again.",
       );
     });
     expect(showSuccessToast).not.toHaveBeenCalled();
-    expect(screen.getByText("Clear App Cache")).toBeTruthy();
+    expect(screen.getByText("Clear App Data")).toBeTruthy();
   });
 
   it("closes on Escape keydown", async () => {
@@ -260,9 +272,7 @@ describe("CacheManagerModal", () => {
   it("exposes the visible title as the dialog's accessible name", async () => {
     renderOpen();
     await screen.findByText("Metadata cache");
-    expect(
-      screen.getByRole("dialog", { name: "Clear App Cache" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Clear App Data" })).toBeTruthy();
   });
 
   it("moves focus to Cancel on open and restores it to the invoker on close", async () => {
@@ -283,5 +293,212 @@ describe("CacheManagerModal", () => {
     } finally {
       invoker.remove();
     }
+  });
+});
+
+// ─── Optional mpv.exe fallback engine row ───────────────────────────────────
+// The engine is NOT a cache category: it has its own remove command and is
+// absent on most machines, so the row must appear only when installed and must
+// never be checked by default.
+describe("CacheManagerModal — mpv.exe fallback engine row", () => {
+  const ENGINE_BYTES = 121_946_112; // ~116.3 MB
+
+  // Sibling describe: the top-level beforeEach does not apply here.
+  beforeEach(() => {
+    vi.mocked(getCacheSizes).mockReset();
+    vi.mocked(clearAppCache).mockReset();
+    vi.mocked(getFallbackEngineSize).mockReset();
+    vi.mocked(removeFallbackEngine).mockReset();
+    vi.mocked(getCacheSizes).mockResolvedValue(SIZES);
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(null);
+    vi.mocked(clearAppCache).mockResolvedValue(undefined);
+    vi.mocked(removeFallbackEngine).mockResolvedValue(undefined);
+    showErrorToast.mockReset();
+    showSuccessToast.mockReset();
+    captureError.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function uncheckAllCategories(): void {
+    for (const cb of screen.getAllByRole("checkbox")) {
+      if ((cb as HTMLInputElement).checked) fireEvent.click(cb);
+    }
+  }
+
+  // (1)
+  it("does NOT render the fallback row when the fallback is not installed", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(null);
+    renderOpen();
+    await screen.findByText("Metadata cache");
+
+    expect(screen.queryByText("mpv.exe fallback engine")).toBeNull();
+    expect(screen.queryByTestId("fallback-engine-checkbox")).toBeNull();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(4);
+  });
+
+  // (2)
+  it("renders the fallback row when installed, unchecked, while the four cache rows stay checked", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(ENGINE_BYTES);
+    renderOpen();
+
+    expect(await screen.findByText("mpv.exe fallback engine")).toBeTruthy();
+    const engineCheckbox = screen.getByTestId<HTMLInputElement>(
+      "fallback-engine-checkbox",
+    );
+    expect(engineCheckbox.checked).toBe(false);
+
+    const cacheCheckboxes = screen
+      .getAllByRole("checkbox")
+      .filter((cb) => cb !== engineCheckbox) as HTMLInputElement[];
+    expect(cacheCheckboxes).toHaveLength(4);
+    expect(cacheCheckboxes.every((cb) => cb.checked)).toBe(true);
+
+    // Same size column as the cache rows, formatted by formatBytes.
+    expect(screen.getByText("116.3 MB")).toBeTruthy();
+
+    // BUG 1: the size must not wrap. 116.3 MB does not fit a w-14 (56px)
+    // column, so the column is w-20 and the value is explicitly nowrap and
+    // right-aligned. A regression here renders "116.3" / "MB" on two lines.
+    const sizeText = screen.getByText("116.3 MB");
+    expect(sizeText.className).toContain("whitespace-nowrap");
+    expect(sizeText.className).toContain("w-20");
+    expect(sizeText.className).toContain("text-right");
+    // Every cache row's size cell uses the same column width.
+    const cacheSizeCells = screen.getAllByText("1 KB");
+    expect(cacheSizeCells[0]?.className).toContain("whitespace-nowrap");
+    expect(cacheSizeCells[0]?.className).toContain("w-20");
+  });
+
+  // (3)
+  it("confirming with only the fallback checked removes the engine and clears no category", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(ENGINE_BYTES);
+    renderOpen();
+    await screen.findByText("mpv.exe fallback engine");
+
+    uncheckAllCategories();
+    fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+
+    await waitFor(() => {
+      expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
+    });
+    expect(clearAppCache).not.toHaveBeenCalled();
+    expect(showSuccessToast).toHaveBeenCalledWith("App data cleared");
+  });
+
+  // (4)
+  it("confirming with cache rows checked and the fallback unchecked does NOT remove the engine", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(ENGINE_BYTES);
+    renderOpen();
+    await screen.findByText("mpv.exe fallback engine");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+
+    await waitFor(() => {
+      expect(clearAppCache).toHaveBeenCalledWith([
+        "metadata",
+        "files",
+        "covers",
+        "prefetch",
+      ]);
+    });
+    expect(removeFallbackEngine).not.toHaveBeenCalled();
+  });
+
+  // (5)
+  it("runs both the cache clears and the removal when both are checked", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(ENGINE_BYTES);
+    renderOpen();
+    await screen.findByText("mpv.exe fallback engine");
+
+    fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+
+    await waitFor(() => {
+      expect(clearAppCache).toHaveBeenCalledTimes(1);
+      expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
+    });
+    expect(showSuccessToast).toHaveBeenCalledWith("App data cleared");
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+
+  // (6)
+  it("surfaces the aggregate error when removal fails, and the cache clears still ran", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(ENGINE_BYTES);
+    vi.mocked(removeFallbackEngine).mockRejectedValue(
+      new Error("could not remove the fallback engine: permission denied"),
+    );
+    const onClose = vi.fn();
+    renderOpen(onClose);
+    await screen.findByText("mpv.exe fallback engine");
+
+    fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+
+    await waitFor(() => {
+      expect(showErrorToast).toHaveBeenCalledWith(
+        "Couldn't clear app data. Try again.",
+      );
+    });
+    // Order independence: both groups were attempted despite the failure.
+    expect(clearAppCache).toHaveBeenCalledTimes(1);
+    expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
+    expect(showSuccessToast).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText("Clear App Data")).toBeTruthy();
+  });
+
+  // (6b) The mirror case: a cache failure must not skip the removal.
+  it("still removes the engine when a cache category fails", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(ENGINE_BYTES);
+    vi.mocked(clearAppCache).mockRejectedValue(new Error("ipc down"));
+    renderOpen();
+    await screen.findByText("mpv.exe fallback engine");
+
+    fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+
+    await waitFor(() => {
+      expect(showErrorToast).toHaveBeenCalledWith(
+        "Couldn't clear app data. Try again.",
+      );
+    });
+    expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
+    expect(showSuccessToast).not.toHaveBeenCalled();
+  });
+
+  // (7) Title/confirm copy, localized from the en resources.
+  it("renders the renamed dialog title and confirm button", async () => {
+    renderOpen();
+    await screen.findByText("Metadata cache");
+
+    expect(screen.getByRole("dialog", { name: "Clear App Data" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Clear App Data" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clear Data" })).toBeTruthy();
+  });
+
+  // An installed engine alone keeps the confirm enabled (the four rows can all
+  // be unchecked); nothing checked at all keeps it disabled.
+  it("keeps Clear enabled when only the fallback row is checked", async () => {
+    vi.mocked(getFallbackEngineSize).mockResolvedValue(ENGINE_BYTES);
+    renderOpen();
+    await screen.findByText("mpv.exe fallback engine");
+
+    uncheckAllCategories();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Clear Data" })
+        .disabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Clear Data" })
+        .disabled,
+    ).toBe(false);
   });
 });

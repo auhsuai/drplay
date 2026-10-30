@@ -1197,7 +1197,7 @@ describe("getTrackMetadata real metadata fetch", () => {
 
 // ---- Settings toggle: metadata fetch disabled
 //
-// The guard sits in getTrackMetadataImpl AFTER the mem/IDB/disk cache read and
+// The guard sits in getTrackMetadataImpl AFTER the mem/IDB cache read and
 // BEFORE any tokenizer/network work, so cached entries keep serving while the
 // toggle is OFF — only NEW network fetches stop.
 describe("metadata fetch disabled (settings toggle OFF)", () => {

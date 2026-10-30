@@ -204,14 +204,24 @@ The file should have the installed-client shape expected by `src-tauri/src/auth.
 
 ### 3. Fetch Windows playback/runtime artifacts
 
-Run these scripts in a Windows environment. They stage the mpv sidecar, `libmpv-2.dll`, and the fixed WebView2 runtime referenced by the Tauri bundle configuration:
+Run these scripts in a Windows environment. They stage `libmpv-2.dll` plus the fixed WebView2 runtime referenced by the Tauri bundle configuration:
 
 ```powershell
 npm run fetch-mpv
 npm run fetch-webview2
 ```
 
-The mpv fetch script checks expected file sizes and SHA-256 digests. If the pinned mpv release has been removed upstream, the script can fall back to the latest release and prints a warning; review that warning rather than silently assuming the build used the pinned engine.
+`npm run fetch-mpv` is the production path: it downloads only `libmpv-2.dll`, the in-process playback engine, because `bundle.externalBin` is empty and the MSI does **not** include `mpv.exe`. Users install the external mpv player on demand from Settings.
+
+Development and integration flows that still exercise the sidecar path need the `mpv.exe` binary as well:
+
+```powershell
+npm run fetch-mpv:sidecar
+```
+
+`fetch-mpv:sidecar` stages both `libmpv-2.dll` and `src-tauri/bin/mpv-x86_64-pc-windows-msvc.exe` (the sidecar pin is dev-only now). Add `-- --force` to either script to re-download the artifacts it selected.
+
+The mpv fetch script checks expected file sizes and SHA-256 digests, and verifies the pinned 7-Zip extractor hash before running it. If the pinned mpv release has been removed upstream, the script can fall back to the latest release and prints a warning; review that warning rather than silently assuming the build used the pinned engine.
 
 ### 4. Run the app or build an installer
 

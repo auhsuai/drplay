@@ -14,6 +14,7 @@ import { ThemeDropdown } from "./components/ThemeDropdown";
 import { CreditsSection } from "./components/CreditsSection";
 import { ErrorLogSection } from "./components/ErrorLogSection";
 import { CacheManagerModal } from "./components/CacheManagerModal";
+import { FallbackEngineSection } from "./components/FallbackEngineSection";
 
 import type { ThemeType } from "../../hooks/useTheme";
 import { truncatePathMiddle } from "../../utils/truncatePath";
@@ -311,6 +312,8 @@ export function SettingsTab({
               </button>
             </div>
           </div>
+
+          <FallbackEngineSection />
 
           <CreditsSection />
 
