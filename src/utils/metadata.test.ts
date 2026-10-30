@@ -14,15 +14,7 @@ const tokenizerConstructions = vi.hoisted(
   () => [] as Array<{ budgetBytes: number | undefined }>,
 );
 
-// Mock of the Tauri IPC bridge: the disk-first path (seed offline import)
-// reads <app_cache_dir>/metadata through invoke('read_metadata_disk'). The
-// default null means "no disk entry" so pre-existing tests fall through to the
-// IDB/network pipeline untouched.
-const invokeMock = vi.hoisted(() => vi.fn());
-
 const memoryStore = new Map<string, MetadataCacheRow>();
-
-vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 vi.mock("./coverStore", () => ({
   postCoverToCache: postCoverToCacheMock,
@@ -82,7 +74,6 @@ import {
   metadataCache,
   cacheTrackMetadata,
   clearAllMetadataCache,
-  getTrackMetadata,
   LARGE_FILE_THRESHOLD,
   V_PLACEHOLDER,
   TAG_BUDGET_MAX,
@@ -101,7 +92,6 @@ import {
   TAIL_BYTES,
 } from "./driveRangeTokenizer";
 import swSource from "../../public/sw.js?raw";
-import { parseDiskMetadata } from "./metadata/fetchPipeline";
 import { captureError } from "./errorLog";
 import {
   compressCoverVariants,
@@ -577,10 +567,6 @@ beforeEach(async () => {
   filesUpdate.mockClear();
   tokenizerConstructions.length = 0;
   vi.mocked(captureError).mockClear();
-  // Disk-first default: no entry on disk → the IDB/network pipeline runs
-  // exactly as before for every pre-existing test.
-  invokeMock.mockReset();
-  invokeMock.mockResolvedValue(null);
   clearAllMetadataCache();
   // Fix H: the Drive throttle breaker is module-level, and these tests share
   // ONE tokenizer module instance across describe blocks (fresh() is a cached
@@ -1211,7 +1197,7 @@ describe("getTrackMetadata real metadata fetch", () => {
 
 // ---- Settings toggle: metadata fetch disabled
 //
-// The guard sits in getTrackMetadataImpl AFTER the mem/IDB/disk cache read and
+// The guard sits in getTrackMetadataImpl AFTER the mem/IDB cache read and
 // BEFORE any tokenizer/network work, so cached entries keep serving while the
 // toggle is OFF — only NEW network fetches stop.
 describe("metadata fetch disabled (settings toggle OFF)", () => {
@@ -3477,339 +3463,6 @@ describe("getTrackMetadata blind head fetch (1.5MB head, no byte-0 tag refetch)"
     for (const opt of optionSets) {
       expect(opt?.skipPostHeaders).toBe(true);
     }
-  });
-});
-
-// ---- Seed offline import: disk-first reads through invoke('read_metadata_disk')
-
-// A valid v:8 disk entry as the Colab notebook writes it (CachedMetadata +
-// coverOnDisk + extended fields). pictureData/pictureDataFull are null on
-// disk — the cover renders via the drplay:// GET from the Rust disk cache.
-const DISK_JSON_V8 = JSON.stringify({
-  title: "Disk Title",
-  artist: "Disk Artist",
-  album: "Disk Album",
-  duration: 180.5,
-  durationEstimated: false,
-  pictureData: null,
-  pictureDataFull: null,
-  pictureFormat: "image/jpeg",
-  bitrate: 320000,
-  size: 12345678,
-  v: 8,
-  coverOnDisk: true,
-  genre: "Rock",
-  year: 1999,
-  trackNumber: 3,
-  albumArtist: "Album Artist",
-  sampleRate: 44100,
-  bitDepth: 16,
-  channels: 2,
-});
-
-describe("getTrackMetadata disk-first (seed offline)", () => {
-  beforeEach(() => {
-    invokeMock.mockReset();
-  });
-
-  it("serves a valid v:8 disk JSON without touching the network", async () => {
-    invokeMock.mockResolvedValue(DISK_JSON_V8);
-    const entry = await getTrackMetadata(
-      "disk-id-1",
-      "test-token",
-      2048,
-      "song.mp3",
-    );
-    expect(invokeMock).toHaveBeenCalledWith("read_metadata_disk", {
-      fileId: "disk-id-1",
-    });
-    expect(entry.title).toBe("Disk Title");
-    expect(entry.artist).toBe("Disk Artist");
-    expect(entry.duration).toBe(180.5);
-    expect(entry.v).toBe(8);
-    expect(entry.coverOnDisk).toBe(true);
-    expect(entry.pictureData).toBeNull();
-    expect(entry.pictureDataFull).toBeNull();
-    // Extended fields survive the disk read untouched.
-    expect(entry.genre).toBe("Rock");
-    expect(entry.year).toBe(1999);
-    expect(entry.trackNumber).toBe(3);
-    expect(entry.albumArtist).toBe("Album Artist");
-    expect(entry.sampleRate).toBe(44100);
-    expect(entry.bitDepth).toBe(16);
-    expect(entry.channels).toBe(2);
-    // No range fetch, no parse: the network pipeline was never reached.
-    expect(tokenizerConstructions).toHaveLength(0);
-  });
-
-  it("keeps the disk entry out of IDB (disk is the single source of truth)", async () => {
-    invokeMock.mockResolvedValue(DISK_JSON_V8);
-    await getTrackMetadata("disk-id-1", "test-token", 2048, "song.mp3");
-    expect(memoryStore.size).toBe(0);
-  });
-
-  it("falls through to the network when the disk JSON has a wrong version", async () => {
-    invokeMock.mockResolvedValue(
-      JSON.stringify({
-        title: "Stale",
-        artist: "Stale Artist",
-        duration: 10,
-        v: 9,
-      }),
-    );
-    const fixture = buildMp3Fixture(
-      "Disk Fallback Title",
-      "Disk Fallback Artist",
-      "Album",
-    );
-    makeFetchMock(fixture);
-    const entry = await getTrackMetadata(
-      "disk-id-2",
-      "test-token",
-      2048,
-      "song.mp3",
-    );
-    expect(invokeMock).toHaveBeenCalledWith("read_metadata_disk", {
-      fileId: "disk-id-2",
-    });
-    expect(entry.title).toBe("Disk Fallback Title");
-    expect(entry.coverOnDisk).toBeUndefined();
-  });
-
-  it("falls through when the disk JSON is missing a required field (no title)", async () => {
-    invokeMock.mockResolvedValue(
-      JSON.stringify({ artist: "X", duration: 10, v: 8 }),
-    );
-    const fixture = buildMp3Fixture(
-      "Disk Missing Title",
-      "Disk Missing Artist",
-      "Album",
-    );
-    makeFetchMock(fixture);
-    const entry = await getTrackMetadata(
-      "disk-id-2",
-      "test-token",
-      2048,
-      "song.mp3",
-    );
-    expect(entry.title).toBe("Disk Missing Title");
-  });
-
-  it("falls through to the network when the disk read invoke rejects (no Tauri / error)", async () => {
-    invokeMock.mockRejectedValue(
-      new Error("window.__TAURI_INTERNALS__ is undefined"),
-    );
-    const fixture = buildMp3Fixture(
-      "Reject Fallback",
-      "Reject Artist",
-      "Album",
-    );
-    makeFetchMock(fixture);
-    const entry = await getTrackMetadata(
-      "disk-id-3",
-      "test-token",
-      2048,
-      "song.mp3",
-    );
-    expect(entry.title).toBe("Reject Fallback");
-    // Not swallowed: the failure is logged with a context label.
-    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: "warn",
-        source: "metadata",
-        message: expect.stringContaining(
-          "disk-metadata-read-failed",
-        ) as unknown as string,
-      }),
-    );
-  });
-
-  it("falls through when the disk JSON is not valid JSON", async () => {
-    invokeMock.mockResolvedValue("{not json");
-    const fixture = buildMp3Fixture("Bad Json", "Bad Artist", "Album");
-    makeFetchMock(fixture);
-    const entry = await getTrackMetadata(
-      "disk-id-4",
-      "test-token",
-      2048,
-      "song.mp3",
-    );
-    expect(entry.title).toBe("Bad Json");
-  });
-});
-
-// ---- parseDiskMetadata unit contract (guard tests for the validation refactor)
-// Direct unit tests pin the exact validation contract so a refactor of the
-// manual typeof checks cannot silently change fallback/drop semantics.
-
-function diskRaw(patch: Record<string, unknown>): string {
-  return JSON.stringify({
-    title: "Disk Title",
-    duration: 180.5,
-    v: 8,
-    ...patch,
-  });
-}
-
-describe("parseDiskMetadata validation contract", () => {
-  it("returns null when raw is not a string", () => {
-    expect(parseDiskMetadata(null)).toBeNull();
-    expect(parseDiskMetadata(undefined)).toBeNull();
-  });
-
-  it("returns null when JSON.parse fails", () => {
-    expect(parseDiskMetadata("{not json")).toBeNull();
-  });
-
-  it("returns null when parsed is not an object", () => {
-    expect(parseDiskMetadata("42")).toBeNull();
-    expect(parseDiskMetadata("null")).toBeNull();
-  });
-
-  it("returns null on a wrong metadata version", () => {
-    expect(parseDiskMetadata(diskRaw({ v: 9 }))).toBeNull();
-  });
-
-  it("returns null when title is missing, empty, or not a string", () => {
-    expect(parseDiskMetadata(diskRaw({ title: undefined }))).toBeNull();
-    expect(parseDiskMetadata(diskRaw({ title: "" }))).toBeNull();
-    expect(parseDiskMetadata(diskRaw({ title: 42 }))).toBeNull();
-  });
-
-  it("returns null when title is whitespace-only", () => {
-    expect(parseDiskMetadata(diskRaw({ title: "   " }))).toBeNull();
-    expect(parseDiskMetadata(diskRaw({ title: "\t\n" }))).toBeNull();
-  });
-
-  it("returns null when duration is missing or not a finite number", () => {
-    expect(parseDiskMetadata(diskRaw({ duration: undefined }))).toBeNull();
-    expect(parseDiskMetadata(diskRaw({ duration: null }))).toBeNull();
-    expect(parseDiskMetadata(diskRaw({ duration: "180.5" }))).toBeNull();
-  });
-
-  it("falls back artist to UNKNOWN_ARTIST and album to empty string", () => {
-    const entry = parseDiskMetadata(diskRaw({ artist: 42, album: null }));
-    expect(entry?.artist).toBe("Unknown Artist");
-    expect(entry?.album).toBe("");
-  });
-
-  it("keeps valid artist/album values", () => {
-    const entry = parseDiskMetadata(diskRaw({ artist: "A", album: "B" }));
-    expect(entry?.artist).toBe("A");
-    expect(entry?.album).toBe("B");
-  });
-
-  it("derives durationEstimated from duration>0 when not a boolean", () => {
-    const positive = parseDiskMetadata(diskRaw({ durationEstimated: "yes" }));
-    expect(positive?.durationEstimated).toBe(false);
-    const zero = parseDiskMetadata(
-      diskRaw({ duration: 0, durationEstimated: undefined }),
-    );
-    expect(zero?.durationEstimated).toBe(true);
-    const negative = parseDiskMetadata(
-      diskRaw({ duration: -5, durationEstimated: 1 }),
-    );
-    expect(negative?.durationEstimated).toBe(true);
-  });
-
-  it("honors an explicit boolean durationEstimated", () => {
-    const entry = parseDiskMetadata(diskRaw({ durationEstimated: true }));
-    expect(entry?.durationEstimated).toBe(true);
-  });
-
-  it("drops invalid optional fields instead of failing", () => {
-    const entry = parseDiskMetadata(
-      diskRaw({
-        pictureFormat: 7,
-        genre: 123,
-        albumArtist: null,
-        bitrate: "320000",
-        size: {},
-        year: "1999",
-        trackNumber: Infinity,
-        sampleRate: null,
-        bitDepth: "16",
-        channels: "2",
-      }),
-    );
-    expect(entry?.pictureFormat).toBeUndefined();
-    expect(entry?.genre).toBeUndefined();
-    expect(entry?.albumArtist).toBeUndefined();
-    expect(entry?.bitrate).toBeUndefined();
-    expect(entry?.size).toBeUndefined();
-    expect(entry?.year).toBeUndefined();
-    expect(entry?.trackNumber).toBeUndefined();
-    expect(entry?.sampleRate).toBeUndefined();
-    expect(entry?.bitDepth).toBeUndefined();
-    expect(entry?.channels).toBeUndefined();
-    expect(entry?.title).toBe("Disk Title");
-    expect(entry?.duration).toBe(180.5);
-  });
-
-  it("drops out-of-domain optional numbers instead of failing", () => {
-    const entry = parseDiskMetadata(
-      diskRaw({
-        bitrate: -5,
-        size: -1,
-        year: 1999.5,
-        trackNumber: 0.5,
-        sampleRate: -44100,
-        bitDepth: -16,
-        channels: -2,
-      }),
-    );
-    expect(entry?.title).toBe("Disk Title");
-    expect(entry?.duration).toBe(180.5);
-    expect(entry?.bitrate).toBeUndefined();
-    expect(entry?.size).toBeUndefined();
-    expect(entry?.year).toBeUndefined();
-    expect(entry?.trackNumber).toBeUndefined();
-    expect(entry?.sampleRate).toBeUndefined();
-    expect(entry?.bitDepth).toBeUndefined();
-    expect(entry?.channels).toBeUndefined();
-  });
-
-  it("keeps valid optional fields", () => {
-    const entry = parseDiskMetadata(
-      diskRaw({
-        pictureFormat: "image/jpeg",
-        genre: "Rock",
-        albumArtist: "AA",
-        bitrate: 320000,
-        size: 12345,
-        year: 1999,
-        trackNumber: 3,
-        sampleRate: 44100,
-        bitDepth: 16,
-        channels: 2,
-      }),
-    );
-    expect(entry?.pictureFormat).toBe("image/jpeg");
-    expect(entry?.genre).toBe("Rock");
-    expect(entry?.albumArtist).toBe("AA");
-    expect(entry?.bitrate).toBe(320000);
-    expect(entry?.size).toBe(12345);
-    expect(entry?.year).toBe(1999);
-    expect(entry?.trackNumber).toBe(3);
-    expect(entry?.sampleRate).toBe(44100);
-    expect(entry?.bitDepth).toBe(16);
-    expect(entry?.channels).toBe(2);
-  });
-
-  it("forces pictureData/pictureDataFull to null and coverOnDisk to true", () => {
-    const entry = parseDiskMetadata(diskRaw({}));
-    expect(entry?.pictureData).toBeNull();
-    expect(entry?.pictureDataFull).toBeNull();
-    expect(entry?.coverOnDisk).toBe(true);
-    expect(entry?.v).toBe(8);
-    expect(entry?.streamUnplayable).toBeUndefined();
-  });
-
-  it("passes streamUnplayable through only when a valid boolean", () => {
-    const flagged = parseDiskMetadata(diskRaw({ streamUnplayable: true }));
-    expect(flagged?.streamUnplayable).toBe(true);
-    const dropped = parseDiskMetadata(diskRaw({ streamUnplayable: "yes" }));
-    expect(dropped?.streamUnplayable).toBeUndefined();
   });
 });
 

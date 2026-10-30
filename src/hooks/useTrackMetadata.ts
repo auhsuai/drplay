@@ -107,9 +107,9 @@ export function useTrackMetadata({
         // Fix G: the cover renders straight from a blob URL built with the
         // picture bytes metadata already parsed — full (≤1000px) bytes win
         // over the 256px thumb; a missing picture keeps the consumer's icon.
-        // Seed offline (2026-08-10): disk entries (coverOnDisk) have no bytes
-        // — render the drplay:// GET URL instead (Rust disk + moka cache),
-        // asking for the FULL variant when bytes exist, the thumb otherwise.
+        // Disk-backed entries (coverOnDisk) have no bytes — render the
+        // drplay:// GET URL instead (Rust disk + moka cache), asking for the
+        // FULL variant when bytes exist, the thumb otherwise.
         const fullBytes = metadata.pictureDataFull;
         const coverBytes = fullBytes ?? metadata.pictureData;
         let nextCoverUrl: string | null;

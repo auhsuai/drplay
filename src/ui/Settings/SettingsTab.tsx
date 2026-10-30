@@ -5,7 +5,6 @@ import {
   MonitorDown,
   Download,
   Eraser,
-  Archive,
   Cloud,
   Tag,
 } from "lucide-react";
@@ -21,7 +20,6 @@ import type { ThemeType } from "../../hooks/useTheme";
 import { truncatePathMiddle } from "../../utils/truncatePath";
 import { useState } from "react";
 import { useDownloadPathSetting } from "./useDownloadPathSetting";
-import { useSeedImport } from "./useSeedImport";
 import {
   isMetadataFetchEnabled,
   setMetadataFetchEnabled,
@@ -62,7 +60,6 @@ export function SettingsTab({
   );
   const { downloadPath, isPicking, handlePickDownloadPath } =
     useDownloadPathSetting();
-  const { importingSeed, handleImportSeed } = useSeedImport();
 
   return (
     <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto px-8 py-10 relative transition-colors duration-300">
@@ -312,29 +309,6 @@ export function SettingsTab({
                 className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t("settings.clear_cache_btn")}
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between py-4 pb-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
-                  <Archive className="w-6 h-6 text-brand-text" />
-                </div>
-                <div className="max-w-[320px]">
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                    {t("settings.import_seed")}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => {
-                  void handleImportSeed();
-                }}
-                disabled={importingSeed}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {t("settings.import_seed")}
               </button>
             </div>
           </div>

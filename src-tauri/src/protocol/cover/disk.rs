@@ -44,17 +44,11 @@ pub fn init_covers_root(root: PathBuf) {
     }
 }
 
-/// Read access to the initialized covers root for sibling modules (seed.rs).
-/// Returns `None` when setup never ran — callers map that to a 500-style error.
-pub(crate) fn covers_root() -> Option<&'static PathBuf> {
-    COVERS_ROOT.get()
-}
-
 /// Absolute path of a cover on disk. `thumb` picks the `t`/`f` subtree.
 /// Returns `None` for ids that fail `validate_file_id` (empty, too long, or
 /// non-`[A-Za-z0-9_-]`) — those must never map onto a filesystem path.
-/// pub(crate): reused by `seed.rs` (offline import) so imported covers land
-/// EXACTLY where the GET handler reads them — one path builder, one truth.
+/// pub(crate): shared with the cover GET/POST paths so covers land EXACTLY
+/// where the handler reads them — one path builder, one truth.
 pub(crate) fn cover_disk_path(covers_root: &Path, raw_id: &str, thumb: bool) -> Result<PathBuf, CoverError> {
     validate_file_id(raw_id).map_err(CoverError::BadId)?;
     let subdir = if thumb { THUMB_SUBDIR } else { FULL_SUBDIR };
@@ -71,8 +65,7 @@ pub(crate) fn cover_disk_path(covers_root: &Path, raw_id: &str, thumb: bool) -> 
 /// cloned from the pre-2026-08-03 `thumbnail_path` in git history (98e8206^).
 /// Ids shorter than 4 chars fall back to the same `xx` pad the old design
 /// used, so every valid id still lands in a well-formed two-level path.
-/// pub(crate): the seed importer validates zip cover entries against it.
-pub(crate) fn shard_pair(raw_id: &str) -> (&str, &str) {
+fn shard_pair(raw_id: &str) -> (&str, &str) {
     let len = raw_id.len();
     let s1 = if len >= 2 { &raw_id[..2] } else { raw_id };
     let s2 = if len >= 4 { &raw_id[2..4] } else { "xx" };

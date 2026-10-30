@@ -40,15 +40,6 @@ pub static COVER_CACHE: LazyLock<Cache<String, (String, Bytes)>> = LazyLock::new
         .build()
 });
 
-/// Invalidates every in-RAM cover cache entry, including cached NoCover
-/// markers. Called by `seed.rs` after an import wrote covers to the same disk
-/// this module reads: ids fetched before the import may hold a NoCover marker
-/// (TTL 1h) which would otherwise keep serving a stale 204. Re-warming is
-/// cheap — the next GET re-reads from disk.
-pub(crate) fn invalidate_all_covers() {
-    COVER_CACHE.invalidate_all();
-}
-
 pub(super) type CoverResult = Result<(String, Bytes, &'static str), CoverError>;
 
 pub(super) type InFlightMap = HashMap<String, Vec<oneshot::Sender<CoverResult>>>;

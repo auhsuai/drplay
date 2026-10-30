@@ -14,7 +14,7 @@ Mọi kết luận dưới đây kèm `file:line`. Không có suy đoán không 
 |---|---|---|---|
 | Music Library | `settings.music_library` | 58-83 | row `google_drive_folder` + nút "Change Folder" (mở folder selection) |
 | Preferences | `settings.preferences` | 85-176 | language (89-101), theme (103-115), minimize_to_tray toggle (117-143), download_location (145-175) |
-| Data Management | `settings.data_management` | 178-262 | trash (183-216), clear cache (218-238), import seed (240-261) |
+| Data Management | `settings.data_management` | 178-262 | trash (183-216), clear cache (218-238) |
 
 Sau 3 section: `<CreditsSection />` (264) + `<ErrorLogSection />` (266) + `<CacheManagerModal open={showCacheManager} .../>` (269-274).
 
@@ -40,7 +40,7 @@ Row chuẩn (ví dụ language, `SettingsTab.tsx:89-101`):
 
 - Icon lấy từ `lucide-react` (import tại `SettingsTab.tsx:1-10`).
 - Row có description (subtitle) mẫu: download_location (`SettingsTab.tsx:151-161`) — `<p>{t("settings.download_location")}</p>` + `<p className="text-sm text-gray-500 ... truncate max-w-[280px] ...">{truncatePathMiddle(downloadPath)}</p>`.
-- Row hành động (button): clear cache `SettingsTab.tsx:230-237`; import seed `SettingsTab.tsx:252-260`; trash `SettingsTab.tsx:208-215`.
+- Row hành động (button): clear cache `SettingsTab.tsx:230-237`; trash `SettingsTab.tsx:208-215`.
 - Đây chính là khuôn để thêm row toggle mới: copy khối toggle minimize_to_tray (xem mục 2), đổi icon + key i18n.
 
 ### 1.3 Toggle mẫu sẵn có trong chính SettingsTab (`SettingsTab.tsx:117-143`)
@@ -101,7 +101,7 @@ Chuỗi truyền prop (prop drilling, KHÔNG có context/store settings):
     setShowTrashScreen={setShowTrashScreen}
   />
 ```
-State nội bộ của SettingsTab: `showCacheManager` (dòng 42); hook tự chứa `useDownloadPathSetting()` (43-44), `useSeedImport()` (45).
+State nội bộ của SettingsTab: `showCacheManager` (dòng 42); hook tự chứa `useDownloadPathSetting()` (43-44).
 
 Side-effect của minimize_to_tray nằm ở App (`App.tsx:265-275`): mỗi lần đổi → `saveMinimizeToTrayState(...)` + `invoke("update_minimize_to_tray", { minimize })` báo Rust. Đây là precedent cho "setting có side effect ngoài React".
 
@@ -163,9 +163,8 @@ export function saveMinimizeToTrayState(minimize: boolean): void {
   - `fetchPipeline.ts:114` — `new DriveRangeTokenizer(fileId, parseSize, ...)`; `fetchPipeline.ts:168-185` — `parseFromTokenizer(tokenizer, { skipCovers:false, duration:false, skipPostHeaders:true })`.
   - `src/utils/driveRangeTokenizer.ts:62-67` (comment nguyên văn): "Random-access tokenizer for music-metadata's parseFromTokenizer. All reads are served from an aligned-chunk LRU cache; a miss fetches the covering 64KB-aligned chunk through the SW /drive-stream/ proxy with a Range header."
   - Tầng HTTP: `src/utils/driveRangeChunkFetcher.ts:1-7` (semaphore CONCURRENCY=3, retry, circuit breaker) + `:23-31` (CONCURRENCY=3, timeout 45s, MAX_RETRIES=2).
-- **Liên quan `src-tauri` (Rust)**: chỉ 2 nhánh, KHÔNG có nhánh fetch:
-  1. Disk-first seed import: `src/utils/metadata/parse.ts:61-76` gọi `invoke("read_metadata_disk", { fileId })` ← Rust `src-tauri/src/seed.rs:110-114` (`read_metadata_disk`) đọc `<app_cache_dir>/metadata/{fileId}.json`; import zip `seed.rs:74` (`import_metadata_seed`, nút Settings dòng 231 translation).
-  2. Cover bytes đẩy sang Rust disk cache: `src/utils/metadata/cover.ts:70` và `:91` — `postCoverToCache(fileId, ..., ...)` (JPEG-only, fire-and-forget).
+- **Liên quan `src-tauri` (Rust)**: chỉ 1 nhánh, KHÔNG có nhánh fetch:
+  1. Cover bytes đẩy sang Rust disk cache: `src/utils/metadata/cover.ts:70` và `:91` — `postCoverToCache(fileId, ..., ...)` (JPEG-only, fire-and-forget).
 - Byte trung gian: SW proxy `/drive-stream/` (`src/utils/driveRangeChunkFetcher.ts:21` import `DRIVE_STREAM_PREFIX` từ `streamPrefetcher`).
 
 ### 4.2 Sơ đồ luồng ngắn
@@ -182,8 +181,7 @@ api.ts:32  getTrackMetadata(fileId, token?, size?, name?, signal?, forceNetwork=
 fetchPipeline.ts:52  getTrackMetadataImpl
    |-- :61-64  mem cache (lần 2, phòng race)
    |-- :68     readCachedEntry()
-   |             parse.ts:22-53  IDB row `metadata_<fileId>` (+ seed full-picture LRU)
-   |             parse.ts:55-76  DISK seed qua invoke("read_metadata_disk")  [Rust]
+   |             parse.ts:16-48  IDB row `metadata_<fileId>` (+ LRU full-picture restore)
    |-- :73-80  size<=0 -> placeholder v:9, setMetadataCache, return (no network)
    |-- :86-95  per-file network cooldown 60s (cooldown.ts) -> placeholder, no network
    |-- :97-110 LARGE_FILE_THRESHOLD 100MB -> clamp parse size = HEAD_BYTES 128KB
@@ -229,7 +227,7 @@ Không còn entry point nào khác (các match còn lại của grep nằm trong
   3. Defer-until-first-audio: `src/hooks/player/deferOnce.ts:28-74` (`onceAfterFirstAudio` — fire đúng 1 lần khi `first-audio` hoặc fallback timer; drop khi `error`/abort/unmount). Dùng 2 chỗ trong `usePlayerTrackPlayback.ts`: metadata `:186-230` (fallback 9s) và SW prefetch next track `:244-262` (KHÔNG fallback — chờ signal mãi). Test: `usePlayer.metadataDefer.test.ts` + `usePlayer.prefetchDefer.test.ts`.
   4. Per-file network cooldown 60s — `metadata/cooldown.ts:15-37`; hằng số `constants.ts:44` (`METADATA_NETWORK_COOLDOWN_MS = 60_000`).
   5. Circuit breaker Drive toàn app — `driveRangeCircuitBreaker.ts:14-16` (3 failures / 30s → mở 60s, fail-fast).
-  6. `forceNetwork` param — `api.ts:38` bypass mem cache + IDB/disk (`parse.ts:22,61`) + cooldown (`fetchPipeline.ts:62,86`). Grep production: **không có UI nào gọi `forceNetwork=true`** (chỉ test + comment nhắc "RefreshCw button" — nguồn có thể đã lỗi thời, xem mục 10).
+  6. `forceNetwork` param — `api.ts:38` bypass mem cache + IDB (`parse.ts:17`) + cooldown (`fetchPipeline.ts:62,86`). Grep production: **không có UI nào gọi `forceNetwork=true`** (chỉ test + comment nhắc "RefreshCw button" — nguồn có thể đã lỗi thời, xem mục 10).
 
 **Cảnh báo thiết kế quan trọng (từ code thật):** trong `usePlayerTrackPlayback.ts`, `setIsDownloading(false)` nằm BÊN TRONG `onFire` (`:194`) và `onDrop` (`:227-229`). Nếu feature tắt metadata bằng cách bỏ qua hẳn `onceAfterFirstAudio(...)` (khối :186-230) thì spinner/khóa nút play (`setIsDownloading(true)` ở `:140`) sẽ KHÔNG bao giờ được gỡ. Muốn tắt fetch nhưng vẫn giữ UX loading, phải giữ đường thoát: ví dụ vẫn gọi `onceAfterFirstAudio` với `onFire` chỉ `setIsDownloading(false)`, hoặc chuyển `setIsDownloading(false)` ra ngoài nhánh metadata.
 
@@ -288,7 +286,7 @@ Các case (assert nguyên văn):
 ## 8. i18n
 
 - Files: `src/locales/en/translation.json` (305 dòng) + `src/locales/vi/translation.json` (301 dòng); nạp tay (không backend) tại `src/i18n.ts:4-16`; fallback `en`, supportedLngs `["en","vi"]` (`i18n.ts:82-92`).
-- Section Settings: `"settings"` bắt đầu `en:206`, `vi:202`. Naming convention: snake_case trong section `settings` (`minimize_to_tray` en:220/vi:216, `download_location`, `select_download_folder`, `import_seed`, `clear_cache_btn`...).
+- Section Settings: `"settings"` bắt đầu `en:206`, `vi:202`. Naming convention: snake_case trong section `settings` (`minimize_to_tray` en:220/vi:216, `download_location`, `select_download_folder`, `clear_cache_btn`...).
 - Key sets hiện khớp 100% en/vi: đã chạy đối chiếu bằng node — 69 key `settings` mỗi bên, 0 key lệch; 30 section top-level khớp cả hai file (bao gồm `cache.label.*`).
 - Script check: `package.json:17` → `"i18n:check": "i18next-cli extract --ci && i18next-cli status"`. Config `i18next.config.js`: locales `["en","vi"]`, primary en + secondary vi, `removeUnusedKeys:false`, `preservePatterns:["cache.label.*"]` (cho dynamic key `t(\`cache.label.${id}\`)` ở `CacheManagerModal.tsx:222`), ignore `*.test.ts(x)`.
 - **Không bắt buộc tự động**: `.husky/pre-commit` chỉ chạy `npx lint-staged` (eslint+prettier); `.github/workflows/build.yml` chỉ build Tauri. `i18n:check` là script thủ công — nhưng việc thiếu key vi sẽ lộ ở runtime (`i18next.d.ts` type + missing-key log dev-only `i18n.ts:60-78`). Quy ước thực tế: thêm key phải thêm CẢ en + vi.
@@ -301,7 +299,7 @@ Các case (assert nguyên văn):
 3. **Home Discover** — `history.ts:209-255` random từ entry v:8 thật; tắt fetch → danh sách cạn/trống với file mới.
 4. **Sort tên trong listing** — `useDriveListing.ts:20-21` (`cachedTitle`) → tắt fetch, sort thuần tên file.
 5. **Pre-play gate streamUnplayable** — `usePlayerTrackPlayback.ts:107-125` đọc `metadataCache.get(track.id)?.streamUnplayable`; flag chỉ được set trong pipeline (`fetchPipeline.ts:289-294,301-312`). Tắt fetch → gate không bao giờ chặn trước, m4a non-faststart rơi vào lỗi format của mpv (toast + auto-next) như hành vi trước fix.
-6. **Rust cover disk cache** — pipeline POST thumb/full JPEG (`cover.ts:70,91`); tắt fetch → không có cover mới POST, nhưng cover đã import/đã cache vẫn đọc được qua disk-first (`parse.ts:55-76` → `coverOnDisk` → `buildCoverUrl`, `useTrackMetadata.ts:113-133`).
+6. **Rust cover disk cache** — pipeline POST thumb/full JPEG (`cover.ts:70,91`); tắt fetch → không có cover mới POST, nhưng cover đã cache vẫn đọc được qua drplay:// GET (`coverOnDisk` → `buildCoverUrl`, `useTrackMetadata.ts:113-133`).
 7. **Cache manager** — category `metadata` (`utils/cache.ts:55-99,150-199`) và nút Clear Cache vẫn hoạt động độc lập; clear sẽ xóa IDB + mem + LRU + cooldown.
 8. **Logout/wipe** — `useAuth.ts:262` gọi `wipePersistedMetadataCache` (`cache.ts:282-307`) — độc lập toggle.
 9. **SW prefetch track kế tiếp** — `usePlayerTrackPlayback.ts:244-262` + `utils/swPrefetch.ts:4-12` — cơ chế RIÊNG (tải bytes file next), không phải metadata; toggle metadata không đụng tới nó (cần chốt sản phẩm có muốn giữ hay không).
@@ -310,7 +308,7 @@ Các case (assert nguyên văn):
 ## 10. Rủi ro / điểm mù (cần main agent chốt hoặc xác minh thêm)
 
 1. **Không có store/subscription settings sẵn** — repo chỉ có prop-drilling (minimizeToTray) và localStorage lazy-read (theme). Nếu toggle cần được module ngoài React (`utils/metadata`) đọc và phản ứng tức thời, phải chọn 1 trong: (a) module setting utils + CustomEvent (precedent `favorites-updated`), (b) đọc localStorage tại từng entry point (chậm 1 nhịp, không có event), (c) thêm zustand store mới (repo chưa có settings store). Chưa có precedent trực tiếp cho "settings toàn cục" → cần main agent quyết định kiến trúc.
-2. **Định nghĩa "tắt fetch"**: chỉ chặn NETWORK hay chặn luôn CACHE? `readCachedEntry` (IDB + disk seed) chạy trước network và không phân biệt lý do (`parse.ts:22-76`). Nếu chỉ chặn network, file đã cache vẫn hiển thị metadata cũ (kể cả cover/palette) — có thể lệch kỳ vọng user "tắt metadata". Nếu chặn tất, cần sửa cả `useTrackMetadata` (đang nhận entry từ cache như nhau) và các nhánh `readCachedEntry`.
+2. **Định nghĩa "tắt fetch"**: chỉ chặn NETWORK hay chặn luôn CACHE? `readCachedEntry` (chỉ IDB) chạy trước network và không phân biệt lý do (`parse.ts:12-51`). Nếu chỉ chặn network, file đã cache vẫn hiển thị metadata cũ (kể cả cover/palette) — có thể lệch kỳ vọng user "tắt metadata". Nếu chặn tất, cần sửa cả `useTrackMetadata` (đang nhận entry từ cache như nhau) và các nhánh `readCachedEntry`.
 3. **Spinner/loading state** (đã nêu mục 5): bỏ `onceAfterFirstAudio` metadata phải giữ `setIsDownloading(false)`; nếu không nút play kẹt trạng thái loading.
 4. **Bật lại giữa chừng**: `useTrackMetadata` chỉ fetch trong effect theo deps (`useTrackMetadata.ts:178-190`). Nếu toggle không được truyền vào deps/không ép remount, card đang mount sẽ không tự fetch lại; cần thiết kế (prop `enabled` xuống tận hook, hoặc event → `refreshKey`, hoặc remount Settings/grid). Chưa xác minh cách nào khả thi nhất vì phụ thuộc kiến trúc toggle được chọn.
 5. **Session restore**: track khôi phục từ session (`usePlayerSession.ts:106` set `restoreDuration`) không tự fetch metadata khi bật toggle vì pipeline B chỉ chạy lúc play. Chấp nhận hay không cần chốt.

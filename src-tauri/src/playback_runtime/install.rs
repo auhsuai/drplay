@@ -13,7 +13,7 @@
 //!
 //! * **One install at a time.** A process-wide flag, taken with
 //!   `compare_exchange` and released by a `Drop` guard, so a panic cannot wedge
-//!   every future attempt (same shape as `seed.rs:74-77`).
+//!   every future attempt.
 //! * **Nothing is published before it is fully validated.** Size floor plus a
 //!   readable Windows version resource, both checked on the staging copy.
 //! * **An existing working install is never destroyed.** Publishing only ever

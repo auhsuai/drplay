@@ -9,8 +9,8 @@ pub use handlers::{
     CacheInfo,
 };
 
-pub(crate) use cache::invalidate_all_covers;
-pub(crate) use disk::{cover_disk_path, covers_root, shard_pair};
+#[cfg(test)]
+pub(crate) use disk::cover_disk_path;
 
 #[cfg(test)]
 use moka::future::Cache;
@@ -28,7 +28,7 @@ use cache::{cover_cache_key, lock_in_flight, InFlightGuard, IN_FLIGHT, MAX_WAITE
 #[cfg(test)]
 use disk::{
     collect_cover_files, gc_covers, gc_covers_with_budgets, is_within_covers_root,
-    read_cover_from_disk, write_cover_to_disk, COVER_NOCOVER_ETAG,
+    read_cover_from_disk, write_cover_to_disk,
 };
 
 #[cfg(test)]

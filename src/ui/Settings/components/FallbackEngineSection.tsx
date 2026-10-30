@@ -269,8 +269,8 @@ export function FallbackEngineSection() {
   const [installError, setInstallError] = useState<WireError | null>(null);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<FallbackProgress | null>(null);
-  // Synchronous re-entrancy guard (mirror useSeedImport): `installing` only
-  // flips after React flushes, so two clicks in one tick would otherwise reach
+  // Synchronous re-entrancy guard: `installing` only flips after React
+  // flushes, so two clicks in one tick would otherwise reach
   // Rust twice (the second rejection would be "already_in_progress").
   const installingRef = useRef(false);
 

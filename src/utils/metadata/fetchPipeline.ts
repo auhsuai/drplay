@@ -43,7 +43,6 @@ import {
 } from "./pipelineHelpers";
 import { networkCooldownUntil, setNetworkCooldown } from "./cooldown";
 import { readCachedEntry } from "./parse";
-export { parseDiskMetadata } from "./parse";
 import { isMetadataFetchEnabled } from "./settings";
 import {
   prefetchAndScanM4aTail,
@@ -95,7 +94,7 @@ async function getTrackMetadataImpl(
     return placeholder;
   }
 
-  // Settings toggle OFF: no NEW network fetch — the mem/IDB/disk cache reads
+  // Settings toggle OFF: no NEW network fetch — the mem/IDB cache reads
   // above already served every cached entry, so existing metadata keeps
   // rendering. The placeholder is returned WITHOUT pinning it (setMetadataCache
   // would shadow every later fetch) and without cooldown/parse/tokenizer, so

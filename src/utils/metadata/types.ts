@@ -16,12 +16,12 @@ export interface CachedMetadata {
   bitrate?: number;
   size?: number;
   v: number;
-  // Seed offline import (2026-08-10): entries read from <app_cache_dir>/metadata
-  // carry no picture bytes — the cover renders via the drplay:// GET from the
-  // Rust on-disk cover cache. coverOnDisk flips the hook's <img src> to
-  // buildCoverUrl (drplay://cover?id=...) instead of a blob URL.
+  // coverOnDisk flips the hook's <img src> to buildCoverUrl
+  // (drplay://cover?id=...) instead of a blob URL, for entries whose cover
+  // lives only in the Rust on-disk cache. No producer sets it today — kept
+  // for a possible future on-disk metadata source.
   coverOnDisk?: boolean;
-  // Extended fields from the Colab scanner; displayed by the UI in a later
+  // Extended fields from external scanners; displayed by the UI in a later
   // task — the metadata pipeline just carries them through.
   genre?: string;
   year?: number;
