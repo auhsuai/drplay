@@ -67,6 +67,9 @@ vi.mock("../../utils/simpleToast", () => ({
 vi.mock("../../utils/cache", () => ({
   clearAppCache: vi.fn(),
   getCacheSizes: vi.fn(),
+  getFallbackEngineSize: vi.fn().mockResolvedValue(null),
+  removeFallbackEngine: vi.fn(),
+  FALLBACK_ENGINE_ID: "fallback_engine",
   CACHE_CATEGORY_LABELS: {
     metadata: "Metadata cache",
     files: "File listing cache",
@@ -279,9 +282,9 @@ describe("SettingsTab clear cache button", () => {
 
   it("opens the cache manager modal instead of clearing directly", async () => {
     render(<SettingsTab {...baseProps} />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear Cache" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
     const modal = await screen.findByTestId("cache-manager-modal");
-    expect(within(modal).getByText("Clear App Cache")).toBeTruthy();
+    expect(within(modal).getByText("Clear App Data")).toBeTruthy();
     // The old direct-clear path is gone: nothing is cleared until the modal's
     // own Clear button is pressed.
     expect(clearAppCache).not.toHaveBeenCalled();

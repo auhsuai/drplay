@@ -181,6 +181,28 @@ html.drplay-host-visible #content-area * {
   animation: drainDown 300ms ease-in-out forwards;
 }
 
+@keyframes fallbackIndeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+/* Indeterminate progress for the optional fallback engine install.
+   Deliberately a sliding bar rather than animate-pulse: pulsing the whole fill
+   made the row read as "flickering" during the stages that have no measurable
+   percentage (verifying / extracting / publishing). Honours reduced-motion. */
+.fallback-progress-indeterminate {
+  animation: fallbackIndeterminate 1.1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fallback-progress-indeterminate {
+    animation: none;
+    transform: none;
+  }
+}
+
 /* Toast Styles */
 .app-toast {
   position: fixed;

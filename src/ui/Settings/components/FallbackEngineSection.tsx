@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Cpu, LoaderCircle } from "lucide-react";
+import { CheckCircle2, Cpu, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { formatBytes } from "../../../utils/formatBytes";
 import { showErrorToast, showSuccessToast } from "../../../utils/simpleToast";
 import { captureError } from "../../../utils/errorLog";
 
@@ -30,18 +29,25 @@ const ERROR_TOAST_MS = 4000;
  */
 export const MPV_FALLBACK_PROGRESS_EVENT = "mpv-fallback-progress";
 
+/**
+ * Rust event: the settled status changed on disk (a successful install or a
+ * removal performed anywhere — the cache dialog can remove this engine, which
+ * would otherwise leave this row offering "Reinstall" for a missing file).
+ *
+ * Payload is the same camelCase `FallbackStatusDto` the commands return. A
+ * payload that does not parse falls back to re-reading the status, so a wire
+ * drift degrades to "one extra read" rather than a stale row.
+ */
+export const MPV_FALLBACK_CHANGED_EVENT = "mpv-fallback-changed";
+
 /** Settled install state. "installed" is a claim about DISK, not about use. */
 export type FallbackStage = "notInstalled" | "installed" | "invalid";
 /** Which engine this process will actually use. Only "legacy" means in use. */
 export type FallbackEngineKind = "libmpv" | "legacy" | "unavailable";
 export type FallbackUnavailableReason =
-  | "libmpvFailedNoSidecar"
-  | "sidecarRequestedButMissing";
+  "libmpvFailedNoSidecar" | "sidecarRequestedButMissing";
 export type FallbackProgressStage =
-  | "downloading"
-  | "verifying"
-  | "extracting"
-  | "publishing";
+  "downloading" | "verifying" | "extracting" | "publishing";
 
 export interface FallbackStatus {
   stage: FallbackStage;
@@ -59,6 +65,13 @@ export interface FallbackProgress {
   total: number | null;
   percent: number | null;
 }
+
+/**
+ * The settled status as it arrives on the wire. Structurally identical to
+ * [`FallbackStatus`]; a named alias keeps the `listen<T>` call site honest about
+ * what the backend actually sends (the full DTO, not a progress frame).
+ */
+type FallbackStatusDtoWire = FallbackStatus;
 
 interface WireError {
   /** Stable snake_case slug from the backend, or "unknown". */
@@ -108,13 +121,16 @@ type FallbackErrorCode =
   | "path_unavailable"
   | "unsupported_platform";
 
-type ProgressStageKey = `settings.playback_components.stage_${FallbackProgressStage}`;
+type ProgressStageKey =
+  `settings.playback_components.stage_${FallbackProgressStage}`;
 type UnavailableKey =
   | "settings.playback_components.unavailable_libmpv_failed_no_sidecar"
   | "settings.playback_components.unavailable_sidecar_requested_but_missing";
-type ErrorKey = `settings.playback_components.error_${FallbackErrorCode | "generic"}`;
+type ErrorKey =
+  `settings.playback_components.error_${FallbackErrorCode | "generic"}`;
 
-const GENERIC_ERROR_KEY: ErrorKey = "settings.playback_components.error_generic";
+const GENERIC_ERROR_KEY: ErrorKey =
+  "settings.playback_components.error_generic";
 
 // Runtime twin of the FallbackErrorCode union: the one place a new backend
 // slug has to be registered (the Record below then fails to compile until the
@@ -273,68 +289,119 @@ export function FallbackEngineSection() {
   // flushes, so two clicks in one tick would otherwise reach
   // Rust twice (the second rejection would be "already_in_progress").
   const installingRef = useRef(false);
+  // Guards the initial status read: a reply that lands after unmount must not
+  // touch state (React would warn and the section is gone anyway).
+  const mountedRef = useRef(true);
+  // Monotonic generation of the settled state. Any authoritative transition
+  // (an install result, an install/remove announcement from Rust) bumps it, and
+  // a status READ may only apply the generation it started under.
+  //
+  // Why: the initial read is fired on mount and can still be in flight when an
+  // install finishes. Its reply describes the PRE-install disk, so applying it
+  // late would replace "installed" with "Not installed · Download" — the row
+  // would flip back seconds after a successful download.
+  const statusGenerationRef = useRef(0);
+  // True once a settled status has been applied for the current install cycle.
+  // From then until the next install starts, a progress event must never make
+  // the row look busy again (`progress` outranks `status` when rendering, so a
+  // late "downloading" frame would hide a perfectly settled install).
+  const settledRef = useRef(false);
 
-  const applyStatus = useCallback((payload: unknown) => {
-    const parsed = parseStatus(payload);
-    if (parsed === null) {
-      const malformed: WireError = {
-        code: UNKNOWN_ERROR_CODE,
-        raw: `unexpected ${STATUS_COMMAND} payload`,
-      };
-      setStatusError(malformed);
-      void captureError({
-        level: "warn",
-        source: FALLBACK_ENGINE_SECTION,
-        message: `load-fallback-status-failed: ${malformed.raw}`,
-      });
-      return;
-    }
+  /**
+   * Applies a settled status as the current truth: bumps the generation, so
+   * every status read already in flight is invalidated.
+   */
+  const applySettledStatus = useCallback((parsed: FallbackStatus) => {
+    if (!mountedRef.current) return;
+    statusGenerationRef.current += 1;
+    settledRef.current = true;
     setStatus(parsed);
     setStatusError(null);
   }, []);
 
-  const reportStatusFailure = useCallback((error: unknown) => {
-    const wireError = parseWireError(error);
-    // Inline only: a read failure is not an install failure, and a toast here
-    // would fire on every Settings visit with a broken backend.
-    setStatusError(wireError);
-    void captureError({
-      level: "warn",
-      source: FALLBACK_ENGINE_SECTION,
-      message: `load-fallback-status-failed: ${wireError.raw}`,
-    });
-  }, []);
+  const applyStatus = useCallback(
+    (payload: unknown, generation: number) => {
+      if (!mountedRef.current) return;
+      // Stale: a newer settled state landed while this read was in flight.
+      if (generation !== statusGenerationRef.current) return;
+      // An install owns the row while it runs; its command result is the only
+      // authority. Letting a read land here would render the pre-install state
+      // underneath the progress line.
+      if (installingRef.current) return;
+      const parsed = parseStatus(payload);
+      if (parsed === null) {
+        const malformed: WireError = {
+          code: UNKNOWN_ERROR_CODE,
+          raw: `unexpected ${STATUS_COMMAND} payload`,
+        };
+        setStatusError(malformed);
+        void captureError({
+          level: "warn",
+          source: FALLBACK_ENGINE_SECTION,
+          message: `load-fallback-status-failed: ${malformed.raw}`,
+        });
+        return;
+      }
+      applySettledStatus(parsed);
+    },
+    [applySettledStatus],
+  );
+
+  const reportStatusFailure = useCallback(
+    (error: unknown, generation: number) => {
+      if (!mountedRef.current) return;
+      // A failure from a superseded read must not surface over newer state.
+      if (generation !== statusGenerationRef.current) return;
+      if (installingRef.current) return;
+      const wireError = parseWireError(error);
+      // Inline only: a read failure is not an install failure, and a toast here
+      // would fire on every Settings visit with a broken backend.
+      setStatusError(wireError);
+      void captureError({
+        level: "warn",
+        source: FALLBACK_ENGINE_SECTION,
+        message: `load-fallback-status-failed: ${wireError.raw}`,
+      });
+    },
+    [],
+  );
 
   const loadStatus = useCallback((): Promise<void> => {
-    return invoke(STATUS_COMMAND).then(applyStatus, reportStatusFailure);
+    // Capture BEFORE the await: this is the generation this reply describes.
+    const generation = statusGenerationRef.current;
+    return invoke(STATUS_COMMAND).then(
+      (payload: unknown) => {
+        applyStatus(payload, generation);
+      },
+      (error: unknown) => {
+        reportStatusFailure(error, generation);
+      },
+    );
   }, [applyStatus, reportStatusFailure]);
 
   // Same shape as CacheManagerModal's size fetch: the read starts in the
   // effect body and only touches state from its callback, and a late reply is
   // dropped after unmount.
   useEffect(() => {
-    let cancelled = false;
-    invoke(STATUS_COMMAND)
-      .then((payload: unknown) => {
-        if (cancelled) return;
-        applyStatus(payload);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        reportStatusFailure(error);
-      });
+    mountedRef.current = true;
+    void loadStatus();
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
     };
-  }, [applyStatus, reportStatusFailure]);
+  }, [loadStatus]);
 
+  // Install progress. Two guards, and both matter:
+  //  * `installingRef` — only an install this section started may drive the row.
+  //  * `settledRef`    — once the status is settled, a late frame (the download
+  //    stream can deliver one after the command resolved) must not resurrect
+  //    "Downloading…" over the installed facts. It is only cleared when the
+  //    NEXT install starts.
   useEffect(() => {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     void listen<FallbackProgress>(MPV_FALLBACK_PROGRESS_EVENT, (event) => {
-      // Only an install this section started may drive the UI: a stray event
-      // must never flip an idle row into "downloading".
       if (!installingRef.current) return;
+      if (settledRef.current) return;
       const parsed = parseProgress(event.payload);
       if (parsed !== null) setProgress(parsed);
     })
@@ -380,9 +447,68 @@ export function FallbackEngineSection() {
     };
   }, []);
 
+  // Settled change announcements from Rust (install or removal anywhere in the
+  // app — the cache dialog removes this engine too). Same teardown discipline
+  // as the progress listener above.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<FallbackStatusDtoWire>(MPV_FALLBACK_CHANGED_EVENT, (event) => {
+      if (!mountedRef.current) return;
+      // An install in flight owns the row: its own command result is newer than
+      // whatever announcement arrives while it runs.
+      if (installingRef.current) return;
+      const parsed = parseStatus(event.payload);
+      if (parsed === null) {
+        // Unparseable payload: re-read rather than guess. Cheap, and a drift in
+        // the wire shape must never leave a stale row.
+        void loadStatus();
+        return;
+      }
+      applySettledStatus(parsed);
+    })
+      .then((stopListening) => {
+        if (disposed) {
+          stopListening();
+          return;
+        }
+        unlisten = stopListening;
+      })
+      .catch((error: unknown) => {
+        void captureError({
+          level: "warn",
+          source: FALLBACK_ENGINE_SECTION,
+          message: `listen-fallback-changed-failed: ${describeValue(error)}`,
+        });
+      });
+
+    return () => {
+      disposed = true;
+      const stopListening = unlisten;
+      if (stopListening === undefined) return;
+      const reportUnlistenFailure = (error: unknown): void => {
+        void captureError({
+          level: "warn",
+          source: FALLBACK_ENGINE_SECTION,
+          message: `unlisten-fallback-changed-failed: ${describeValue(error)}`,
+        });
+      };
+      try {
+        const maybeAsyncUnlisten: () => unknown = stopListening;
+        const result: unknown = maybeAsyncUnlisten();
+        Promise.resolve(result).catch(reportUnlistenFailure);
+      } catch (error: unknown) {
+        reportUnlistenFailure(error);
+      }
+    };
+  }, [applySettledStatus, loadStatus]);
+
   const runInstall = useCallback(async () => {
     if (installingRef.current) return;
     installingRef.current = true;
+    // A new install cycle: progress events are welcome again until this one
+    // settles.
+    settledRef.current = false;
     setInstalling(true);
     setInstallError(null);
     setProgress(null);
@@ -407,8 +533,9 @@ export function FallbackEngineSection() {
         });
         return;
       }
-      setStatus(parsed);
-      setStatusError(null);
+      // Settle BEFORE the toast: `applySettledStatus` marks the generation, so
+      // any late progress frame or in-flight status read is dropped from here on.
+      applySettledStatus(parsed);
       showSuccessToast(t("settings.playback_components.success_toast"), {
         duration: SUCCESS_TOAST_MS,
       });
@@ -426,23 +553,17 @@ export function FallbackEngineSection() {
         duration: ERROR_TOAST_MS,
       });
     } finally {
+      // Order matters: clear the in-flight refs first, then the progress state,
+      // so no guard window exists in which a queued frame is both accepted and
+      // rendered. The ref is only released here, after the status settled (or
+      // the install failed), which is what makes the `settledRef` gate hold.
       installingRef.current = false;
       setInstalling(false);
       setProgress(null);
     }
-  }, [t]);
-
-  const handleRetry = () => {
-    if (installError !== null) {
-      void runInstall();
-      return;
-    }
-    void loadStatus();
-  };
+  }, [applySettledStatus, t]);
 
   const percent = progress?.percent ?? null;
-  const downloaded = progress?.downloaded ?? null;
-  const total = progress?.total ?? null;
   const determinate = percent !== null;
   const error = installError ?? statusError;
   const unavailableReason =
@@ -462,9 +583,6 @@ export function FallbackEngineSection() {
       <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
         {t("settings.playback_components.section_title")}
       </h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400">
-        {t("settings.playback_components.section_description")}
-      </p>
 
       <div className="flex items-center justify-between py-4 pb-6">
         <div className="flex items-center gap-4 min-w-0">
@@ -498,86 +616,44 @@ export function FallbackEngineSection() {
                 </p>
               ) : null}
 
-              {status !== null ? (
+              {/* While an install is in flight the progress line + bar below
+                  are the only status: showing the resting "Not installed ·
+                  optional · …" line underneath it reads as two contradictory
+                  states at once. */}
+              {progress === null && status !== null ? (
                 <>
                   {status.stage === "installed" ? (
                     <>
-                      {status.version !== undefined ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {t(
-                            "settings.playback_components.status_installed",
-                            { version: status.version },
-                          )}
-                        </p>
-                      ) : null}
-                      {status.size !== undefined ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {t("settings.playback_components.status_size", {
-                            size: formatBytes(status.size),
-                          })}
-                        </p>
-                      ) : null}
-                      {status.engine === "legacy" ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {t("settings.playback_components.status_in_use")}
-                        </p>
-                      ) : null}
-                      {status.engine === "libmpv" ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {t(
-                            "settings.playback_components.status_available_but_not_in_use",
-                          )}
-                        </p>
-                      ) : null}
+                      <p
+                        data-testid="fallback-engine-installed"
+                        className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-4 h-4 text-brand-primary shrink-0" />
+                        {t("settings.playback_components.status_installed")}
+                      </p>
                     </>
                   ) : null}
 
                   {status.stage === "notInstalled" ? (
-                    <>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {t(
-                          "settings.playback_components.optional_explanation",
-                        )}
-                      </p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {t("settings.playback_components.pinned_version", {
-                          version: status.pinnedVersion,
-                        })}
-                      </p>
-                    </>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {t("settings.playback_components.status_not_installed")}
+                    </p>
                   ) : null}
 
                   {status.stage === "invalid" ? (
-                    <>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {t("settings.playback_components.state_invalid")}
-                      </p>
-                      {status.reason !== undefined ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400 break-words">
-                          {t("settings.playback_components.invalid_reason", {
-                            reason: status.reason,
-                          })}
-                        </p>
-                      ) : null}
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {t("settings.playback_components.pinned_version", {
-                          version: status.pinnedVersion,
-                        })}
-                      </p>
-                    </>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 break-words">
+                      {t("settings.playback_components.state_invalid", {
+                        reason: status.reason ?? "",
+                      })}
+                    </p>
                   ) : null}
 
                   {status.engine === "unavailable" ? (
-                    <>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {t("settings.playback_components.status_unavailable")}
-                      </p>
-                      {unavailableReason !== undefined ? (
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {t(UNAVAILABLE_REASON_KEYS[unavailableReason])}
-                        </p>
-                      ) : null}
-                    </>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {unavailableReason !== undefined
+                        ? t(UNAVAILABLE_REASON_KEYS[unavailableReason])
+                        : t("settings.playback_components.status_unavailable")}
+                    </p>
                   ) : null}
                 </>
               ) : null}
@@ -600,30 +676,9 @@ export function FallbackEngineSection() {
                       style={{ width: `${String(percent)}%` }}
                     />
                   ) : (
-                    <div className="h-full w-1/3 rounded-full bg-brand-primary animate-pulse" />
+                    <div className="h-full w-1/3 rounded-full bg-brand-primary fallback-progress-indeterminate" />
                   )}
                 </div>
-                {/* A null percent is "total size unknown": no number at all
-                    rather than a fabricated one. */}
-                {determinate ? (
-                  <p
-                    data-testid="fallback-engine-progress-text"
-                    className="text-sm text-gray-500 dark:text-gray-400"
-                  >
-                    {`${String(percent)}%`}
-                  </p>
-                ) : null}
-                {determinate && downloaded !== null && total !== null ? (
-                  <p
-                    data-testid="fallback-engine-progress-bytes"
-                    className="text-sm text-gray-500 dark:text-gray-400"
-                  >
-                    {t("settings.playback_components.progress_transferred", {
-                      downloaded: formatBytes(downloaded),
-                      total: formatBytes(total),
-                    })}
-                  </p>
-                ) : null}
               </div>
             ) : null}
           </div>
@@ -634,41 +689,35 @@ export function FallbackEngineSection() {
             type="button"
             data-testid="fallback-engine-action"
             onClick={() => {
+              // A failed status READ is not an install failure: the button
+              // re-reads instead of blindly starting a download. Once a real
+              // status is known it installs (or reinstalls).
+              if (statusError !== null && status === null) {
+                setStatusError(null);
+                void loadStatus();
+                return;
+              }
               void runInstall();
             }}
             disabled={installing}
             className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-brand-primary/40 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {installing ? <LoaderCircle className="w-4 h-4 animate-spin" /> : null}
+            {installing ? (
+              <LoaderCircle className="w-4 h-4 animate-spin" />
+            ) : null}
             {actionLabel}
           </button>
         </div>
       </div>
 
       {/* Persistent error: never auto-dismissed, never replaces installed
-          facts (they stay in the row above), always carries the raw backend
-          text so a bug report is actionable. */}
+          facts (they stay in the row above). The action button in the row is
+          the retry affordance, so there is no second button here. */}
       {error !== null ? (
-        <div
-          data-testid="fallback-engine-error"
-          role="alert"
-          className="flex flex-col items-start gap-2 pb-6"
-        >
-          <p className="text-sm text-red-500">{t(errorMessageKey(error.code))}</p>
-          <p className="text-sm text-gray-500 dark:text-gray-400 break-words">
-            {t("settings.playback_components.error_detail", {
-              detail: error.raw,
-            })}
+        <div data-testid="fallback-engine-error" role="alert" className="pb-6">
+          <p className="text-sm text-red-500">
+            {t(errorMessageKey(error.code))}
           </p>
-          <button
-            type="button"
-            data-testid="fallback-engine-retry"
-            onClick={handleRetry}
-            disabled={installing}
-            className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary/40 disabled:opacity-50"
-          >
-            {t("settings.playback_components.button_retry")}
-          </button>
         </div>
       ) : null}
     </div>

@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   clearAppCache,
   getCacheSizes,
+  getFallbackEngineSize,
+  removeFallbackEngine,
   FILES_ROW_ESTIMATED_BYTES,
   PREFETCH_ENTRY_ESTIMATED_BYTES,
 } from "./cache";
@@ -257,5 +259,99 @@ describe("getCacheSizes", () => {
     expect(captureErrorMock.mock.calls.some(([c]) => c.level === "warn")).toBe(
       true,
     );
+  });
+});
+
+describe("getFallbackEngineSize", () => {
+  it("returns null when the fallback engine is not installed (row stays hidden)", async () => {
+    invokeMock.mockResolvedValue({
+      stage: "notInstalled",
+      engine: "libmpv",
+      pinnedVersion: "v",
+    });
+
+    await expect(getFallbackEngineSize()).resolves.toBeNull();
+    expect(invokeMock).toHaveBeenCalledWith("get_mpv_fallback_status");
+  });
+
+  it("returns the installed byte size", async () => {
+    invokeMock.mockResolvedValue({
+      stage: "installed",
+      version: "0.40.0.0",
+      path: "C:\\data\\engines\\mpv\\v\\mpv.exe",
+      size: 121_946_112,
+      engine: "libmpv",
+      pinnedVersion: "v",
+    });
+
+    await expect(getFallbackEngineSize()).resolves.toBe(121_946_112);
+  });
+
+  it("still offers a row for an invalid install (bytes exist and can be removed)", async () => {
+    invokeMock.mockResolvedValue({
+      stage: "invalid",
+      reason: "truncated",
+      engine: "libmpv",
+      pinnedVersion: "v",
+    });
+
+    // No size on the wire for this state: 0 is the honest "unknown, but present".
+    await expect(getFallbackEngineSize()).resolves.toBe(0);
+  });
+
+  it("degrades to null and logs when the status read fails", async () => {
+    invokeMock.mockRejectedValue(new Error("ipc down"));
+
+    await expect(getFallbackEngineSize()).resolves.toBeNull();
+    expect(
+      captureErrorMock.mock.calls.some(([c]) =>
+        c.message.includes("get-fallback-engine-size failed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("degrades to null on a malformed status payload", async () => {
+    invokeMock.mockResolvedValue("nonsense");
+
+    await expect(getFallbackEngineSize()).resolves.toBeNull();
+  });
+});
+
+describe("removeFallbackEngine", () => {
+  it("invokes the removal command", async () => {
+    invokeMock.mockResolvedValue({ stage: "notInstalled" });
+
+    await expect(removeFallbackEngine()).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenCalledWith("remove_mpv_fallback");
+  });
+
+  it("maps the backend '<code>: <text>' rejection onto an Error carrying the prose", async () => {
+    // The backend rejects with a plain string, not an Error.
+    invokeMock.mockRejectedValue(
+      "remove_failed: could not remove the fallback engine: permission denied",
+    );
+
+    await expect(removeFallbackEngine()).rejects.toThrow(
+      "could not remove the fallback engine: permission denied",
+    );
+    // The slug is logged with the detail, never rendered raw.
+    expect(
+      captureErrorMock.mock.calls.some(
+        ([c]) =>
+          c.message.includes("remove-fallback-engine failed") &&
+          c.message.includes("remove_failed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("maps a non-prefixed rejection without inventing a code", async () => {
+    invokeMock.mockRejectedValue(new Error("boom"));
+
+    await expect(removeFallbackEngine()).rejects.toThrow("boom");
+    expect(
+      captureErrorMock.mock.calls.some(([c]) =>
+        c.message.includes("(unknown)"),
+      ),
+    ).toBe(true);
   });
 });

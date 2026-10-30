@@ -40,6 +40,8 @@ pub enum FallbackError {
     VersionUnreadable { detail: String },
     /// The validated binary could not be moved into its final location.
     PublishFailed { detail: String },
+    /// The installed engine directory could not be deleted.
+    RemoveFailed { detail: String },
 }
 
 impl FallbackError {
@@ -62,6 +64,7 @@ impl FallbackError {
             Self::ArchiveUnreadable { .. } => "archive_unreadable",
             Self::VersionUnreadable { .. } => "version_unreadable",
             Self::PublishFailed { .. } => "publish_failed",
+            Self::RemoveFailed { .. } => "remove_failed",
         }
     }
 
@@ -69,7 +72,10 @@ impl FallbackError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::Network { .. } | Self::HttpStatus { .. } | Self::PublishFailed { .. }
+            Self::Network { .. }
+                | Self::HttpStatus { .. }
+                | Self::PublishFailed { .. }
+                | Self::RemoveFailed { .. }
         )
     }
 }
@@ -145,6 +151,9 @@ impl fmt::Display for FallbackError {
             Self::PublishFailed { detail } => {
                 write!(f, "could not finalize the fallback engine install: {detail}")
             }
+            Self::RemoveFailed { detail } => {
+                write!(f, "could not remove the fallback engine: {detail}")
+            }
         }
     }
 }
@@ -173,6 +182,7 @@ mod tests {
             FallbackError::ArchiveUnreadable { detail: String::new() },
             FallbackError::VersionUnreadable { detail: String::new() },
             FallbackError::PublishFailed { detail: String::new() },
+            FallbackError::RemoveFailed { detail: String::new() },
         ];
         let mut seen = std::collections::HashSet::new();
         for err in &all {

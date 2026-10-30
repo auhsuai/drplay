@@ -5,7 +5,10 @@ import { useTranslation } from "react-i18next";
 import {
   clearAppCache,
   getCacheSizes,
+  getFallbackEngineSize,
+  removeFallbackEngine,
   CACHE_CATEGORY_LABELS,
+  FALLBACK_ENGINE_ID,
   type CacheCategoryId,
 } from "../../../utils/cache";
 import { formatBytes } from "../../../utils/formatBytes";
@@ -28,6 +31,10 @@ function nullSizes(): Record<CacheCategoryId, number | null> {
   return { metadata: null, files: null, covers: null, prefetch: null };
 }
 
+// Localized label for the optional engine row. A literal key (never built from
+// the id) so the extractor can see it and a typo cannot render a raw key.
+const FALLBACK_LABEL_KEY = "cache.label.fallback_engine";
+
 interface CacheManagerModalProps {
   open: boolean;
   onClose: () => void;
@@ -40,6 +47,12 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
   const [sizes, setSizes] =
     useState<Record<CacheCategoryId, number | null>>(nullSizes);
   const [selected, setSelected] = useState<Set<CacheCategoryId>>(ALL_SELECTED);
+  // undefined = still loading (row hidden: presence unknown), null = not
+  // installed (row hidden), number = installed bytes (row shown, unchecked).
+  const [fallbackSize, setFallbackSize] = useState<number | null | undefined>(
+    undefined,
+  );
+  const [removeFallback, setRemoveFallback] = useState(false);
   const [clearing, setClearing] = useState(false);
 
   // Reset sizes/selection when the modal (re)opens — adjusted during render
@@ -52,17 +65,22 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
     if (open) {
       setSizes(nullSizes());
       setSelected(ALL_SELECTED);
+      setFallbackSize(undefined);
+      // Deleting an installed binary is destructive and optional: unlike the
+      // cache rows it is NEVER checked by default.
+      setRemoveFallback(false);
     }
   }
 
   // Sizes are re-fetched on every open so the numbers never go stale after a
   // previous clear; every category defaults to checked unless the user opts
-  // out (clear-all is the primary use case).
+  // out (clear-all is the primary use case). The fallback engine is read in
+  // parallel because it is an independent (and usually absent) install.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    getCacheSizes()
-      .then((results) => {
+    Promise.all([getCacheSizes(), getFallbackEngineSize()])
+      .then(([results, engineBytes]) => {
         if (cancelled) return;
         setSizes({
           metadata: results.find((r) => r.id === "metadata")?.bytes ?? 0,
@@ -70,18 +88,21 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
           covers: results.find((r) => r.id === "covers")?.bytes ?? 0,
           prefetch: results.find((r) => r.id === "prefetch")?.bytes ?? 0,
         });
+        setFallbackSize(engineBytes);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         // Per-category estimators already swallow their own failures, but a
         // hard rejection here still degrades to zeroed sizes (Clear stays
-        // usable) instead of an unhandled promise rejection.
+        // usable) instead of an unhandled promise rejection. getFallbackEngineSize
+        // never rejects, so this only covers the cache-size read.
         void captureError({
           level: "error",
           source: CACHE_MANAGER_MODULE,
           message: `load-cache-sizes-failed: ${e instanceof Error ? e.message : String(e)}`,
         });
         setSizes({ metadata: 0, files: 0, covers: 0, prefetch: 0 });
+        setFallbackSize(null);
       });
     return () => {
       cancelled = true;
@@ -144,17 +165,48 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
   };
 
   const handleClear = async () => {
-    if (selected.size === 0 || clearing) return;
+    // The engine row adds a second kind of destructive work, so "nothing
+    // selected" must consider both groups.
+    if ((selected.size === 0 && !removeFallback) || clearing) return;
     setClearing(true);
     try {
-      await clearAppCache([...selected]);
+      const failures: string[] = [];
+
+      // Both groups run even if the other fails: the user asked to remove
+      // everything that was checked, and a cache category error must not leave
+      // the engine behind (nor the reverse). clearAppCache already aggregates
+      // its own per-category failures; the engine result is appended to the
+      // same aggregate before the single error toast.
+      if (selected.size > 0) {
+        try {
+          await clearAppCache([...selected]);
+        } catch (e: unknown) {
+          failures.push(e instanceof Error ? e.message : String(e));
+        }
+      }
+      if (removeFallback) {
+        try {
+          await removeFallbackEngine();
+        } catch (e: unknown) {
+          failures.push(e instanceof Error ? e.message : String(e));
+        }
+      }
+
+      if (failures.length > 0) {
+        // clearAppCache/removeFallbackEngine already log each failure via
+        // captureError; here we only surface the aggregate message and keep the
+        // modal open so the user can retry with a narrower selection.
+        void captureError({
+          level: "error",
+          source: CACHE_MANAGER_MODULE,
+          message: `clear-app-data-failed: ${failures.join(", ")}`,
+        });
+        showErrorToast(t("settings.clear_cache_error"));
+        return;
+      }
+
       showSuccessToast(t("settings.clear_cache_success"));
       onClose();
-    } catch {
-      // clearAppCache already logs each failing category via captureError;
-      // here we only surface the aggregated message and keep the modal open
-      // so the user can retry with a narrower selection.
-      showErrorToast(t("settings.clear_cache_error"));
     } finally {
       setClearing(false);
     }
@@ -199,11 +251,14 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
 
         <div className="flex flex-col">
           {CATEGORY_IDS.map((id) => (
-            <label
+            <div
               key={id}
-              className="flex items-center justify-between gap-3 py-2.5 cursor-pointer select-none"
+              className="flex items-center justify-between gap-3 py-2.5 select-none"
             >
-              <span className="flex items-center gap-3 min-w-0">
+              {/* Only the checkbox and its text toggle the row: the label is
+                  scoped to them, so the empty space and the size column are
+                  inert. */}
+              <label className="flex items-center gap-3 min-w-0 cursor-pointer">
                 <span className="relative inline-flex shrink-0">
                   <input
                     type="checkbox"
@@ -221,27 +276,64 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
                 <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
                   {t(`cache.label.${id}`, CACHE_CATEGORY_LABELS[id])}
                 </span>
-              </span>
-              <span className="w-14 h-5 shrink-0 flex items-center justify-end">
+              </label>
+              <span className="w-20 h-5 shrink-0 flex items-center justify-end">
                 {sizes[id] === null ? (
-                  // Skeleton bar sized to the size column (56px = w-14) inside
+                  // Skeleton bar sized to the size column (80px = w-20) inside
                   // a fixed h-5 slot (text-sm line height = 20px): the column
                   // keeps its exact width AND height in both states, so nothing
                   // visibly jumps when sizes load.
                   <span
                     data-testid="size-placeholder"
-                    className="w-14 h-3.5 rounded bg-gray-200 dark:bg-[#2a2b2f] animate-pulse"
+                    className="w-20 h-3.5 rounded bg-gray-200 dark:bg-[#2a2b2f] animate-pulse"
                     role="status"
                     aria-label={t("loading")}
                   />
                 ) : (
-                  <span className="text-sm leading-none text-gray-500 dark:text-gray-400">
+                  <span className="w-20 text-sm leading-none text-right whitespace-nowrap text-gray-500 dark:text-gray-400">
                     {formatBytes(sizes[id])}
                   </span>
                 )}
               </span>
-            </label>
+            </div>
           ))}
+
+          {/* Optional mpv.exe fallback engine. Rendered ONLY when it is
+              installed: on a machine without it there is nothing to remove, so
+              the row would be a dead control. `undefined` while the status read
+              is in flight keeps it hidden (no flash-then-disappear). It is
+              unchecked by default — deleting an installed binary is opt-in,
+              unlike the cache rows which default to checked. */}
+          {typeof fallbackSize === "number" ? (
+            <div
+              key={FALLBACK_ENGINE_ID}
+              className="flex items-center justify-between gap-3 py-2.5 select-none"
+            >
+              <label className="flex items-center gap-3 min-w-0 cursor-pointer">
+                <span className="relative inline-flex shrink-0">
+                  <input
+                    type="checkbox"
+                    data-testid="fallback-engine-checkbox"
+                    checked={removeFallback}
+                    onChange={() => {
+                      setRemoveFallback((prev) => !prev);
+                    }}
+                    className="peer appearance-none w-4 h-4 rounded border-2 border-gray-400 dark:border-gray-500 bg-white dark:bg-[#2a2b2f] checked:bg-brand-primary checked:border-brand-primary cursor-pointer transition-colors"
+                  />
+                  <Check
+                    className="absolute inset-0 m-auto w-3 h-3 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
+                    strokeWidth={3}
+                  />
+                </span>
+                <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                  {t(FALLBACK_LABEL_KEY)}
+                </span>
+              </label>
+              <span className="w-20 h-5 shrink-0 flex items-center justify-end text-sm leading-none text-right whitespace-nowrap text-gray-500 dark:text-gray-400">
+                {formatBytes(fallbackSize)}
+              </span>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex items-center justify-end gap-3 mt-2">
@@ -257,7 +349,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
             onClick={() => {
               void handleClear();
             }}
-            disabled={selected.size === 0 || clearing}
+            disabled={(selected.size === 0 && !removeFallback) || clearing}
             className="px-5 py-2.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {clearing && <LoaderCircle className="w-4 h-4 animate-spin" />}

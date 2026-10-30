@@ -14,8 +14,20 @@ import {
 export const CLEAR_LOCAL_CACHE_CMD = "clear_local_cache";
 export const CLEAR_THUMBNAIL_DIR_CMD = "clear_thumbnail_dir";
 export const GET_CACHE_INFO_CMD = "get_cache_info";
+export const STATUS_FALLBACK_CMD = "get_mpv_fallback_status";
+export const REMOVE_FALLBACK_CMD = "remove_mpv_fallback";
 
 export type CacheCategoryId = "metadata" | "files" | "covers" | "prefetch";
+
+/**
+ * The mpv.exe fallback engine is NOT a cache category: it is an installed
+ * optional binary with its own removal command, and it is absent on most
+ * machines. It therefore gets its own id instead of joining
+ * {@link CacheCategoryId} (which would break the fixed four-row size/shape
+ * contract that `getCacheSizes` and the modal rely on), and is handled
+ * explicitly by the two helpers below.
+ */
+export const FALLBACK_ENGINE_ID = "fallback_engine";
 
 // Single source of truth for category display names — the UI renders rows
 // from this map while getCacheSizes uses the same labels for its results.
@@ -50,6 +62,65 @@ const ALL_CACHE_CATEGORIES: CacheCategoryId[] = [
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Every invoke rejection from the fallback commands is "<code>: <text>". */
+const ERROR_CODE_SEPARATOR = ": ";
+
+/**
+ * Installed size of the optional mpv.exe fallback engine, or `null` when it is
+ * not installed.
+ *
+ * `null` is the UI's "hide the row" signal, so it must mean "nothing to
+ * remove" — an `invalid` install has bytes on disk but is still deletable, so
+ * it reports its directory size too. Any read failure degrades to `null`
+ * (the row stays hidden) rather than blocking the dialog: this is an additive
+ * row, never a prerequisite for clearing the four cache categories.
+ */
+export async function getFallbackEngineSize(): Promise<number | null> {
+  try {
+    const status = await invoke<unknown>(STATUS_FALLBACK_CMD);
+    if (typeof status !== "object" || status === null) return null;
+    const record = status as Record<string, unknown>;
+    const stage = record["stage"];
+    if (stage === "notInstalled") return null;
+    // `installed` always carries a size; `invalid` may not, and a missing size
+    // on a present install still deserves a row (0 B is honest for "unknown").
+    const size = record["size"];
+    return typeof size === "number" ? size : 0;
+  } catch (e: unknown) {
+    await captureError({
+      level: "warn",
+      source: "cache",
+      message: `get-fallback-engine-size failed: ${errorMessage(e)}`,
+    });
+    return null;
+  }
+}
+
+/**
+ * Removes the installed fallback engine.
+ *
+ * Rejections are re-thrown as a real `Error` carrying the backend prose (the
+ * stable `code` slug is logged, not rendered: callers surface one aggregate
+ * message). This is deliberately separate from `clearAppCache`: it deletes an
+ * installed binary, not cached data.
+ */
+export async function removeFallbackEngine(): Promise<void> {
+  try {
+    await invoke(REMOVE_FALLBACK_CMD);
+  } catch (e: unknown) {
+    const raw = errorMessage(e);
+    const separatorIndex = raw.indexOf(ERROR_CODE_SEPARATOR);
+    const code = separatorIndex > 0 ? raw.slice(0, separatorIndex) : "unknown";
+    const detail = separatorIndex > 0 ? raw.slice(separatorIndex + 2) : raw;
+    await captureError({
+      level: "error",
+      source: "cache",
+      message: `remove-fallback-engine failed (${code}): ${detail}`,
+    });
+    throw new Error(detail);
+  }
 }
 
 export async function getCacheSizes(): Promise<CacheCategoryInfo[]> {

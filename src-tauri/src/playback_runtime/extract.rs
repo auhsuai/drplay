@@ -133,6 +133,33 @@ pub fn extract_engine_exe(
             return Ok(false);
         }
         if !is_engine_entry(&entry.name) {
+            // Pass 1 already validated this name from the header; validating it
+            // again here keeps the invariant at the point where we actually
+            // touch the stream.
+            if let Err(err) = validate_entry_path(&entry.name) {
+                write_error = Some(err);
+                return Ok(false);
+            }
+            // SOLID archives: one compressed block holds many files
+            // concatenated, and sevenz-rust2 hands each entry a bounded view
+            // over the SAME block reader. Its own documentation warns: "When
+            // decoding files in a block, the data to be decompressed depends on
+            // the data in front of it, you cannot simply skip the previous data
+            // and only decompress the data in the back." Returning `Ok(true)`
+            // without reading therefore leaves the block reader at the wrong
+            // offset, and the NEXT entry is decoded from the wrong bytes (its
+            // CRC check then fails). Draining the skipped entry is what
+            // advances the block reader correctly -- it is mandatory, not an
+            // optimisation.
+            if let Err(err) = io::copy(data, &mut io::sink()) {
+                write_error = Some(FallbackError::ArchiveUnreadable {
+                    detail: format!(
+                        "draining a skipped archive entry failed: {}",
+                        read_failure_class(&err)
+                    ),
+                });
+                return Ok(false);
+            }
             return Ok(true);
         }
         saw_entry = true;
@@ -188,7 +215,7 @@ fn write_entry(data: &mut dyn io::Read, out_path: &Path, ceiling: u64) -> Result
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
                 return Err(FallbackError::ArchiveUnreadable {
-                    detail: format!("the archive stream failed: {}", io_kind(&e)),
+                    detail: format!("the archive stream failed: {}", read_failure_class(&e)),
                 })
             }
         };
@@ -241,6 +268,34 @@ fn io_kind(err: &io::Error) -> &'static str {
     }
 }
 
+/// Describes a failure that happened while READING decoded archive data.
+///
+/// This is deliberately more specific than [`io_kind`]: a solid-block desync or
+/// a truncated payload surfaces as a per-entry CRC mismatch inside
+/// sevenz-rust2's `Crc32VerifyingReader`, which wraps
+/// `Error::ChecksumVerificationFailed` in an `io::Error` (kind `Other`). That
+/// used to collapse to a bare "I/O error" and made an archive-integrity bug
+/// look like a filesystem problem. The `ErrorKind` and the decoder's own class
+/// are both reported; no blobs, names, or paths are included.
+fn read_failure_class(err: &io::Error) -> String {
+    let kind = format!("{:?}", err.kind());
+    if let Some(cause) = err.get_ref() {
+        if let Some(sevenz_err) = cause.downcast_ref::<sevenz_rust2::Error>() {
+            if matches!(sevenz_err, sevenz_rust2::Error::ChecksumVerificationFailed) {
+                return format!(
+                    "{kind} (per-entry CRC mismatch while decoding archive data: the decompressed \
+                     bytes did not match what the archive recorded)"
+                );
+            }
+            return format!("{kind} (archive decoder: {})", describe_archive_error(sevenz_err));
+        }
+    }
+    if err.kind() == io::ErrorKind::InvalidData {
+        return format!("{kind} (archive data did not match its recorded checksum)");
+    }
+    kind
+}
+
 /// 7z errors carry decoded archive internals; only the class is surfaced.
 fn describe_archive_error(err: &sevenz_rust2::Error) -> String {
     use sevenz_rust2::Error as E;
@@ -283,6 +338,53 @@ mod tests {
         }
         writer.finish().expect("finish 7z archive");
         path
+    }
+
+    /// Builds a SINGLE-BLOCK ("solid") archive: every entry is concatenated
+    /// into one compressed block, which is exactly the shape of the real
+    /// upstream mpv archive. `push_archive_entry` (used by `build_archive`)
+    /// emits one block per file, so it can never reproduce the solid-block
+    /// desync bug.
+    fn build_solid_archive(
+        dir: &Path,
+        entries: &[(&str, Vec<u8>)],
+        method: sevenz_rust2::EncoderMethod,
+    ) -> PathBuf {
+        let path = dir.join("fixture-solid.7z");
+        let mut writer = sevenz_rust2::ArchiveWriter::create(&path).expect("create 7z writer");
+        writer.set_content_methods(vec![method.into()]);
+        let mut metas = Vec::with_capacity(entries.len());
+        let mut readers = Vec::with_capacity(entries.len());
+        for (name, body) in entries {
+            metas.push(sevenz_rust2::ArchiveEntry::new_file(name));
+            readers.push(sevenz_rust2::SourceReader::new(io::Cursor::new(body.clone())));
+        }
+        writer.push_archive_entries(metas, readers).expect("push solid block");
+        writer.finish().expect("finish 7z archive");
+        path
+    }
+
+    fn assert_solid(path: &Path) {
+        let reader = ArchiveReader::open(path, sevenz_rust2::Password::empty()).expect("open fixture");
+        assert!(
+            reader.archive().is_solid,
+            "the fixture MUST be solid, otherwise it cannot reproduce the desync bug"
+        );
+    }
+
+    /// Flips one bit inside the first on-disk occurrence of `marker`.
+    ///
+    /// Only meaningful with the COPY method: the entry bytes then appear
+    /// verbatim in the packed stream, so the marker locates the exact byte to
+    /// corrupt without hard-coding any 7z layout constant.
+    fn corrupt_marker(path: &Path, marker: &[u8]) {
+        let mut bytes = std::fs::read(path).expect("read fixture");
+        let at = bytes
+            .windows(marker.len())
+            .position(|w| w == marker)
+            .expect("marker must be visible in a COPY-packed archive");
+        bytes[at] ^= 0xFF;
+        std::fs::write(path, &bytes).expect("write corrupted fixture");
     }
 
     #[test]
@@ -341,6 +443,162 @@ mod tests {
         assert!(!staging.join("LICENSE.GPL").exists(), "no other entry may be written");
         assert!(!staging.join("doc").exists(), "no directories may be created");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// REGRESSION: a solid block holds many files inside ONE compressed
+    /// stream. Returning `Ok(true)` for a skipped entry without draining it
+    /// leaves the shared block reader at the wrong offset, so the target is
+    /// decoded from the wrong bytes and its CRC check fails. The real upstream
+    /// archive is solid; the per-file fixtures above are not, which is why this
+    /// needs its own fixture.
+    #[test]
+    fn extracts_the_engine_entry_from_a_solid_archive_with_siblings_before_it() {
+        let dir = temp_scope_dir("ex_solid");
+        // Distinctive, non-repeating siblings so a desync would be visible.
+        let aaa: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        let bbb: Vec<u8> = (0..6144u32).map(|i| (255 - (i % 241)) as u8).collect();
+        let payload: Vec<u8> = (0..8192u32).map(|i| (i % 199) as u8).collect();
+
+        let archive = build_solid_archive(
+            &dir,
+            &[
+                ("aaa.txt", aaa.clone()),
+                ("bbb.txt", bbb.clone()),
+                ("mpv.exe", payload.clone()),
+            ],
+            sevenz_rust2::EncoderMethod::LZMA2,
+        );
+        assert_solid(&archive);
+
+        let staging = dir.join("stage");
+        let extracted = extract_engine_exe(&archive, &staging, SMALL_LIMITS).expect(
+            "a solid archive whose target follows other entries must extract cleanly \
+             (the skipped entries must be drained)",
+        );
+        assert_eq!(extracted.size, payload.len() as u64);
+        assert_eq!(
+            std::fs::read(&extracted.path).unwrap(),
+            payload,
+            "the extracted bytes must be the target entry, not a shifted window of a sibling"
+        );
+
+        // Only the target is materialised: the siblings are decoded (drained)
+        // but never written anywhere.
+        assert!(!staging.join("aaa.txt").exists(), "sibling aaa.txt must not be written");
+        assert!(!staging.join("bbb.txt").exists(), "sibling bbb.txt must not be written");
+        let staged: Vec<String> = std::fs::read_dir(&staging)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(staged, vec![String::from("mpv.exe")], "the staging dir must hold only the engine");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Same shape, but the sibling content is unrelated and large relative to
+    /// the target: proves the drain is by byte count, not by "first N bytes".
+    #[test]
+    fn solid_archive_with_irrelevant_sibling_content_still_yields_the_target() {
+        let dir = temp_scope_dir("ex_solid_irrelevant");
+        let junk: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 7) as u8).collect();
+        let payload: Vec<u8> = (0..4096u32).map(|i| (i % 13) as u8).collect();
+
+        let archive = build_solid_archive(
+            &dir,
+            &[("noise.bin", junk), ("mpv.exe", payload.clone())],
+            sevenz_rust2::EncoderMethod::LZMA2,
+        );
+        assert_solid(&archive);
+
+        let extracted = extract_engine_exe(&archive, &dir.join("stage"), SMALL_LIMITS)
+            .expect("64 KiB of skipped solid data must be drained, not skipped");
+        assert_eq!(extracted.size, payload.len() as u64);
+        assert_eq!(std::fs::read(&extracted.path).unwrap(), payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A corrupted member inside a solid block surfaces as a per-entry CRC
+    /// mismatch from `Crc32VerifyingReader` -- an `io::Error`, NOT a
+    /// filesystem failure. The detail must say so instead of "I/O error".
+    #[test]
+    fn solid_archive_corruption_reports_the_read_failure_class_not_a_bare_io_error() {
+        let dir = temp_scope_dir("ex_solid_crc");
+
+        // Both read paths are exercised: the corrupt region is placed in the
+        // SKIPPED entry (failure while draining) and, separately, in the TARGET
+        // entry (failure inside `write_entry`). COPY keeps the entry bytes
+        // verbatim in the packed stream, so the markers below can be located
+        // and flipped without knowing any 7z layout constant.
+        let sibling: Vec<u8> =
+            (0..8192u32).map(|i| if i < 64 { 0x33 } else { (i % 97) as u8 }).collect();
+        let payload: Vec<u8> =
+            (0..4096u32).map(|i| if i < 64 { 0x77 } else { (i % 89) as u8 }).collect();
+
+        let cases: [(&str, u8, &str); 2] = [
+            ("skipped entry", 0x33, "draining"),
+            ("target entry", 0x77, "archive stream"),
+        ];
+
+        for (label, marker_byte, expected_stage) in cases {
+            let case_dir = dir.join(label.replace(' ', "_"));
+            std::fs::create_dir_all(&case_dir).unwrap();
+            let archive = build_solid_archive(
+                &case_dir,
+                &[("aaa.txt", sibling.clone()), ("mpv.exe", payload.clone())],
+                sevenz_rust2::EncoderMethod::COPY,
+            );
+            assert_solid(&archive);
+            corrupt_marker(&archive, &vec![marker_byte; 64]);
+
+            let err = extract_engine_exe(&archive, &case_dir.join("stage"), SMALL_LIMITS)
+                .expect_err("a corrupted solid block must not extract silently");
+
+            let FallbackError::ArchiveUnreadable { detail } = &err else {
+                panic!("[{label}] expected ArchiveUnreadable, got {err:?}");
+            };
+            assert_ne!(
+                detail, "I/O error",
+                "[{label}] a desync/CRC failure must not read as a bare I/O error"
+            );
+            assert!(
+                detail.contains(expected_stage),
+                "[{label}] the detail must say which read failed, expected {expected_stage:?}: \
+                 {detail}"
+            );
+            assert!(
+                detail.contains("CRC") || detail.contains("Checksum") || detail.contains("checksum"),
+                "[{label}] the detail must name the checksum/desync class: {detail}"
+            );
+            assert!(
+                !detail.to_lowercase().contains("permission denied")
+                    && !detail.to_lowercase().contains("path not found"),
+                "[{label}] a CRC failure must not be attributed to the filesystem: {detail}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The detail formatter itself, driven directly: an `io::Error` wrapping
+    /// the crate's checksum error is classified as a checksum failure, and a
+    /// plain transport error keeps its `ErrorKind`.
+    #[test]
+    fn read_failure_class_names_the_crc_class_and_the_error_kind() {
+        let crc = io::Error::other(sevenz_rust2::Error::ChecksumVerificationFailed);
+        let text = read_failure_class(&crc);
+        assert!(text.contains("CRC"), "{text}");
+        assert!(text.contains(format!("{:?}", io::ErrorKind::Other).as_str()), "{text}");
+        assert!(!text.contains("I/O error"), "{text}");
+
+        let invalid = io::Error::new(io::ErrorKind::InvalidData, "checksum mismatch");
+        let text = read_failure_class(&invalid);
+        assert!(text.contains("InvalidData"), "{text}");
+        assert!(text.contains("checksum"), "{text}");
+
+        let eof = io::Error::new(io::ErrorKind::UnexpectedEof, "short");
+        let text = read_failure_class(&eof);
+        assert!(text.contains("UnexpectedEof"), "{text}");
     }
 
     #[test]

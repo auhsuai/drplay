@@ -341,10 +341,12 @@ pub fn run() {
             #[cfg(windows)] pip_set_aspect_cmd,
             #[cfg(windows)] video_surface_retarget_to_pip_cmd,
             #[cfg(windows)] video_surface_retarget_to_main_cmd,
-            // Optional fallback engine: read-only status + the single install
-            // entry point. There is deliberately no "switch engine" command.
+            // Optional fallback engine: read-only status, the single install
+            // entry point, and the removal entry point. There is deliberately
+            // no "switch engine" command.
             #[cfg(windows)] playback_runtime::commands::get_mpv_fallback_status,
             #[cfg(windows)] playback_runtime::commands::install_mpv_fallback,
+            #[cfg(windows)] playback_runtime::commands::remove_mpv_fallback,
         ])
         .build(tauri::generate_context!());
 

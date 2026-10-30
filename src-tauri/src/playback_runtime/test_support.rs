@@ -3,7 +3,7 @@
 //! Gated on `#[cfg(test)]` from `mod.rs`; it never enters a release build.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -11,6 +11,11 @@ use futures_util::stream;
 
 use super::download::{AssetTransport, BoxByteStream, FetchedAsset};
 use super::error::FallbackError;
+
+/// Serializes every test that touches the process-wide install slot, because
+/// that slot is (by design) global to the whole binary -- not per module. Both
+/// `install::tests` and `commands::tests` take this lock.
+pub static SLOT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Temp dir scoped by pid + tag, mirroring `src-tauri/src/tests.rs:3-16`.
 pub fn temp_scope_dir(tag: &str) -> PathBuf {

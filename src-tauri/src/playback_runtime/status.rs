@@ -81,11 +81,20 @@ impl FallbackProgress {
 /// path layout testable without spinning up Tauri. The layout is
 /// `<local_data>/engines/mpv/<version>/mpv.exe`.
 pub fn engine_exe_path(local_data_root: &Path, version: &str) -> std::path::PathBuf {
+    engine_version_dir(local_data_root, version).join(metadata::MPV_EXE_ENTRY)
+}
+
+/// Directory owned by one installed version:
+/// `<local_data>/engines/mpv/<version>`.
+///
+/// Removal deletes this whole directory rather than just the executable, so a
+/// partially-written install can never leave an orphan behind. Derived from
+/// [`engine_exe_path`] so the two can never drift apart.
+pub fn engine_version_dir(local_data_root: &Path, version: &str) -> std::path::PathBuf {
     local_data_root
         .join("engines")
         .join(metadata::ENGINE_DIR_NAME)
         .join(version)
-        .join(metadata::MPV_EXE_ENTRY)
 }
 
 /// Root for in-flight work: `<local_data>/engines/.staging`.
@@ -110,6 +119,12 @@ mod tests {
             .join("mpv.exe");
         assert_eq!(path, expected);
         assert!(path.ends_with(r"engines\mpv\2026-10-18-fffe7a23a8\mpv.exe"));
+        // Removal targets the whole version directory, which must be exactly
+        // the exe's parent (or a half-written install would survive).
+        assert_eq!(
+            engine_version_dir(root, "2026-10-18-fffe7a23a8"),
+            path.parent().unwrap()
+        );
     }
 
     #[test]

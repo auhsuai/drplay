@@ -29,7 +29,7 @@ use super::download::{receive_asset, AssetTransport, ExpectedAsset};
 use super::error::FallbackError;
 use super::extract::{extract_engine_exe, ExtractLimits};
 use super::metadata;
-use super::status::{engine_exe_path, staging_root, FallbackProgress, FallbackStatus};
+use super::status::{engine_exe_path, engine_version_dir, staging_root, FallbackProgress, FallbackStatus};
 use super::win_version;
 
 /// One install at a time, process-wide.
@@ -302,6 +302,46 @@ pub fn status_for(local_data_root: &Path) -> FallbackStatus {
     evaluate_exe(&engine_exe_path(local_data_root, metadata::MPV_VERSION))
 }
 
+/// Removes the pinned version directory and reports the settled status.
+///
+/// Deletes `<local_data>/engines/mpv/<MPV_VERSION>/` -- the whole directory,
+/// not just `mpv.exe` -- so no half-written install (leftover temp files from
+/// an interrupted publish, an unexpected sibling file) survives a removal.
+///
+/// Invariants, mirroring the install pipeline:
+///
+/// * **Idempotent.** A missing version directory is success, not an error;
+///   the caller gets the re-derived status either way.
+/// * **Never touches anything else.** The `.staging` root, other version
+///   directories and `<local_data>/engines/mpv` itself are left alone: staging
+///   is reclaimed separately at startup, and other versions may be a previous
+///   working install.
+/// * **Never races an install.** Callers hold the install slot; this function
+///   assumes the slot is held and does not acquire it itself (so it stays
+///   usable from tests and from a caller that already owns the guard).
+///
+/// The returned status is re-derived from disk, never assumed.
+pub fn remove_installed(local_data_root: &Path) -> Result<FallbackStatus, FallbackError> {
+    let version_dir = engine_version_dir(local_data_root, metadata::MPV_VERSION);
+
+    match std::fs::remove_dir_all(&version_dir) {
+        Ok(()) => {}
+        // Already gone (or never installed): the requested end state holds.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            log::warn!(
+                "[playback_runtime] could not remove the engine dir {}: {err}",
+                version_dir.display()
+            );
+            return Err(FallbackError::RemoveFailed {
+                detail: describe_io("remove the engine folder", &err),
+            });
+        }
+    }
+
+    Ok(status_for(local_data_root))
+}
+
 
 /// Removes staging directories older than [`metadata::STAGING_MAX_AGE`].
 ///
@@ -419,12 +459,7 @@ fn describe_io(action: &str, err: &std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::playback_runtime::test_support::{temp_scope_dir, StubTransport};
-    use std::sync::Mutex;
-
-    /// Serializes the tests that touch the process-wide install slot, because it
-    /// is (by design) global.
-    static SLOT_LOCK: Mutex<()> = Mutex::new(());
+    use crate::playback_runtime::test_support::{temp_scope_dir, StubTransport, SLOT_LOCK};
 
     fn no_progress(_: FallbackProgress) {}
 

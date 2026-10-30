@@ -7,9 +7,10 @@
 //!
 //! ## Scope of this module
 //!
-//! The install service plus the two IPC entry points in [`commands`]. It does
-//! NOT choose the playback engine: `ACTIVE_ENGINE` lives in `player::engine_mode`
-//! and is only *read* here, through `player::engine_state()`.
+//! The install service plus the three IPC entry points in [`commands`] (status,
+//! install, remove). It does NOT choose the playback engine: `ACTIVE_ENGINE`
+//! lives in `player::engine_mode` and is only *read* here, through
+//! `player::engine_state()`.
 //!
 //! ## Pipeline
 //!
@@ -24,7 +25,7 @@
 //!     |
 //! status.rs    what the UI renders (settled state) + progress (in flight)
 //!     |
-//! commands.rs  the two Tauri commands + the progress event  <- frontend edge
+//! commands.rs  the three Tauri commands + the progress event <- frontend edge
 //!     |
 //! error.rs     one typed error per actionable failure
 //! ```
