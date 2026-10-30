@@ -276,7 +276,7 @@ src-tauri/
   src/protocol/        Custom app protocol and cover handling
   tauri.conf.json      Window, CSP, bundled runtime and resources
 scripts/               Windows mpv/WebView2 artifact fetch scripts
-docs/                  Architecture decision records and screenshots
+docs/                  Screenshots referenced by this README
 ```
 
 ## Contributing
