@@ -108,6 +108,29 @@ function rowCheckbox(name: string): HTMLInputElement {
   return screen.getByRole<HTMLInputElement>("checkbox", { name });
 }
 
+// Destructive actions ask through the in-app ConfirmDialog, not window.confirm
+// (the Tauri dialog plugin shadows window.confirm with an async shim that
+// invokes a command the Rust plugin no longer registers, so it can never
+// resolve). The modal is found by the title it derives from the action, and
+// driven through the buttons it actually renders.
+function confirmModal(title: string): HTMLElement {
+  return screen.getByRole("dialog", { name: title });
+}
+
+function clickModalButton(title: string, label: string) {
+  fireEvent.click(
+    within(confirmModal(title)).getByRole("button", { name: label }),
+  );
+}
+
+// Confirm the open modal and flush the async action it starts.
+async function confirmModalAction(title: string) {
+  await act(async () => {
+    clickModalButton(title, "common.delete");
+    await Promise.resolve();
+  });
+}
+
 function selectRow(name: string) {
   fireEvent.click(rowCheckbox(name));
 }
@@ -441,7 +464,7 @@ describe("TrashScreen bulk operations", () => {
     selectRow("Track 1");
     selectRow("Track 2");
 
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirmSpy = vi.spyOn(window, "confirm");
     mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
     mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
       new Error("drive 500"),
@@ -451,6 +474,12 @@ describe("TrashScreen bulk operations", () => {
       fireEvent.click(screen.getByText("settings.trash_delete_selected"));
       await Promise.resolve();
     });
+    expect(
+      within(confirmModal("settings.trash_delete_selected")).getByText(
+        "settings.confirm_bulk_delete",
+      ),
+    ).toBeTruthy();
+    await confirmModalAction("settings.trash_delete_selected");
 
     await waitFor(() => {
       expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledTimes(2);
@@ -466,6 +495,8 @@ describe("TrashScreen bulk operations", () => {
       .map((call) => call[0].message)
       .join("\n");
     expect(loggedMessages).toContain("bulk-delete-item-failed");
+    // Regression: the flow must never touch the native dialog shim again.
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it("bulk delete: confirm cancelled -> no delete requests, selection kept (P2-05-3)", async () => {
@@ -474,18 +505,52 @@ describe("TrashScreen bulk operations", () => {
       { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
     ]);
     selectRow("Track 1");
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirmSpy = vi.spyOn(window, "confirm");
 
     await act(async () => {
       fireEvent.click(screen.getByText("settings.trash_delete_selected"));
       await Promise.resolve();
     });
 
-    expect(confirmSpy).toHaveBeenCalledWith("settings.confirm_bulk_delete");
+    expect(
+      within(confirmModal("settings.trash_delete_selected")).getByText(
+        "settings.confirm_bulk_delete",
+      ),
+    ).toBeTruthy();
+    clickModalButton("settings.trash_delete_selected", "common.cancel");
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "settings.trash_delete_selected" }),
+    ).toBeNull();
     expect(mocks.driveApi.permanentlyDeleteFile).not.toHaveBeenCalled();
     expect(screen.getByText("1 common.selected")).toBeTruthy();
     expect(screen.getByText("Track 1")).not.toBeNull();
     expect(screen.getByText("Track 2")).not.toBeNull();
+  });
+
+  it("bulk delete: a double click on confirm still sends exactly one request", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+    selectRow("Track 1");
+    mocks.driveApi.permanentlyDeleteFile.mockResolvedValue(true);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("settings.trash_delete_selected"));
+      await Promise.resolve();
+    });
+
+    const button = within(
+      confirmModal("settings.trash_delete_selected"),
+    ).getByRole("button", { name: "common.delete" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("Track 1")).toBeNull();
   });
 
   it("empty trash: partial failure -> no onClose + succeeded items removed", async () => {
@@ -497,7 +562,7 @@ describe("TrashScreen bulk operations", () => {
       ],
       onClose,
     );
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirmSpy = vi.spyOn(window, "confirm");
 
     mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
     mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
@@ -508,6 +573,12 @@ describe("TrashScreen bulk operations", () => {
       fireEvent.click(screen.getByText("settings.empty_trash"));
       await Promise.resolve();
     });
+    expect(
+      within(confirmModal("settings.empty_trash")).getByText(
+        "settings.confirm_empty_trash",
+      ),
+    ).toBeTruthy();
+    await confirmModalAction("settings.empty_trash");
 
     await waitFor(() => {
       expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledTimes(2);
@@ -519,6 +590,7 @@ describe("TrashScreen bulk operations", () => {
         "settings.empty_trash_error_count",
       );
     });
+    expect(confirmSpy).not.toHaveBeenCalled();
     const loggedMessages = mocks.captureError.mock.calls
       .map((call) => call[0].message)
       .join("\n");
@@ -615,7 +687,7 @@ describe("TrashScreen per-row permanent delete", () => {
       { id: "f2", name: "Track 2", mimeType: "audio/mpeg" },
     ]);
     selectRow("Track 1");
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirmSpy = vi.spyOn(window, "confirm");
     mocks.driveApi.permanentlyDeleteFile.mockResolvedValueOnce(true);
 
     await act(async () => {
@@ -627,7 +699,15 @@ describe("TrashScreen per-row permanent delete", () => {
       await Promise.resolve();
     });
 
-    expect(confirmSpy).toHaveBeenCalledWith("settings.trash_delete_confirm");
+    expect(
+      within(confirmModal("settings.trash_delete_item")).getByText(
+        "settings.trash_delete_confirm",
+      ),
+    ).toBeTruthy();
+    await confirmModalAction("settings.trash_delete_item");
+
+    // Regression: destructive flows go through the in-app dialog only.
+    expect(confirmSpy).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledWith(
         "test-token",
@@ -635,15 +715,19 @@ describe("TrashScreen per-row permanent delete", () => {
       );
       expect(screen.queryByText("Track 1")).toBeNull();
     });
+    expect(mocks.driveApi.permanentlyDeleteFile).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Track 2")).not.toBeNull();
     expect(screen.queryByText("settings.trash_restore_selected")).toBeNull();
+    expect(
+      screen.queryByRole("dialog", { name: "settings.trash_delete_item" }),
+    ).toBeNull();
   });
 
   it("cancelled confirm -> no delete request and the row stays", async () => {
     await renderWithItems([
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
     ]);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirmSpy = vi.spyOn(window, "confirm");
 
     await act(async () => {
       fireEvent.click(
@@ -654,7 +738,38 @@ describe("TrashScreen per-row permanent delete", () => {
       await Promise.resolve();
     });
 
-    expect(confirmSpy).toHaveBeenCalledWith("settings.trash_delete_confirm");
+    clickModalButton("settings.trash_delete_item", "common.cancel");
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "settings.trash_delete_item" }),
+    ).toBeNull();
+    expect(mocks.driveApi.permanentlyDeleteFile).not.toHaveBeenCalled();
+    expect(screen.getByText("Track 1")).not.toBeNull();
+  });
+
+  it("Escape on the confirm dialog cancels without deleting", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
+    ]);
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("Track 1")).getByRole("button", {
+          name: "settings.trash_delete_item",
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("dialog", { name: "settings.trash_delete_item" }),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(
+      screen.queryByRole("dialog", { name: "settings.trash_delete_item" }),
+    ).toBeNull();
     expect(mocks.driveApi.permanentlyDeleteFile).not.toHaveBeenCalled();
     expect(screen.getByText("Track 1")).not.toBeNull();
   });
@@ -663,7 +778,7 @@ describe("TrashScreen per-row permanent delete", () => {
     await renderWithItems([
       { id: "f1", name: "Track 1", mimeType: "audio/mpeg" },
     ]);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirmSpy = vi.spyOn(window, "confirm");
     mocks.driveApi.permanentlyDeleteFile.mockRejectedValueOnce(
       new Error("drive 500"),
     );
@@ -676,12 +791,14 @@ describe("TrashScreen per-row permanent delete", () => {
       );
       await Promise.resolve();
     });
+    await confirmModalAction("settings.trash_delete_item");
 
     await waitFor(() => {
       expect(mocks.showErrorToast).toHaveBeenCalledWith(
         "settings.trash_delete_error",
       );
     });
+    expect(confirmSpy).not.toHaveBeenCalled();
     expect(screen.getByText("Track 1")).not.toBeNull();
     const loggedMessages = mocks.captureError.mock.calls
       .map((call) => call[0].message)
@@ -886,7 +1003,6 @@ describe("TrashScreen dialog a11y (P2-05-6)", () => {
       onClose,
     );
     selectRow("Track 1");
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     mocks.driveApi.permanentlyDeleteFile.mockImplementation(
       () => new Promise<never>(() => undefined),
     );
@@ -895,10 +1011,19 @@ describe("TrashScreen dialog a11y (P2-05-6)", () => {
       fireEvent.click(screen.getByText("settings.trash_delete_selected"));
       await Promise.resolve();
     });
+    await confirmModalAction("settings.trash_delete_selected");
 
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(onClose).not.toHaveBeenCalled();
+    // The dialog owns Escape while its request is in flight: it must stay
+    // open with the busy state instead of silently dropping the operation.
+    const dialog = screen.getByRole("dialog", {
+      name: "settings.trash_delete_selected",
+    });
+    expect(
+      within(dialog).getByText("common.delete").closest("button"),
+    ).toHaveProperty("disabled", true);
   });
 
   it("unmount removes the Escape listener", () => {
@@ -972,7 +1097,7 @@ describe("TrashItemRow metadata columns", () => {
         isDeleting={false}
         onToggle={vi.fn()}
         onRestore={vi.fn(() => Promise.resolve())}
-        onDelete={vi.fn(() => Promise.resolve())}
+        onDelete={vi.fn()}
       />,
     );
 
@@ -996,7 +1121,7 @@ describe("TrashItemRow metadata columns", () => {
         isDeleting={false}
         onToggle={vi.fn()}
         onRestore={vi.fn(() => Promise.resolve())}
-        onDelete={vi.fn(() => Promise.resolve())}
+        onDelete={vi.fn()}
       />,
     );
 

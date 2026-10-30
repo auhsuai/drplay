@@ -15,7 +15,7 @@ export interface TrashItemsContentProps {
   onToggleItem: (id: string) => void;
   onToggleAll: () => void;
   onRestore: (id: string) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onDelete: (id: string) => void;
 }
 
 // Read-only view of the trash list: loading skeleton, empty state and the

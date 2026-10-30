@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -13,6 +13,7 @@ import { db } from "../../../db/db";
 import { copyToClipboard } from "../../../utils/copyToClipboard";
 import { showErrorToast } from "../../../utils/simpleToast";
 import { ScrollText } from "lucide-react";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 
 const ERROR_LOG_SECTION_MODULE = "ErrorLogSection";
 
@@ -99,6 +100,8 @@ export function ErrorLogSection() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const confirmInFlightRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hasSelection, setHasSelection] = useState(false);
 
@@ -155,11 +158,7 @@ export function ErrorLogSection() {
     }
   };
 
-  const handleClear = async () => {
-    if (busy) return;
-    // Clearing wipes the whole journal with no undo — ask first (parity with
-    // TrashScreen.handleEmptyTrash).
-    if (!window.confirm(t("settings.confirm_clear_logs"))) return;
+  const performClear = async () => {
     setBusy(true);
     try {
       await clearErrorLogs();
@@ -174,6 +173,33 @@ export function ErrorLogSection() {
       setBusy(false);
     }
   };
+
+  // Clearing wipes the whole journal with no undo — ask first (parity with
+  // TrashScreen). This is an in-app dialog, not window.confirm: the Tauri
+  // dialog plugin replaces window.confirm with an async shim that invokes a
+  // command the Rust plugin no longer registers, so it can never resolve.
+  const handleClear = () => {
+    if (busy) return;
+    setConfirmOpen(true);
+  };
+
+  const handleConfirmClear = () => {
+    if (confirmInFlightRef.current) return;
+    confirmInFlightRef.current = true;
+    void (async () => {
+      try {
+        await performClear();
+      } finally {
+        confirmInFlightRef.current = false;
+        setConfirmOpen(false);
+      }
+    })();
+  };
+
+  const handleCancelClear = useCallback(() => {
+    if (confirmInFlightRef.current) return;
+    setConfirmOpen(false);
+  }, []);
 
   const actionButtons = (
     <div className="flex items-center gap-2 shrink-0 -mt-[2px]">
@@ -192,9 +218,7 @@ export function ErrorLogSection() {
             : t("settings.error_log_copy")}
       </button>
       <button
-        onClick={() => {
-          void handleClear();
-        }}
+        onClick={handleClear}
         disabled={logList.length === 0 || busy}
         className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
@@ -263,6 +287,17 @@ export function ErrorLogSection() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        title={t("settings.error_log_clear")}
+        body={t("settings.confirm_clear_logs")}
+        confirmLabel={t("common.delete")}
+        cancelLabel={t("common.cancel")}
+        onClose={handleCancelClear}
+        onConfirm={handleConfirmClear}
+        isOperating={busy}
+      />
     </div>
   );
 }

@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { restoreFile, permanentlyDeleteFile } from "../../utils/driveApi";
 import { showErrorToast, showSuccessToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TrashItemsContent } from "./Trash/TrashItemsContent";
 import { TrashActionBar } from "./Trash/TrashActionBar";
 import {
@@ -19,6 +20,17 @@ interface TrashScreenProps {
   token: string;
   onClose: () => void;
 }
+
+// There is no native confirm() available: tauri-plugin-dialog 2.x overwrites
+// window.confirm with an ASYNC shim that invokes "plugin:dialog|confirm", a
+// command the Rust plugin no longer registers (confirm/ask are deprecated
+// aliases of "message"), so every window.confirm() rejected unhandled and the
+// action never ran. All destructive confirmations therefore go through the
+// in-app ConfirmDialog, tracked here as one shared pending action.
+type PendingConfirm =
+  | { kind: "delete-item"; id: string }
+  | { kind: "empty-trash" }
+  | { kind: "bulk-delete" };
 
 // Set membership toggle shared by the per-row busy indicators and the
 // selection set (add/remove one id without duplicating the Set dance).
@@ -52,6 +64,16 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   // separate "selection mode" to enter/leave.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkActioning, setIsBulkActioning] = useState(false);
+  // One shared in-app confirmation for every destructive action (row delete,
+  // empty trash, bulk delete). Row and bulk flows therefore can never stack
+  // two dialogs on top of each other.
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(
+    null,
+  );
+  // Synchronous re-entry latch: a rapid double click on the dialog's confirm
+  // button must still run the action exactly once (state updates alone are
+  // not visible to a second click in the same tick).
+  const confirmInFlightRef = useRef(false);
   const allSelected = items.length > 0 && selectedIds.size === items.length;
   const someSelected = selectedIds.size > 0 && !allSelected;
 
@@ -83,10 +105,13 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   // Escape closes the dialog. Window CAPTURE + stopPropagation mirror
   // BulkDeleteConfirmModal: a modal owns the key, layers behind stay inert.
   // Ignored while a destructive action is in flight (same guard as the X and
-  // backdrop); cleanup on unmount.
+  // backdrop) and while the confirmation dialog is open: that dialog listens on
+  // the same window capture target and owns the key itself, otherwise Escape
+  // would close the whole trash view underneath it. Cleanup on unmount.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (pendingConfirm !== null) return;
       e.stopPropagation();
       if (!isBulkActioning && !isEmptying) onClose();
     };
@@ -94,7 +119,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     return () => {
       window.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [isBulkActioning, isEmptying, onClose]);
+  }, [isBulkActioning, isEmptying, pendingConfirm, onClose]);
 
   // DEV-only debug trigger (Ctrl+Shift+D panel → "Empty states"): forces the
   // trash empty state by clearing items and dropping the loading flag so the
@@ -144,8 +169,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
 
   // Per-row permanent delete (new): confirm first, log + toast on failure,
   // prune the id from the selection so the bulk toolbar count stays accurate.
-  const handleDelete = async (id: string) => {
-    if (!window.confirm(t("settings.trash_delete_confirm"))) return;
+  const performDelete = async (id: string) => {
     markDeleting(id, true);
     try {
       await permanentlyDeleteFile(token, id);
@@ -163,10 +187,11 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     }
   };
 
-  const handleEmptyTrash = async () => {
-    if (!window.confirm(t("settings.confirm_empty_trash"))) {
-      return;
-    }
+  const handleDelete = (id: string) => {
+    setPendingConfirm({ kind: "delete-item", id });
+  };
+
+  const performEmptyTrash = async () => {
     setIsEmptying(true);
     try {
       const ids = items.map((item) => item.id);
@@ -195,6 +220,10 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     } finally {
       setIsEmptying(false);
     }
+  };
+
+  const handleEmptyTrash = () => {
+    setPendingConfirm({ kind: "empty-trash" });
   };
 
   const handleBulkRestore = async () => {
@@ -229,9 +258,7 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     }
   };
 
-  const handleBulkDelete = async () => {
-    if (selectedIds.size === 0 || isBulkActioning) return;
-    if (!window.confirm(t("settings.confirm_bulk_delete"))) return;
+  const performBulkDelete = async () => {
     setIsBulkActioning(true);
     try {
       const ids = Array.from(selectedIds);
@@ -261,6 +288,71 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     }
   };
 
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0 || isBulkActioning) return;
+    setPendingConfirm({ kind: "bulk-delete" });
+  };
+
+  // The single confirm entry point for the shared dialog: runs the pending
+  // action exactly once (a synchronous latch invalidates the click before any
+  // state update lands, so a double click cannot re-fire), then closes the
+  // dialog once the operation settles.
+  const handleConfirmAction = () => {
+    if (pendingConfirm === null || confirmInFlightRef.current) return;
+    confirmInFlightRef.current = true;
+    const action = pendingConfirm;
+    void (async () => {
+      try {
+        if (action.kind === "delete-item") {
+          await performDelete(action.id);
+        } else if (action.kind === "empty-trash") {
+          await performEmptyTrash();
+        } else {
+          await performBulkDelete();
+        }
+      } finally {
+        confirmInFlightRef.current = false;
+        setPendingConfirm(null);
+      }
+    })();
+  };
+
+  const handleCancelConfirm = useCallback(() => {
+    if (confirmInFlightRef.current) return;
+    setPendingConfirm(null);
+  }, []);
+
+  // Busy state for the confirmation dialog: mirrors the guard the action
+  // itself uses, so the confirm button shows a spinner and neither it nor
+  // Cancel/Escape/X can fire while the request is in flight.
+  const isConfirmOperating =
+    pendingConfirm !== null &&
+    (pendingConfirm.kind === "delete-item"
+      ? deletingIds.has(pendingConfirm.id)
+      : pendingConfirm.kind === "empty-trash"
+        ? isEmptying
+        : isBulkActioning);
+
+  // Copy for the shared confirmation dialog: the body stays the exact key the
+  // old window.confirm call received; the title names the action being taken.
+  const confirmBodyKey =
+    pendingConfirm === null
+      ? "settings.trash_delete_confirm"
+      : pendingConfirm.kind === "delete-item"
+        ? "settings.trash_delete_confirm"
+        : pendingConfirm.kind === "empty-trash"
+          ? "settings.confirm_empty_trash"
+          : "settings.confirm_bulk_delete";
+  const confirmDialogTitle =
+    pendingConfirm === null
+      ? ""
+      : pendingConfirm.kind === "delete-item"
+        ? t("settings.trash_delete_item")
+        : pendingConfirm.kind === "empty-trash"
+          ? t("settings.empty_trash")
+          : t("settings.trash_delete_selected");
+  const confirmLabel = t("common.delete");
+
   const toggleItem = (id: string) => {
     setSelectedIds((prev) => {
       const newSet = new Set(prev);
@@ -277,70 +369,86 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      role="presentation"
-      onClick={(e) => {
-        // Only close when the backdrop itself (not the dialog) is clicked.
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
+    <>
       <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="trash-title"
-        className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+        role="presentation"
+        onClick={(e) => {
+          // Only close when the backdrop itself (not the dialog) is clicked.
+          if (e.target === e.currentTarget) onClose();
+        }}
       >
-        {/* Header — title + the 30-day note, Close on the right */}
-        <div className="px-6 py-4 flex items-start justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
-          <div className="min-w-0">
-            <h1
-              id="trash-title"
-              className="text-lg font-bold text-gray-900 dark:text-white"
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="trash-title"
+          className="bg-white dark:bg-[#121212] w-full max-w-2xl h-[70vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        >
+          {/* Header — title + the 30-day note, Close on the right */}
+          <div className="px-6 py-4 flex items-start justify-between shrink-0 bg-gray-50/50 dark:bg-[#1a1b1e]/50">
+            <div className="min-w-0">
+              <h1
+                id="trash-title"
+                className="text-lg font-bold text-gray-900 dark:text-white"
+              >
+                {t("settings.trash")}
+              </h1>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {t("settings.trash_warning")}
+              </p>
+            </div>
+            <button
+              ref={closeButtonRef}
+              onClick={onClose}
+              aria-label={t("common.close")}
+              className="p-2 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-full transition-colors"
             >
-              {t("settings.trash")}
-            </h1>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {t("settings.trash_warning")}
-            </p>
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <button
-            ref={closeButtonRef}
-            onClick={onClose}
-            aria-label={t("common.close")}
-            className="p-2 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-full transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          {/* List */}
+          <TrashItemsContent
+            items={items}
+            isLoading={isLoading}
+            selectedIds={selectedIds}
+            restoringIds={restoringIds}
+            deletingIds={deletingIds}
+            allSelected={allSelected}
+            someSelected={someSelected}
+            onToggleItem={toggleItem}
+            onToggleAll={toggleAll}
+            onRestore={handleRestore}
+            onDelete={handleDelete}
+          />
+
+          {/* Footer */}
+          <TrashActionBar
+            selectedCount={selectedIds.size}
+            itemCount={items.length}
+            isBulkActioning={isBulkActioning}
+            isEmptying={isEmptying}
+            onBulkRestore={handleBulkRestore}
+            onBulkDelete={handleBulkDelete}
+            onEmptyTrash={handleEmptyTrash}
+            onClose={onClose}
+          />
         </div>
-
-        {/* List */}
-        <TrashItemsContent
-          items={items}
-          isLoading={isLoading}
-          selectedIds={selectedIds}
-          restoringIds={restoringIds}
-          deletingIds={deletingIds}
-          allSelected={allSelected}
-          someSelected={someSelected}
-          onToggleItem={toggleItem}
-          onToggleAll={toggleAll}
-          onRestore={handleRestore}
-          onDelete={handleDelete}
-        />
-
-        {/* Footer */}
-        <TrashActionBar
-          selectedCount={selectedIds.size}
-          itemCount={items.length}
-          isBulkActioning={isBulkActioning}
-          isEmptying={isEmptying}
-          onBulkRestore={handleBulkRestore}
-          onBulkDelete={handleBulkDelete}
-          onEmptyTrash={handleEmptyTrash}
-          onClose={onClose}
-        />
       </div>
-    </div>
+
+      {/* In-app confirmation for every destructive action: window.confirm is
+          dead in the packaged app (see PendingConfirm). The message text is the
+          same t() key that window.confirm used to receive. */}
+      <ConfirmDialog
+        isOpen={pendingConfirm !== null}
+        title={confirmDialogTitle}
+        body={pendingConfirm === null ? "" : t(confirmBodyKey)}
+        confirmLabel={confirmLabel}
+        cancelLabel={t("common.cancel")}
+        onClose={handleCancelConfirm}
+        onConfirm={handleConfirmAction}
+        isOperating={isConfirmOperating}
+      />
+    </>
   );
 }

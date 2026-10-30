@@ -29,7 +29,7 @@ interface TrashItemRowProps {
   isDeleting: boolean;
   onToggle: (id: string) => void;
   onRestore: (id: string) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onDelete: (id: string) => void;
 }
 
 // Drive returns sizes as strings (int64); folders have none. Malformed values
@@ -125,7 +125,7 @@ export function TrashItemRow({
         </button>
         <button
           onClick={() => {
-            void onDelete(item.id);
+            onDelete(item.id);
           }}
           disabled={isBusy}
           title={t("settings.trash_delete_item")}

@@ -14,6 +14,7 @@ import {
   fireEvent,
   cleanup,
   act,
+  within,
 } from "@testing-library/react";
 import { initReactI18next, useTranslation } from "react-i18next";
 import i18n from "i18next";
@@ -42,6 +43,11 @@ void i18n.use(initReactI18next).init({
           error_log_count: "{{count}} errors",
         },
         loading: "Loading...",
+        common: {
+          cancel: "Cancel",
+          delete: "Delete",
+          close: "Close",
+        },
       },
     },
   },
@@ -123,16 +129,17 @@ function makeEntries(): ErrorLogEntry[] {
   ];
 }
 
-// jsdom's window.confirm is unimplemented (returns undefined → falsy), so the
-// destructive Clear action must be stubbed explicitly: default true keeps the
-// existing "clear empties the list" case on the happy path, and tests that
-// need the cancel path flip it to false.
+// Destructive Clear asks through the in-app ConfirmDialog, not window.confirm
+// (the Tauri dialog plugin shadows window.confirm with an async shim invoking a
+// command the Rust plugin no longer registers, so it can never resolve). The
+// spy below stays installed and must never be called: that is the regression
+// guard against reintroducing the native call.
 let confirmSpy: MockInstance<(message?: string) => boolean>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   useLiveQueryMock.mockReturnValue([]);
-  confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  confirmSpy = vi.spyOn(window, "confirm");
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -143,6 +150,22 @@ afterEach(() => {
   cleanup();
   confirmSpy.mockRestore();
 });
+
+function clearDialog(): HTMLElement {
+  return screen.getByRole("dialog", { name: "Clear Log" });
+}
+
+function confirmClear() {
+  fireEvent.click(
+    within(clearDialog()).getByRole("button", { name: "Delete" }),
+  );
+}
+
+function cancelClear() {
+  fireEvent.click(
+    within(clearDialog()).getByRole("button", { name: "Cancel" }),
+  );
+}
 
 describe("ErrorLogSection", () => {
   it("renders empty state when the live query resolves to []", async () => {
@@ -235,15 +258,22 @@ describe("ErrorLogSection", () => {
   it("clear button calls clearErrorLogs and empties the list", async () => {
     useLiveQueryMock.mockReturnValue(makeEntries());
     clearErrorLogsMock.mockResolvedValue(undefined);
-    confirmSpy.mockReturnValue(true);
     const { rerender } = render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
     await screen.findByText((c) => c.startsWith("boom"));
     fireEvent.click(screen.getByRole("button", { name: /Clear/i }));
-    expect(confirmSpy).toHaveBeenCalledWith(
-      "Clear all error logs? This can't be undone.",
-    );
+    expect(
+      within(clearDialog()).getByText(
+        "Clear all error logs? This can't be undone.",
+      ),
+    ).toBeTruthy();
+    expect(clearErrorLogsMock).not.toHaveBeenCalled();
+    await act(async () => {
+      confirmClear();
+      await Promise.resolve();
+    });
+    expect(confirmSpy).not.toHaveBeenCalled();
     expect(clearErrorLogsMock).toHaveBeenCalledTimes(1);
     // After clearErrorLogs() the Dexie table changed; the live query re-runs
     // with [] — simulate that subscription push like the real hook would.
@@ -258,17 +288,16 @@ describe("ErrorLogSection", () => {
 
   it("clear button keeps the logs when the confirmation is cancelled", async () => {
     useLiveQueryMock.mockReturnValue(makeEntries());
-    confirmSpy.mockReturnValue(false);
     render(<ErrorLogSection />);
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
     await screen.findByText("boom day A");
 
     fireEvent.click(screen.getByRole("button", { name: /Clear/i }));
+    cancelClear();
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      "Clear all error logs? This can't be undone.",
-    );
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Clear Log" })).toBeNull();
     expect(clearErrorLogsMock).not.toHaveBeenCalled();
     // The day-detail view (and its entries) is untouched.
     expect(screen.getByText("boom day A")).toBeTruthy();
