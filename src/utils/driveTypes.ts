@@ -14,6 +14,11 @@ export interface DriveFileItem {
   // falls back to modifiedTime (REST reference, File resource:
   // developers.google.com/workspace/drive/api/reference/rest/v3/files).
   trashedTime?: string;
+  // Private key/value pairs of the requesting app. Entries with null values
+  // are cleared in update requests (REST reference, File resource). DrPlay
+  // stores its trash marker (deletedByDrPlay) and the deletion timestamp
+  // (deletedByDrPlayAt) here.
+  appProperties?: Record<string, string>;
   md5Checksum?: string;
   capabilities?: Record<string, boolean>;
 }

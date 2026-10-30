@@ -73,6 +73,7 @@ type TrashItemInput = {
   size?: string;
   modifiedTime?: string;
   trashedTime?: string;
+  appProperties?: Record<string, string>;
 };
 
 type DeferredCall = {
@@ -1126,5 +1127,377 @@ describe("TrashItemRow metadata columns", () => {
     );
 
     expect(screen.getAllByText("—")).toHaveLength(2);
+  });
+});
+
+// Row icon: videos are classified by the shared isVideoFile allowlist
+// (src/utils/audioQuery.ts) and render the inline film SVG; every other
+// non-folder keeps Music. Unknown extensions must never be classified video.
+describe("TrashItemRow video icon", () => {
+  const renderRow = (name: string, mimeType: string) =>
+    render(
+      <TrashItemRow
+        item={{ id: "f1", name, mimeType }}
+        isSelected={false}
+        isRestoring={false}
+        isDeleting={false}
+        onToggle={vi.fn()}
+        onRestore={vi.fn(() => Promise.resolve())}
+        onDelete={vi.fn()}
+      />,
+    );
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the film SVG for a recognized video extension (movie.mkv)", () => {
+    renderRow("movie.mkv", "video/x-matroska");
+    const film = document.querySelector("svg.lucide-film");
+    expect(film).not.toBeNull();
+    expect(film?.getAttribute("viewBox")).toBe("0 0 24 24");
+    // The film artwork is a real inline SVG, not a lucide stub: it carries
+    // the rect/path artwork instead of the stub's empty span.
+    expect(film?.querySelector("rect")).not.toBeNull();
+  });
+
+  it("renders Music for an audio file (song.mp3)", () => {
+    renderRow("song.mp3", "audio/mpeg");
+    expect(document.querySelector("svg.lucide-film")).toBeNull();
+    // Music is a lucide stub in this suite: a <span> carrying the row's
+    // icon class, not an svg.
+    const row = screen
+      .getByText("song.mp3")
+      .closest('[data-testid="trash-row"]');
+    expect(row?.querySelector("span.w-4")).not.toBeNull();
+  });
+
+  it("does not classify unknown or absent extensions as video", () => {
+    renderRow("notes.txt", "text/plain");
+    expect(document.querySelector("svg.lucide-film")).toBeNull();
+
+    cleanup();
+    renderRow("extensionless", "application/octet-stream");
+    expect(document.querySelector("svg.lucide-film")).toBeNull();
+  });
+});
+
+// Deleted-date fallback chain: deletedAt (exact, from the appProperties
+// timestamp) → trashedTime (shared drives only) → modifiedTime (documented
+// approximation) → "—". Never fabricate a timestamp.
+describe("TrashItemRow deleted-date fallback chain", () => {
+  interface DateInput {
+    deletedAt?: string;
+    trashedTime?: string;
+    modifiedTime?: string;
+  }
+
+  const renderRow = (name: string, fields: DateInput) => {
+    render(
+      <TrashItemRow
+        item={{ id: "f1", name, mimeType: "audio/mpeg", ...fields }}
+        isSelected={false}
+        isRestoring={false}
+        isDeleting={false}
+        onToggle={vi.fn()}
+        onRestore={vi.fn(() => Promise.resolve())}
+        onDelete={vi.fn()}
+      />,
+    );
+  };
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("prefers deletedAt over trashedTime and modifiedTime", () => {
+    const deletedAt = "2026-03-01T00:00:00.000Z";
+    renderRow("Track", {
+      deletedAt,
+      trashedTime: "2026-05-01T00:00:00.000Z",
+      modifiedTime: "2026-06-01T00:00:00.000Z",
+    });
+    expect(
+      screen.getByText(new Date(deletedAt).toLocaleDateString()),
+    ).not.toBeNull();
+    expect(
+      screen.queryByText(new Date("2026-05-01").toLocaleDateString()),
+    ).toBeNull();
+  });
+
+  it("falls back to trashedTime when deletedAt is absent", () => {
+    const trashedTime = "2026-05-01T00:00:00.000Z";
+    renderRow("Track", {
+      trashedTime,
+      modifiedTime: "2026-06-01T00:00:00.000Z",
+    });
+    expect(
+      screen.getByText(new Date(trashedTime).toLocaleDateString()),
+    ).not.toBeNull();
+  });
+
+  it("falls back to modifiedTime when deletedAt and trashedTime are absent", () => {
+    const modifiedTime = "2026-06-01T00:00:00.000Z";
+    renderRow("Track", { modifiedTime });
+    expect(
+      screen.getByText(new Date(modifiedTime).toLocaleDateString()),
+    ).not.toBeNull();
+  });
+
+  it("renders — when nothing is available (never fabricates a date)", () => {
+    renderRow("Track", {});
+    // Date column renders "—"; size is a second "—" for a bare audio item.
+    const dashes = screen.getAllByText("—");
+    expect(dashes.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// File extension badge: derived from the last dot segment of the filename.
+// Hidden files (".gitignore") and folders show none.
+describe("TrashItemRow file extension badge", () => {
+  const renderRow = (name: string, mimeType: string) =>
+    render(
+      <TrashItemRow
+        item={{ id: "f1", name, mimeType }}
+        isSelected={false}
+        isRestoring={false}
+        isDeleting={false}
+        onToggle={vi.fn()}
+        onRestore={vi.fn(() => Promise.resolve())}
+        onDelete={vi.fn()}
+      />,
+    );
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows the extension for a regular file", () => {
+    renderRow("song.mp3", "audio/mpeg");
+    expect(screen.getByText(".mp3")).not.toBeNull();
+  });
+
+  it("shows no extension for hidden files, folders and extension-less names", () => {
+    renderRow(".gitignore", "text/plain");
+    expect(screen.queryByTestId("trash-extension")).toBeNull();
+
+    cleanup();
+    renderRow("Folder", "application/vnd.google-apps.folder");
+    expect(screen.queryByTestId("trash-extension")).toBeNull();
+
+    cleanup();
+    renderRow("extensionless", "application/octet-stream");
+    expect(screen.queryByTestId("trash-extension")).toBeNull();
+  });
+});
+
+// Sticky header sorting: column headers drive a props-driven sort owned by
+// TrashScreen. Defaults: Name asc, Date desc, Size desc; clicking the active
+// column toggles direction; aria-sort reflects the state on each column.
+describe("Trash header sorting", () => {
+  beforeEach(() => {
+    deferredCalls = [];
+    vi.clearAllMocks();
+    installGetTrashedFilesMock();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("clicking Name applies ascending (its default), clicking again toggles to descending (aria-sort)", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Zed.mp3", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Alpha.mp3", mimeType: "audio/mpeg" },
+    ]);
+
+    // Default state: Date added is the active column (desc default), so Name
+    // reports "none" initially. aria-sort lives on the columnheader wrapper.
+    const nameColumn = screen
+      .getByRole("button", { name: "settings.trash_col_name" })
+      .closest('[role="columnheader"]');
+
+    // Clicking Name applies its default direction (asc).
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_name" }),
+    );
+    expect(nameColumn?.getAttribute("aria-sort")).toBe("ascending");
+
+    // Clicking the active column toggles direction.
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_name" }),
+    );
+    expect(nameColumn?.getAttribute("aria-sort")).toBe("descending");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_name" }),
+    );
+    expect(nameColumn?.getAttribute("aria-sort")).toBe("ascending");
+  });
+
+  it("Date column is active by default with aria-sort descending; other columns report none", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track.mp3", mimeType: "audio/mpeg" },
+    ]);
+
+    // Initial state: Date added is the active column (desc default per spec
+    // §3.1); Name and Size report "none".
+    const ariaSortOf = (label: string): string | null =>
+      screen
+        .getByRole("button", { name: label })
+        .closest('[role="columnheader"]')
+        ?.getAttribute("aria-sort") ?? null;
+    expect(ariaSortOf("settings.trash_col_date_added")).toBe("descending");
+    expect(ariaSortOf("settings.trash_col_name")).toBe("none");
+    expect(ariaSortOf("settings.trash_col_size")).toBe("none");
+
+    // Clicking Name activates it with its default (asc) and deactivates Date.
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_name" }),
+    );
+    expect(ariaSortOf("settings.trash_col_name")).toBe("ascending");
+    expect(ariaSortOf("settings.trash_col_date_added")).toBe("none");
+  });
+
+  it("orders rows by the chosen column: Date-added desc by default, toggle flips, Name applies asc", async () => {
+    const alpha = "2026-02-01T00:00:00.000Z";
+    const omega = "2026-02-03T00:00:00.000Z";
+    const alphaDate = new Date(alpha).toLocaleDateString();
+    const omegaDate = new Date(omega).toLocaleDateString();
+    await renderWithItems([
+      {
+        id: "f1",
+        name: "Alpha.mp3",
+        mimeType: "audio/mpeg",
+        appProperties: { deletedByDrPlayAt: alpha },
+      },
+      {
+        id: "f2",
+        name: "Omega.mp3",
+        mimeType: "audio/mpeg",
+        appProperties: { deletedByDrPlayAt: omega },
+      },
+    ]);
+
+    // Default state is Date-added descending (newest first): Omega (Feb 3)
+    // renders before Alpha (Feb 1) without any click.
+    const initial = screen.getAllByTestId("trash-row");
+    expect(initial[0]?.textContent).toContain(omegaDate);
+    expect(initial[1]?.textContent).toContain(alphaDate);
+
+    // Clicking the active Date header toggles to ascending: Alpha (Feb 1)
+    // first.
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_date_added" }),
+    );
+    const ascRows = screen.getAllByTestId("trash-row");
+    expect(ascRows[0]?.textContent).toContain(alphaDate);
+    expect(ascRows[1]?.textContent).toContain(omegaDate);
+
+    // Third click toggles back to descending: Omega (Feb 3) first again.
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_date_added" }),
+    );
+    const descRows = screen.getAllByTestId("trash-row");
+    expect(descRows[0]?.textContent).toContain(omegaDate);
+  });
+
+  it("sorting does not break selection", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Zed.mp3", mimeType: "audio/mpeg" },
+      { id: "f2", name: "Alpha.mp3", mimeType: "audio/mpeg" },
+    ]);
+
+    selectRow("Zed.mp3");
+    expect(screen.getByText("1 common.selected")).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_name" }),
+    );
+
+    // Selection survives the re-order.
+    expect(screen.getByText("1 common.selected")).not.toBeNull();
+    expect(rowCheckbox("Zed.mp3").checked).toBe(true);
+  });
+
+  it("header date labels are hidden below the sm breakpoint like the row dates", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track.mp3", mimeType: "audio/mpeg" },
+    ]);
+    const dateColumn = screen
+      .getByRole("button", { name: "settings.trash_col_date_added" })
+      .closest('[role="columnheader"]');
+    expect(dateColumn?.className).toContain("hidden sm:block");
+  });
+
+  it("keeps the select-all checkbox in the header alongside the column labels", async () => {
+    await renderWithItems([
+      { id: "f1", name: "Track.mp3", mimeType: "audio/mpeg" },
+    ]);
+    expect(
+      screen.getByRole("checkbox", { name: "settings.trash_select_all" }),
+    ).not.toBeNull();
+    expect(screen.getByText("settings.trash_col_name")).not.toBeNull();
+  });
+
+  it("trash date rows sort on the same effective date the rows display (fallback chain)", async () => {
+    const early = "2026-01-05T00:00:00.000Z";
+    const late = "2026-01-25T00:00:00.000Z";
+    const earlyDate = new Date(early).toLocaleDateString();
+    const lateDate = new Date(late).toLocaleDateString();
+    await renderWithItems([
+      {
+        id: "f1",
+        name: "Fallback-early.mp3",
+        mimeType: "audio/mpeg",
+        trashedTime: early,
+      },
+      {
+        id: "f2",
+        name: "Fallback-late.mp3",
+        mimeType: "audio/mpeg",
+        trashedTime: late,
+      },
+    ]);
+
+    // Default state is Date-added descending: late (Jan 25) first — sorted
+    // on the trashedTime fallback, not only on deletedAt, with no click.
+    const descRows = screen.getAllByTestId("trash-row");
+    expect(descRows[0]?.textContent).toContain(lateDate);
+    expect(descRows[1]?.textContent).toContain(earlyDate);
+
+    // First click toggles to ascending: early (Jan 5) first.
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.trash_col_date_added" }),
+    );
+    const ascRows = screen.getAllByTestId("trash-row");
+    expect(ascRows[0]?.textContent).toContain(earlyDate);
+    expect(ascRows[1]?.textContent).toContain(lateDate);
+  });
+
+  it("sorts items deleted after this feature exactly like fallback rows (deletedAt path)", async () => {
+    const early = "2026-01-05T00:00:00.000Z";
+    const late = "2026-01-25T00:00:00.000Z";
+    const earlyDate = new Date(early).toLocaleDateString();
+    const lateDate = new Date(late).toLocaleDateString();
+    await renderWithItems([
+      {
+        id: "f1",
+        name: "Exact-late.mp3",
+        mimeType: "audio/mpeg",
+        appProperties: { deletedByDrPlayAt: late },
+      },
+      {
+        id: "f2",
+        name: "Exact-early.mp3",
+        mimeType: "audio/mpeg",
+        appProperties: { deletedByDrPlayAt: early },
+      },
+    ]);
+
+    // Default desc (no click needed): late (Jan 25) first.
+    const rows = screen.getAllByTestId("trash-row");
+    expect(rows[0]?.textContent).toContain(lateDate);
+    expect(rows[1]?.textContent).toContain(earlyDate);
   });
 });

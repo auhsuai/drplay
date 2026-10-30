@@ -1193,16 +1193,18 @@ describe("getTrashedFiles pagination (trash truncation)", () => {
 
   // Behavior contract: the trash screen's "Ngày xóa"/"Dung lượng" columns read
   // size/modifiedTime/trashedTime, so the fields mask must request them.
-  // trashedTime is only populated for shared-drive items; My Drive falls back
-  // to modifiedTime in TrashItemRow (REST reference, File resource:
+  // appProperties feeds the exact deletedByDrPlayAt timestamp (soft delete
+  // writes it; null clears it — REST reference, File resource:
   // developers.google.com/workspace/drive/api/reference/rest/v3/files).
-  it("requests size, modifiedTime and trashedTime in the fields mask", async () => {
+  // trashedTime is only populated for shared-drive items; My Drive falls back
+  // to modifiedTime in TrashItemRow (same reference).
+  it("requests size, modifiedTime, trashedTime and appProperties in the fields mask", async () => {
     const urls = captureTrashedUrls([{ files: makeTrashed(1, "m") }]);
 
     await getTrashedFiles("tok", "trashed=true");
 
     expect(urls[0]).toContain(
-      "fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,trashedTime)",
+      "fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,trashedTime,appProperties)",
     );
   });
 

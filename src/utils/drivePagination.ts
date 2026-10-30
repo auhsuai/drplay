@@ -113,9 +113,15 @@ export async function listFolderChildren(
 // (same pagination pattern as fetchAllFolderPages). nextPageToken MUST stay in
 // the fields mask — Drive's partial response drops it otherwise. Keep
 // orderBy=folder,name so folders sort before files in the trash screen.
-// size/modifiedTime/trashedTime feed the trash screen's size and deleted-date
-// columns; trashedTime is only populated for shared-drive items, so My Drive
-// rows approximate the deleted date with modifiedTime (TrashItemRow fallback).
+// size/modifiedTime/trashedTime/appProperties feed the trash screen's size
+// and deleted-date columns. The date shown follows the fallback chain
+// appProperties.deletedByDrPlayAt (exact, written by deleteFile) →
+// trashedTime (only populated for shared-drive items) → modifiedTime — which
+// is ONLY AN APPROXIMATION: no official Drive doc states trashing bumps
+// modifiedTime, so it is the last-resort tier and may not reflect the
+// deletion date at all. appProperties is the app's private metadata (REST
+// reference, File resource:
+// developers.google.com/workspace/drive/api/reference/rest/v3/files).
 export async function getTrashedFiles(
   token: string,
   query: string,
@@ -124,7 +130,7 @@ export async function getTrashedFiles(
   return fetchAllPages<DriveFileItem>(
     token,
     query,
-    "nextPageToken,files(id,name,mimeType,size,modifiedTime,trashedTime)",
+    "nextPageToken,files(id,name,mimeType,size,modifiedTime,trashedTime,appProperties)",
     "fetch trashed files",
     signal,
     "folder,name",

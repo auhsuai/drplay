@@ -130,11 +130,24 @@ export async function createFolder(
   return readItemOrThrow(response, "create folder");
 }
 
+// appProperties keys DrPlay owns. deletedByDrPlay marks items DrPlay trashed
+// (the trash query filters on it — never change the key or legacy items
+// vanish); deletedByDrPlayAt records WHEN the soft delete happened so the
+// trash screen can show an exact date (trashedTime is shared-drives-only and
+// modifiedTime is only an approximation). Both keys MUST stay in lockstep:
+// set together in deleteFile, cleared together in restoreFile. Key+ISO value
+// = 17 + 24 = 41 bytes, well under Drive's 124-byte per-property limit, and
+// 2 of 30 private properties (properties guide:
+// developers.google.com/workspace/drive/api/guides/properties).
+export const DELETED_BY_DRPLAY_PROPERTY = "deletedByDrPlay";
+export const DELETED_AT_PROPERTY = "deletedByDrPlayAt";
+
 /**
  * Move a file/folder to the Drive trash (soft delete) and tag it with
- * `deletedByDrPlay` so a later restore knows it was DrPlay-deleted. Permanent
- * deletion is never used from the UI — trash keeps accidental deletes
- * recoverable.
+ * `deletedByDrPlay` plus the deletion timestamp (`deletedByDrPlayAt`) in one
+ * PATCH so a later restore knows it was DrPlay-deleted and exactly when.
+ * Permanent deletion is never used from the UI — trash keeps accidental
+ * deletes recoverable.
  * @param token Drive access token.
  * @param fileId The id to trash.
  * @returns The trashed file's Drive metadata.
@@ -143,11 +156,14 @@ export async function deleteFile(
   token: string,
   fileId: string,
 ): Promise<DriveFileItem> {
-  // Move to trash instead of permanent delete for safety
+  // Move to trash instead of permanent delete for safety. The timestamp is
+  // written in the SAME appProperties PATCH as the marker — a second update
+  // would race the listing and could show a marker without a date.
   const metadata = {
     trashed: true,
     appProperties: {
-      deletedByDrPlay: "true",
+      [DELETED_BY_DRPLAY_PROPERTY]: "true",
+      [DELETED_AT_PROPERTY]: new Date().toISOString(),
     },
   };
 
@@ -238,8 +254,11 @@ export async function moveFile(
 }
 
 /**
- * Untrash a file DrPlay previously deleted (clears the `deletedByDrPlay`
- * app-property marker too, so the item returns to a clean state).
+ * Untrash a file DrPlay previously deleted. Clears BOTH app-property keys
+ * (`deletedByDrPlay` marker and `deletedByDrPlayAt` timestamp) with null
+ * values in one update — appProperties entries with null values are cleared
+ * per the Drive docs, and the marker null-clear was already load-bearing
+ * here. Leaking a stale timestamp would resurface on a later re-delete path.
  * @param token Drive access token.
  * @param fileId The id to restore.
  * @returns The restored file's Drive metadata.
@@ -251,7 +270,8 @@ export async function restoreFile(
   const metadata = {
     trashed: false,
     appProperties: {
-      deletedByDrPlay: null,
+      [DELETED_BY_DRPLAY_PROPERTY]: null,
+      [DELETED_AT_PROPERTY]: null,
     },
   };
 

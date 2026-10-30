@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getTrashedFiles } from "../../utils/drivePagination";
+import type { DriveFileItem } from "../../utils/driveApi";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 import { describeError, TRASH_MODULE } from "./trashBulkOps";
@@ -12,6 +13,10 @@ export interface TrashedItem {
   size?: string;
   modifiedTime?: string;
   trashedTime?: string;
+  // Exact deletion timestamp from the deletedByDrPlayAt appProperty (written
+  // by deleteFile). Absent for legacy items deleted before this feature —
+  // those fall back to trashedTime/modifiedTime in the row.
+  deletedAt?: string;
 }
 
 export function useTrashedFiles(token: string) {
@@ -32,7 +37,7 @@ export function useTrashedFiles(token: string) {
       // fetch) must not overwrite the current account's list.
       if (signal?.aborted) return;
       setItems(
-        files.map((f: TrashedItem) => {
+        files.map((f: DriveFileItem) => {
           const item: TrashedItem = {
             id: f.id,
             name: f.name,
@@ -44,6 +49,8 @@ export function useTrashedFiles(token: string) {
           if (f.size !== undefined) item.size = f.size;
           if (f.modifiedTime !== undefined) item.modifiedTime = f.modifiedTime;
           if (f.trashedTime !== undefined) item.trashedTime = f.trashedTime;
+          const deletedAt = f.appProperties?.deletedByDrPlayAt;
+          if (deletedAt !== undefined) item.deletedAt = deletedAt;
           return item;
         }),
       );

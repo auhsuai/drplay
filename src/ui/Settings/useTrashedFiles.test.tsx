@@ -31,6 +31,7 @@ type FileItem = {
   size?: string;
   modifiedTime?: string;
   trashedTime?: string;
+  appProperties?: Record<string, string>;
 };
 
 type PendingCall = {
@@ -209,5 +210,57 @@ describe("useTrashedFiles metadata mapping (trash columns)", () => {
     expect(result.current.items[0]?.size).toBeUndefined();
     expect(result.current.items[0]?.modifiedTime).toBeUndefined();
     expect(result.current.items[0]?.trashedTime).toBeUndefined();
+  });
+
+  it("maps appProperties.deletedByDrPlayAt to deletedAt when present", async () => {
+    installMock();
+    const { result } = renderTrashedFiles("token-a");
+
+    await act(async () => {
+      calls[0]?.resolve([
+        {
+          id: "m3",
+          name: "Track 3",
+          mimeType: "audio/mpeg",
+          appProperties: {
+            deletedByDrPlay: "true",
+            deletedByDrPlayAt: "2026-10-01T12:00:00.000Z",
+          },
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(result.current.items[0]?.deletedAt).toBe("2026-10-01T12:00:00.000Z");
+  });
+
+  it("omits deletedAt when appProperties or the timestamp key is absent", async () => {
+    installMock();
+    const { result } = renderTrashedFiles("token-a");
+
+    await act(async () => {
+      calls[0]?.resolve([
+        // Legacy item: marker present, timestamp predates the feature.
+        {
+          id: "m4",
+          name: "Track 4",
+          mimeType: "audio/mpeg",
+          appProperties: { deletedByDrPlay: "true" },
+        },
+        { id: "m5", name: "Track 5", mimeType: "audio/mpeg" },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(result.current.items[0]?.deletedAt).toBeUndefined();
+    expect(result.current.items[1]?.deletedAt).toBeUndefined();
+    // exactOptionalPropertyTypes: the key must be absent, not present with
+    // an undefined value.
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        result.current.items[0],
+        "deletedAt",
+      ),
+    ).toBe(false);
   });
 });

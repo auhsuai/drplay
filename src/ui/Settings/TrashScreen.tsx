@@ -15,6 +15,11 @@ import {
   TRASH_MODULE,
 } from "./trashBulkOps";
 import { useTrashedFiles } from "./useTrashedFiles";
+import {
+  sortTrashedItems,
+  DEFAULT_TRASH_SORT_DIRECTION,
+} from "./sortTrashedItems";
+import type { TrashSortKey, TrashSortDirection } from "./sortTrashedItems";
 
 interface TrashScreenProps {
   token: string;
@@ -64,6 +69,14 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
   // separate "selection mode" to enter/leave.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkActioning, setIsBulkActioning] = useState(false);
+  // Sort state lives here (the screen owns all list behavior); the header and
+  // rows are presentational. Restores/deletes prune ids and never touch these
+  // values, so a bulk operation cannot reset the user's chosen sorting.
+  // Default: Date added to Trash, newest first (task spec §3.1).
+  const [sortKey, setSortKey] = useState<TrashSortKey>("deletedAt");
+  const [sortDirection, setSortDirection] = useState<TrashSortDirection>(
+    DEFAULT_TRASH_SORT_DIRECTION.deletedAt,
+  );
   // One shared in-app confirmation for every destructive action (row delete,
   // empty trash, bulk delete). Row and bulk flows therefore can never stack
   // two dialogs on top of each other.
@@ -368,6 +381,21 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
     );
   };
 
+  // Selecting a new column applies its default direction; clicking the active
+  // column toggles direction (Google Drive header behavior).
+  const handleSortChange = (key: TrashSortKey) => {
+    if (key === sortKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDirection(DEFAULT_TRASH_SORT_DIRECTION[key]);
+    }
+  };
+
+  // Copy-on-sort (sortTrashedItems never mutates the hook's state array).
+  // Folders stay grouped first inside the comparator.
+  const sortedItems = sortTrashedItems(items, sortKey, sortDirection);
+
   return (
     <>
       <div
@@ -409,13 +437,16 @@ export function TrashScreen({ token, onClose }: TrashScreenProps) {
 
           {/* List */}
           <TrashItemsContent
-            items={items}
+            items={sortedItems}
             isLoading={isLoading}
             selectedIds={selectedIds}
             restoringIds={restoringIds}
             deletingIds={deletingIds}
             allSelected={allSelected}
             someSelected={someSelected}
+            sortKey={sortKey}
+            sortDirection={sortDirection}
+            onSortChange={handleSortChange}
             onToggleItem={toggleItem}
             onToggleAll={toggleAll}
             onRestore={handleRestore}

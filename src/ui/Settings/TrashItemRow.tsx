@@ -9,10 +9,14 @@ import {
 import { useTranslation } from "react-i18next";
 import { FOLDER_MIME } from "../../utils/driveApi";
 import { formatBytes } from "../../utils/formatBytes";
+import { isVideoFile } from "../../utils/audioQuery";
 
-// getTrashedFiles requests size/modifiedTime/trashedTime and passes them
-// through, so rows show them when present. trashedTime is only populated for
-// shared drives; My Drive rows show an approximate date via modifiedTime.
+// getTrashedFiles requests size/modifiedTime/trashedTime/appProperties and
+// passes them through, so rows show them when present. The deleted date
+// follows a fallback chain (see formatDeletedDate): deletedAt is the exact
+// timestamp DrPlay writes on soft delete; trashedTime is only populated for
+// shared drives; modifiedTime is a documented APPROXIMATION (no official
+// Drive doc states trashing bumps it) and "—" beats a fabricated date.
 export interface TrashItemData {
   id: string;
   name: string;
@@ -20,6 +24,7 @@ export interface TrashItemData {
   size?: string;
   modifiedTime?: string;
   trashedTime?: string;
+  deletedAt?: string;
 }
 
 interface TrashItemRowProps {
@@ -41,14 +46,55 @@ function formatSize(size?: string): string {
   return formatBytes(bytes);
 }
 
-// trashedTime is only populated inside shared drives, so My Drive falls back to
-// modifiedTime (Drive bumps it when the file is trashed via PATCH).
+// Exact-when-available deleted date: deletedAt (appProperties timestamp) →
+// trashedTime (shared drives only) → modifiedTime (approximation, NOT the
+// trashed time) → "—" when nothing is available. Never fabricate a date.
 function formatDeletedDate(item: TrashItemData): string {
-  const raw = item.trashedTime ?? item.modifiedTime;
+  const raw = item.deletedAt ?? item.trashedTime ?? item.modifiedTime;
   if (raw === undefined || raw === "") return "—";
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString();
+}
+
+// Subtle extension badge text from the filename's last dot segment. Hidden
+// files (".gitignore" — no name before the dot), folders and extension-less
+// names show nothing. Pure display: video classification stays with the
+// isVideoFile allowlist.
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return "";
+  return name.slice(dot);
+}
+
+// Inline film icon for files the shared isVideoFile allowlist classifies as
+// video. Exact lucide `film` artwork (lucide.dev/icons/film, ISC license) —
+// rendered inline so the classification and artwork live next to the row's
+// other icons without a second lucide import.
+function FilmIcon(): React.JSX.Element {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="lucide lucide-film preview-icon w-4 h-4"
+    >
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M7 3v18" />
+      <path d="M3 7.5h4" />
+      <path d="M3 12h18" />
+      <path d="M3 16.5h4" />
+      <path d="M17 3v18" />
+      <path d="M17 7.5h4" />
+      <path d="M17 16.5h4" />
+    </svg>
+  );
 }
 
 export function TrashItemRow({
@@ -63,6 +109,7 @@ export function TrashItemRow({
   const { t } = useTranslation();
   const isFolder = item.mimeType === FOLDER_MIME;
   const isBusy = isRestoring || isDeleting;
+  const extension = isFolder ? "" : fileExtension(item.name);
   return (
     <div
       data-testid="trash-row"
@@ -92,12 +139,22 @@ export function TrashItemRow({
       >
         {isFolder ? (
           <Folder className="w-4 h-4" fill="currentColor" />
+        ) : isVideoFile(item.mimeType, item.name) ? (
+          <FilmIcon />
         ) : (
           <Music className="w-4 h-4" />
         )}
       </div>
       <p className="flex-1 min-w-0 truncate text-sm font-medium text-gray-900 dark:text-gray-100">
         {item.name}
+        {extension !== "" && (
+          <span
+            data-testid="trash-extension"
+            className="ml-1.5 text-xs font-normal text-gray-500 dark:text-gray-400"
+          >
+            {extension}
+          </span>
+        )}
       </p>
       <span className="hidden sm:block w-24 shrink-0 text-xs text-gray-500 tabular-nums">
         {formatDeletedDate(item)}
