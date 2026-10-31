@@ -81,6 +81,8 @@ function makeExplorerState(items: DriveItem[]) {
   return {
     searchQuery: "",
     setSearchQuery: vi.fn(),
+    searchMode: "global" as "global" | "recursive",
+    setSearchMode: vi.fn(),
     currentPage: 1,
     setCurrentPage: vi.fn(),
     totalPages: 1,

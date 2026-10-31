@@ -1,6 +1,7 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { MOVE_PICKER_OPEN_ATTR } from "../../FolderSelection/FolderSelectionScreen";
 import { useEventListener } from "../../../hooks/useEventListener";
+import type { SearchMode } from "../../../hooks/useDriveSearch";
 
 const isEditableTarget = (active: Element | null): boolean =>
   active instanceof HTMLElement &&
@@ -11,6 +12,8 @@ const isEditableTarget = (active: Element | null): boolean =>
 export function useMainContentKeyboard({
   searchInputRef,
   setSearchQuery,
+  searchMode,
+  setSearchMode,
   isSelectionMode,
   setSelectedIds,
   setIsSelectionMode,
@@ -23,6 +26,8 @@ export function useMainContentKeyboard({
 }: {
   searchInputRef: RefObject<HTMLInputElement | null>;
   setSearchQuery: Dispatch<SetStateAction<string>>;
+  searchMode: SearchMode;
+  setSearchMode: (mode: SearchMode) => void;
   isSelectionMode: boolean;
   setSelectedIds: Dispatch<SetStateAction<Set<string>>>;
   setIsSelectionMode: Dispatch<SetStateAction<boolean>>;
@@ -62,6 +67,21 @@ export function useMainContentKeyboard({
         searchInputRef.current?.focus();
       }
     }
+    // Ctrl+D (Cmd+D on macOS) flips the search scope, mirroring the toolbar
+    // mode toggle. No editable guard on purpose: the primary use case is
+    // switching scope while the caret is still in the search input. Alt/Shift
+    // are excluded so OS/browser chords and the DEV Ctrl+Shift+D debug panel
+    // stay untouched.
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      e.key.toLowerCase() === "d"
+    ) {
+      e.preventDefault();
+      setSearchMode(searchMode === "global" ? "recursive" : "global");
+      return;
+    }
     if (
       e.key === "Escape" &&
       document.activeElement === searchInputRef.current
@@ -97,6 +117,8 @@ export function useMainContentKeyboard({
   };
   useEventListener("keydown", handleKeyDown, [
     setSearchQuery,
+    searchMode,
+    setSearchMode,
     isSelectionMode,
     setSelectedIds,
     setIsSelectionMode,

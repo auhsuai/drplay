@@ -63,6 +63,7 @@ vi.mock("./components/SongCard", () => ({
 
 vi.mock("../FolderSelection/FolderSelectionScreen", () => ({
   FolderSelectionScreen: () => null,
+  MOVE_PICKER_OPEN_ATTR: "data-move-picker-open",
 }));
 
 function makeItems(n: number): DriveItem[] {
@@ -468,5 +469,90 @@ describe("MainContent search sort isolation (Phase B)", () => {
     );
     expect(explorer.setSearchMode).toHaveBeenCalledWith("recursive");
     expect(explorer.setSearchQuery).not.toHaveBeenCalled();
+  });
+});
+
+// Ctrl+D (Cmd+D on macOS) toggles the search scope without the mouse. It
+// mirrors the toolbar mode toggle's semantics (explorer.setSearchMode with the
+// flipped value) but deliberately has NO editable guard: the main use case is
+// flipping scope while the caret is still in the search field. The shared
+// overlay guard (modal/menu open) still stands the whole handler down.
+describe("MainContent Ctrl+D toggles search scope", () => {
+  beforeEach(() => {
+    baseProps.onSortChange = vi.fn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("Ctrl+D in global mode switches to recursive and prevents the browser default", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    const notCancelled = fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+
+    // dispatchEvent returns false when preventDefault() was honoured.
+    expect(notCancelled).toBe(false);
+    expect(explorer.setSearchMode).toHaveBeenCalledWith("recursive");
+    expect(explorer.setSearchMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+D in recursive mode switches back to global", () => {
+    const explorer = makeExplorerState({
+      searchQuery: "song",
+      searchMode: "recursive",
+    });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+
+    expect(explorer.setSearchMode).toHaveBeenCalledWith("global");
+    expect(explorer.setSearchMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+D fires while the caret is inside the search input (no editable guard)", () => {
+    const explorer = makeExplorerState({ searchQuery: "son" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    const searchInput = screen.getByPlaceholderText("search_placeholder");
+    searchInput.focus();
+    expect(document.activeElement).toBe(searchInput);
+
+    fireEvent.keyDown(searchInput, { key: "d", ctrlKey: true });
+
+    expect(explorer.setSearchMode).toHaveBeenCalledWith("recursive");
+    expect(explorer.setSearchQuery).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(searchInput);
+  });
+
+  it("Ctrl+Shift+D and Ctrl+Alt+D do NOT toggle the search scope", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    fireEvent.keyDown(window, { key: "D", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true, altKey: true });
+
+    expect(explorer.setSearchMode).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+D stands down while an overlay (new-folder modal) owns the keyboard", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    fireEvent.click(screen.getByText("drive.new_folder"));
+    expect(
+      screen.getByPlaceholderText("drive.folder_name_placeholder"),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+
+    expect(explorer.setSearchMode).not.toHaveBeenCalled();
   });
 });

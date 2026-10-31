@@ -145,6 +145,8 @@ export const MainContent = React.memo(function MainContent({
   useMainContentKeyboard({
     searchInputRef,
     setSearchQuery: explorer.setSearchQuery,
+    searchMode: explorer.searchMode,
+    setSearchMode: explorer.setSearchMode,
     isSelectionMode: explorer.isSelectionMode,
     setSelectedIds: explorer.setSelectedIds,
     setIsSelectionMode: explorer.setIsSelectionMode,
