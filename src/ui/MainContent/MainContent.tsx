@@ -14,6 +14,7 @@ import { BulkDeleteConfirmModal } from "./components/BulkDeleteConfirmModal";
 import { NewFolderModal } from "./components/NewFolderModal";
 
 import { useDriveExplorer } from "../../hooks/useDriveExplorer";
+import type { SearchSort } from "../../hooks/useDriveSearch";
 import {
   useSkeletonRows,
   HEADER_CHROME_HEIGHT_PX,
@@ -27,6 +28,42 @@ import { FileListHeader } from "./components/FileListHeader";
 import { PaginationControls } from "./components/PaginationControls";
 import { SkeletonRowList } from "../components/Skeleton";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
+
+// Search sort string mapping (Phase B2). Two-way adapter between the
+// FileListHeader sort-string contract and the search sort model — one source
+// of truth is the pin comment in useDriveSearch.ts:11-15:
+//   "relevance" ↔ {relevance}; "name" ↔ {name, asc}; "name desc" ↔ {name,
+//   desc}; "modifiedTime" ↔ {modifiedTime, asc}; "modifiedTime desc" ↔
+//   {modifiedTime, desc}; "size" ↔ {size, asc}; "size desc" ↔ {size, desc}.
+// The listing sortOption and the search sort NEVER cross (B2-3): while a
+// search is active the header sorts through searchSort only.
+type SearchSortString =
+  | "relevance"
+  | "name"
+  | "name desc"
+  | "modifiedTime"
+  | "modifiedTime desc"
+  | "size"
+  | "size desc";
+
+function searchSortToString(sort: SearchSort): SearchSortString {
+  return sort.field === "relevance"
+    ? "relevance"
+    : sort.dir === "desc"
+      ? `${sort.field} desc`
+      : sort.field;
+}
+
+function searchSortFromString(option: string): SearchSort {
+  if (option === "name") return { field: "name", dir: "asc" };
+  if (option === "modifiedTime") return { field: "modifiedTime", dir: "asc" };
+  if (option === "size") return { field: "size", dir: "asc" };
+  if (option === "name desc") return { field: "name", dir: "desc" };
+  if (option === "modifiedTime desc")
+    return { field: "modifiedTime", dir: "desc" };
+  if (option === "size desc") return { field: "size", dir: "desc" };
+  return { field: "relevance", dir: "desc" };
+}
 
 interface MainContentProps {
   activeTab: TabKey;
@@ -167,6 +204,36 @@ export const MainContent = React.memo(function MainContent({
     setShowBulkDeleteConfirm(true);
   }, []);
 
+  // Search sort wiring (Phase B2): while a search is active the header's
+  // sortOption/onSortChange route through the SEARCH sort model, never the
+  // listing sortOption (B2-3 isolation). FileListHeader's native toggle
+  // semantics carry over unchanged (Name→asc, Date/Size→desc, active column
+  // flips the " desc" suffix). Default stays relevance (Phase A default),
+  // which the header tolerates as an unknown base (all aria-sort "none").
+  // The runtime searchSort guard exists for mocked explorers in tests that
+  // predate the Phase A members (typed always-present, sometimes absent at
+  // runtime — defensive, same spirit as the onSortChange guard).
+  const searchSort = explorer.searchSort as SearchSort | undefined;
+  const isSearchActive =
+    explorer.searchQuery.trim() !== "" && searchSort !== undefined;
+  const headerSortOption = isSearchActive
+    ? searchSortToString(searchSort)
+    : sortOption;
+  const headerOnSortChange = isSearchActive
+    ? (option: string) => {
+        explorer.setSearchSort(searchSortFromString(option));
+      }
+    : onSortChange;
+  const handleToggleSearchMode = useCallback(() => {
+    explorer.setSearchMode(
+      explorer.searchMode === "global" ? "recursive" : "global",
+    );
+    // The hook returns a fresh explorer object every render; both read members
+    // are plain useState setters/values, same exhaustive-deps tradeoff as the
+    // debug-trigger effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [explorer.searchMode, explorer.setSearchMode]);
+
   // DEV-only debug triggers (Ctrl+Shift+D panel → "Loading / MainContent"):
   // bulk-delete modal and selection toolbar drive the SAME local/explorer
   // state the real flows use, so every subsequent interaction (close modal,
@@ -236,6 +303,8 @@ export const MainContent = React.memo(function MainContent({
           onBreadcrumbClick={onBreadcrumbClick}
           searchQuery={explorer.searchQuery}
           onSearchChange={explorer.setSearchQuery}
+          searchMode={explorer.searchMode}
+          onToggleSearchMode={handleToggleSearchMode}
           sortOption={sortOption}
           onSortChange={onSortChange}
           token={token}
@@ -268,21 +337,22 @@ export const MainContent = React.memo(function MainContent({
             each mirroring an existing precedent:
             - isVirtualRoot: root rows are all folders with no date/size
               (precedent: showNewFolderButton).
-            - searchQuery: search results are relevance-ordered and ignore
-              sortOption (useDriveSearch) — a clickable header that does
-              nothing would be a lie.
             - isSelectionMode: selection checkboxes lead every row and would
               misalign the columns, so the header hides (it is the only sort
               control in this view now — the toolbar dropdown was removed).
             - onSortChange: render only when a callback is wired (defensive,
               mirrors the prop's optionality). The list-branch guards (not
               loading skeleton, not empty) come from the render site below.
+            Phase B: the old `searchQuery.trim() === ""` guard is GONE —
+            during a search the header stays visible and sorts the RESULTS
+            through explorer.searchSort (relevance default → all aria-sort
+            "none" via the tolerant unknown-base path). The listing
+            sortOption is untouched by search sorting (B2-3).
             Changing the sort clears selection and resets the page — the
             existing useDriveExplorer contract. */}
         {!isVirtualRoot &&
           !explorer.isSelectionMode &&
-          explorer.searchQuery.trim() === "" &&
-          onSortChange !== undefined && (
+          headerOnSortChange !== undefined && (
             <>
               {/* Toolbar divider. Edges are pinned to the toolbar's own
                   elements, not to the chrome padding: the Back icon starts
@@ -296,8 +366,8 @@ export const MainContent = React.memo(function MainContent({
                 className="mt-2 ml-[6px] h-px shrink-0 bg-gray-200 dark:bg-[#2A2A2A]"
               />
               <FileListHeader
-                sortOption={sortOption}
-                onSortChange={onSortChange}
+                sortOption={headerSortOption}
+                onSortChange={headerOnSortChange}
               />
             </>
           )}

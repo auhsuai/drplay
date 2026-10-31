@@ -499,6 +499,12 @@
     "reload": "Reload"
   },
   "search_placeholder": "Search...",
+  "search": {
+    "mode_global": "Global search",
+    "mode_recursive": "Recursive search",
+    "switch_to_recursive": "Switch to recursive search",
+    "switch_to_global": "Switch to global search"
+  },
   "loading": "Loading...",
   "cancel": "Cancel",
   "ok": "OK",

@@ -23,13 +23,18 @@ const META_VERSION = 2;
 function makeFile(
   id: string,
   name: string,
-  opts: { isFolder?: boolean; mimeType?: string; userEmail?: string } = {},
+  opts: {
+    isFolder?: boolean;
+    mimeType?: string;
+    userEmail?: string;
+    parentId?: string;
+  } = {},
 ): DriveFile {
   return {
     id,
     name,
     mimeType: opts.mimeType ?? "audio/mpeg",
-    parentId: ROOT_ID,
+    parentId: opts.parentId ?? ROOT_ID,
     trashed: false,
     isFolder: opts.isFolder ?? false,
     userEmail: opts.userEmail ?? "default", // compound PK part (schema v10)
@@ -470,5 +475,238 @@ describe("search.worker", () => {
       "theirs",
     ]);
     expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["theirs"]);
+  });
+
+  // ---- Root-scoped context (I1/B1/B2) -------------------------------------
+
+  const defaultContext = {
+    mode: "global" as const,
+    rootIds: ["root"],
+    sortField: "relevance" as const,
+    sortDir: "desc" as const,
+  };
+
+  it("W1. empty rootIds posts [] WITHOUT rebuilding or querying (fail closed)", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 20,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+        context: { ...defaultContext, rootIds: [] },
+      },
+      deps,
+    );
+    expect(deps.posts).toEqual([{ type: "results", requestId: 20, hits: [] }]);
+    expect(deps.buildSpy).not.toHaveBeenCalled();
+    expect(deps.querySpy).not.toHaveBeenCalled();
+  });
+
+  it("W2. root-scoped query filters out-of-root hits before the limit", async () => {
+    const deps = makeDeps({
+      files: [
+        makeFile("rootf", "Root Folder", {
+          isFolder: true,
+          mimeType: "application/vnd.google-apps.folder",
+        }),
+        makeFile("in1", "Song in.mp3", { parentId: "rootf" }),
+        makeFile("in2", "Song in two.mp3", { parentId: "rootf" }),
+        // Out-of-root: sits under an unconfigured parent AND outside rootf.
+        makeFile("out", "Song out.mp3", { parentId: "elsewhere" }),
+      ],
+    });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 21,
+        query: "song",
+        limit: 2,
+        userEmail: "default",
+        context: { ...defaultContext, rootIds: ["rootf"] },
+      },
+      deps,
+    );
+    expect(
+      hitsOf(deps.posts)
+        .map((h) => h.id)
+        .sort(),
+    ).toEqual(["in1", "in2"]);
+  });
+
+  it("W3. recursive mode scopes to the current folder subtree (folder itself excluded)", async () => {
+    const deps = makeDeps({
+      files: [
+        makeFile("foldA", "Folder A", {
+          isFolder: true,
+          mimeType: "application/vnd.google-apps.folder",
+        }),
+        makeFile("child1", "Song child.mp3", { parentId: "foldA" }),
+        makeFile("other", "Song other.mp3", { parentId: "foldB" }),
+      ],
+    });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 22,
+        query: "song",
+        limit: 10,
+        userEmail: "default",
+        context: {
+          mode: "recursive",
+          rootIds: ["foldA"],
+          currentFolderId: "foldA",
+          sortField: "relevance",
+          sortDir: "desc",
+        },
+      },
+      deps,
+    );
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["child1"]);
+  });
+
+  it("W4. recursive mode at VIRTUAL_ROOT degrades to global root scope", async () => {
+    const deps = makeDeps({
+      files: [
+        makeFile("foldA", "Folder A", {
+          isFolder: true,
+          mimeType: "application/vnd.google-apps.folder",
+          parentId: "root",
+        }),
+        makeFile("foldB", "Folder B", {
+          isFolder: true,
+          mimeType: "application/vnd.google-apps.folder",
+          parentId: "root",
+        }),
+        makeFile("child1", "Song child.mp3", { parentId: "foldA" }),
+        makeFile("child2", "Song child two.mp3", { parentId: "foldB" }),
+      ],
+    });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 23,
+        query: "song",
+        limit: 10,
+        userEmail: "default",
+        context: {
+          mode: "recursive",
+          rootIds: ["foldA", "foldB"],
+          currentFolderId: "__drplay_virtual_root__",
+          sortField: "relevance",
+          sortDir: "desc",
+        },
+      },
+      deps,
+    );
+    const ids = hitsOf(deps.posts).map((h) => h.id);
+    expect(ids).toEqual(expect.arrayContaining(["child1", "child2"]));
+  });
+
+  it("W5. query passes the sort spec through to the engine", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Song.mp3")] });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 24,
+        query: "song",
+        limit: 10,
+        userEmail: "default",
+        context: {
+          mode: "global",
+          rootIds: ["root"],
+          sortField: "name",
+          sortDir: "asc",
+        },
+      },
+      deps,
+    );
+    expect(deps.querySpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "song",
+      10,
+      expect.objectContaining({ mode: "global", rootIds: ["root"] }),
+      { field: "name", dir: "asc" },
+    );
+  });
+
+  it("W6. membership cache: same owner+roots reuses the BFS (no recompute), invalidate drops it", async () => {
+    // computeRootMembership runs a wildcard search over the index — spying on
+    // deps.query is not enough; instead count buildParentToChildren
+    // invocations through the index identity: simplest observable is that the
+    // second query posts identical hits without a rebuild (index reuse) and
+    // that an invalidate (which resets the cache) does not crash the next
+    // scoped query. Direct BFS-count proof lives in the engine tests; here we
+    // pin the CONTRACT: cached path returns identical results.
+    const deps = makeDeps({
+      files: [
+        makeFile("foldA", "Folder A", {
+          isFolder: true,
+          mimeType: "application/vnd.google-apps.folder",
+        }),
+        makeFile("child1", "Song child.mp3", { parentId: "foldA" }),
+      ],
+    });
+    const post = (requestId: number): Promise<void> =>
+      handleSearchWorkerMessage(
+        {
+          type: "query",
+          requestId,
+          query: "song",
+          limit: 10,
+          userEmail: "default",
+          context: { ...defaultContext, rootIds: ["foldA"] },
+        },
+        deps,
+      );
+    await post(30);
+    const first = hitsOf(deps.posts);
+    await post(31);
+    expect(hitsOf(deps.posts)).toEqual(first);
+    expect(deps.buildSpy).toHaveBeenCalledTimes(1);
+
+    // invalidate -> membership cache reset -> next query still correct.
+    await handleSearchWorkerMessage({ type: "invalidate" }, deps);
+    await post(32);
+    expect(deps.buildSpy).toHaveBeenCalledTimes(2);
+    expect(hitsOf(deps.posts)).toEqual(first);
+  });
+
+  it("W7. legacy frame without context still works (backward-compatible wire)", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 40,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+      },
+      deps,
+    );
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["f1"]);
+  });
+
+  it("W8. malformed context is rejected by the wire guard (no post, no crash)", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 41,
+        query: "anh",
+        limit: 10,
+        userEmail: "default",
+        context: {
+          mode: "bogus" as "global",
+          rootIds: ["root"],
+          sortField: "relevance",
+          sortDir: "desc",
+        },
+      } as unknown as SearchWorkerRequest,
+      deps,
+    );
+    expect(deps.posts).toHaveLength(0);
+    expect(deps.buildSpy).not.toHaveBeenCalled();
   });
 });

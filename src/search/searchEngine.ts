@@ -36,6 +36,32 @@ export interface SearchHit {
   modifiedTime?: string;
 }
 
+// Sentinel id of the synthetic "Root Folders" node (driveConstants). Repeated
+// here as a literal because the worker/engine must stay import-light (the
+// real constant imports nothing heavy, but the engine is hosted in a Worker
+// realm where driveConstants pulls the whole shared-constants module).
+const VIRTUAL_ROOT_ID = "__drplay_virtual_root__";
+
+// Query context: which roots the search is scoped to and (in recursive mode)
+// which folder's subtree is being browsed. Optional precomputed artifacts let
+// the worker cache the O(n) BFS across keystrokes (B1.3) — the engine only
+// computes them when absent (inline executor / tests).
+export interface SearchQueryScope {
+  mode: "global" | "recursive";
+  rootIds: string[];
+  currentFolderId?: string;
+  /** Precomputed parent->children adjacency (cached by the worker). */
+  parentToChildren?: Map<string, Set<string>>;
+  /** Precomputed root membership set (cached by the worker). */
+  inRootIds?: Set<string>;
+}
+
+// Sort spec for query results; default (undefined) = relevance (score desc).
+export interface SearchSortSpec {
+  field: "relevance" | "name" | "modifiedTime" | "size";
+  dir: "asc" | "desc";
+}
+
 // Name matches matter most, then real ID3 title, then artist (plan: exact >
 // prefix > fuzzy; name > title > artist).
 const NAME_BOOST = 3;
@@ -128,21 +154,270 @@ export function buildSearchIndex(
   return index;
 }
 
+// ---- Root scoping (B1/B2) -------------------------------------------------
+// Membership and subtree resolution run over the INDEXED docs (not the DB),
+// so both the real worker and the inline executor share one implementation.
+
+// Adjacency parent -> children, deduped via Set, self-parent edges dropped
+// (direct cycles can never contribute a distinct child anyway).
+export function buildParentToChildren(
+  index: MiniSearch<SearchDoc>,
+): Map<string, Set<string>> {
+  const adjacency = new Map<string, Set<string>>();
+  for (const doc of index.documentCount ? searchAllDocs(index) : []) {
+    if (doc.parentId === doc.id) continue;
+    const children = adjacency.get(doc.parentId);
+    if (children) children.add(doc.id);
+    else adjacency.set(doc.parentId, new Set([doc.id]));
+  }
+  return adjacency;
+}
+
+// MiniSearch exposes no public "all documents" API; wildcard search returns
+// every doc with stored fields intact — good enough for one rebuild pass.
+function searchAllDocs(index: MiniSearch<SearchDoc>): SearchDoc[] {
+  const results = index.search(MiniSearch.wildcard) as Array<
+    SearchResultLike & Record<string, unknown>
+  >;
+  const docs: SearchDoc[] = [];
+  for (const result of results) {
+    const doc: SearchDoc = {
+      id: String(result.id),
+      name: typeof result.name === "string" ? result.name : "",
+      isFolder: result.isFolder === true,
+      parentId: typeof result.parentId === "string" ? result.parentId : "",
+      mimeType: typeof result.mimeType === "string" ? result.mimeType : "",
+    };
+    if (typeof result.size === "number") doc.size = result.size;
+    if (typeof result.modifiedTime === "string")
+      doc.modifiedTime = result.modifiedTime;
+    docs.push(doc);
+  }
+  return docs;
+}
+
+interface SearchResultLike {
+  id: unknown;
+  score: number;
+}
+
+// BFS from the configured roots over the adjacency map. A root id that does
+// not exist as an INDEXED DOC is still a valid BFS seed when some doc names
+// it as its parent (the Drive sentinel "root" is not a file row — My Drive's
+// top-level items carry parentId="root" without any row id="root"); the BFS
+// simply starts from its children. A root with neither a doc nor children is
+// skipped silently. Overlap between roots dedupes through the visited set.
+// Unreachable docs (orphans, cycles) never get visited — fail closed.
+export function computeRootMembership(
+  index: MiniSearch<SearchDoc>,
+  parentToChildren: Map<string, Set<string>>,
+  rootIds: string[],
+): Set<string> {
+  const docsById = docsByIdFromIndex(index);
+  const visited = new Set<string>();
+  const queue: string[] = [];
+  for (const rootId of rootIds) {
+    if (visited.has(rootId)) continue;
+    if (docsById.has(rootId)) {
+      visited.add(rootId);
+      queue.push(rootId);
+      continue;
+    }
+    // Sentinel-style root: not a doc itself, but its direct children
+    // (parentId === rootId) are the BFS frontier.
+    const children = parentToChildren.get(rootId);
+    if (!children) continue;
+    visited.add(rootId);
+    for (const child of children) {
+      if (visited.has(child)) continue;
+      visited.add(child);
+      queue.push(child);
+    }
+  }
+  let head = 0;
+  while (head < queue.length) {
+    const current = queue[head];
+    head += 1;
+    if (current === undefined) continue;
+    const children = parentToChildren.get(current);
+    if (!children) continue;
+    for (const child of children) {
+      if (visited.has(child)) continue;
+      visited.add(child);
+      queue.push(child);
+    }
+  }
+  return visited;
+}
+
+// BFS from ONE folder: its full descendant set, itself included (callers that
+// must exclude the folder delete its id from the returned set).
+export function computeSubtreeIds(
+  parentToChildren: Map<string, Set<string>>,
+  folderId: string,
+): Set<string> {
+  const visited = new Set<string>();
+  const queue = [folderId];
+  let head = 0;
+  while (head < queue.length) {
+    const current = queue[head];
+    head += 1;
+    if (current === undefined) continue;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const children = parentToChildren.get(current);
+    if (!children) continue;
+    for (const child of children) {
+      if (!visited.has(child)) queue.push(child);
+    }
+  }
+  return visited;
+}
+
+function docsByIdFromIndex(
+  index: MiniSearch<SearchDoc>,
+): Map<string, SearchDoc> {
+  const docs = new Map<string, SearchDoc>();
+  for (const doc of searchAllDocs(index)) {
+    docs.set(doc.id, doc);
+  }
+  return docs;
+}
+
+// ---- Sorting (B3) ----------------------------------------------------------
+// Sorts the FULL filtered result set BEFORE the caller slices to the limit.
+// Folders-first always (never flipped by dir); direction only affects the
+// chosen field. No mutation: returns a fresh array (MiniSearch returns a
+// fresh results array per search, but the copy keeps that assumption local).
+function sortResults(
+  results: SearchResultLike[],
+  index: MiniSearch<SearchDoc>,
+  sort: SearchSortSpec,
+): SearchResultLike[] {
+  if (sort.field === "relevance") return [...results];
+  const storedById = new Map<string, Record<string, unknown>>();
+  const storedOf = (id: string): Record<string, unknown> => {
+    const cached = storedById.get(id);
+    if (cached) return cached;
+    const stored = index.getStoredFields(id) ?? {};
+    storedById.set(id, stored);
+    return stored;
+  };
+  return [...results].sort((a, b) => {
+    const aId = String(a.id);
+    const bId = String(b.id);
+    const aStored = storedOf(aId);
+    const bStored = storedOf(bId);
+    // Folders first in EVERY direction.
+    const aFolder = aStored.isFolder === true;
+    const bFolder = bStored.isFolder === true;
+    if (aFolder !== bFolder) return aFolder ? -1 : 1;
+    const dirFactor = sort.dir === "desc" ? -1 : 1;
+    switch (sort.field) {
+      case "name": {
+        const nameA = typeof aStored.name === "string" ? aStored.name : "";
+        const nameB = typeof bStored.name === "string" ? bStored.name : "";
+        return nameA.localeCompare(nameB) * dirFactor;
+      }
+      case "modifiedTime": {
+        // Invalid/missing dates pin to the bottom in BOTH directions; the
+        // direction multiplies only the delta between two valid dates (same
+        // direction-aware pattern as FullRecentView.sortRecentTracks).
+        const aValid = isFiniteDateString(aStored.modifiedTime);
+        const bValid = isFiniteDateString(bStored.modifiedTime);
+        if (!aValid && !bValid) return 0;
+        if (!aValid) return 1;
+        if (!bValid) return -1;
+        const aTime = new Date(aStored.modifiedTime as string).getTime();
+        const bTime = new Date(bStored.modifiedTime as string).getTime();
+        return (aTime - bTime) * dirFactor;
+      }
+      case "size": {
+        const aSize = typeof aStored.size === "number" ? aStored.size : null;
+        const bSize = typeof bStored.size === "number" ? bStored.size : null;
+        // Missing/invalid sizes pin to the bottom in BOTH directions.
+        if (aSize === null && bSize === null) return 0;
+        if (aSize === null) return 1;
+        if (bSize === null) return -1;
+        return (aSize - bSize) * dirFactor;
+      }
+      default:
+        return 0;
+    }
+  });
+}
+
+function isFiniteDateString(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed);
+}
+
 export function queryIndex(
   index: MiniSearch<SearchDoc>,
   query: string,
   limit: number,
+  scope?: SearchQueryScope,
+  sort?: SearchSortSpec,
 ): SearchHit[] {
   const tokens = tokenizeQuery(query);
   if (tokens.length === 0) return [];
+
+  // Root scope resolution (B1/B2): no scope = legacy global behavior.
+  // An EMPTY rootIds (present but zero valid roots) fails closed — no hits —
+  // while a missing scope entirely keeps the old unscoped results.
+  let inRootIds: Set<string> | null = null;
+  let filterIds: Set<string> | null = null;
+  if (scope !== undefined) {
+    const parentToChildren =
+      scope.parentToChildren ?? buildParentToChildren(index);
+    inRootIds =
+      scope.inRootIds ??
+      (scope.rootIds.length === 0
+        ? new Set<string>()
+        : computeRootMembership(index, parentToChildren, scope.rootIds));
+    if (inRootIds.size === 0) return [];
+    if (
+      scope.mode === "recursive" &&
+      scope.currentFolderId !== undefined &&
+      scope.currentFolderId !== VIRTUAL_ROOT_ID
+    ) {
+      // Recursive mode narrows the root scope to the current folder's
+      // subtree. The current folder itself is NOT part of the results — only
+      // its descendants (the UI shows it as the container, not a hit).
+      const subtree = computeSubtreeIds(
+        parentToChildren,
+        scope.currentFolderId,
+      );
+      subtree.delete(scope.currentFolderId);
+      filterIds = subtree;
+      if (filterIds.size === 0) return [];
+    }
+  }
+
+  // MiniSearch filter option (verified: node_modules/minisearch/dist/es/
+  // index.js:1295-1301 — the filter runs while results are being assembled,
+  // BEFORE the byScore sort at :1307 and before the engine's own slice, so
+  // out-of-root docs can never consume a limit slot).
+  const filter = filterIds
+    ? (result: { id: unknown }): boolean => {
+        const id = String(result.id);
+        return inRootIds !== null && inRootIds.has(id) && filterIds.has(id);
+      }
+    : inRootIds
+      ? (result: { id: unknown }): boolean => inRootIds.has(String(result.id))
+      : undefined;
 
   const results = index.search(tokens.join(" "), {
     combineWith: "AND",
     prefix: true,
     fuzzy: FUZZY,
+    ...(filter ? { filter } : {}),
   });
 
-  return results.slice(0, Math.max(0, limit)).map((result) => {
+  const sorted = sort ? sortResults(results, index, sort) : results;
+
+  return sorted.slice(0, Math.max(0, limit)).map((result) => {
     // MiniSearch types stored fields as Record<string, unknown> (v7.2.0), so
     // the typed getter + typeof narrowing keeps this mapping strict-lint
     // clean.

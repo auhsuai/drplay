@@ -2,12 +2,26 @@ import type MiniSearch from "minisearch";
 import { db } from "../db/db";
 import type { DriveFile, MetadataCacheRow } from "../db/db";
 import type { CachedMetadata } from "../utils/metadata";
-import { buildSearchIndex, loadRealMetadata, queryIndex } from "./searchEngine";
-import type { SearchDoc, SearchHit } from "./searchEngine";
+import {
+  buildSearchIndex,
+  buildParentToChildren,
+  computeRootMembership,
+  loadRealMetadata,
+  queryIndex,
+} from "./searchEngine";
+import type { SearchDoc, SearchQueryScope, SearchHit } from "./searchEngine";
 
 // Wire protocol between the search worker and the UI thread (Task 3 consumes
 // these exact names). The index builds LAZILY: 'init' answers 'ready' without
 // touching the DB, and the first non-empty query performs the rebuild.
+
+export interface SearchQueryContext {
+  mode: "global" | "recursive";
+  rootIds: string[];
+  currentFolderId?: string;
+  sortField: "relevance" | "name" | "modifiedTime" | "size";
+  sortDir: "asc" | "desc";
+}
 
 export type SearchWorkerRequest =
   | { type: "init" }
@@ -18,6 +32,9 @@ export type SearchWorkerRequest =
       query: string;
       limit: number;
       userEmail: string;
+      /** Root/sort scope. Optional for wire backward-compat: a frame without
+       * it degrades to the legacy unscoped behavior (validated at runtime). */
+      context?: SearchQueryContext;
     };
 
 export type SearchWorkerResponse =
@@ -65,6 +82,46 @@ let rebuildGeneration = 0;
 // scoped to the new owner before anything is served.
 let activeOwnerEmail: string | null = null;
 
+// Root-membership cache (B1.3): the O(n) BFS over the whole index reruns only
+// when the owner, the root set, or the index generation changes — NOT on
+// every keystroke. Signature = owner + sorted root ids.
+let membershipCache: {
+  signature: string;
+  parentToChildren: Map<string, Set<string>>;
+  inRootIds: Set<string>;
+} | null = null;
+
+function membershipSignature(ownerEmail: string, rootIds: string[]): string {
+  return `${ownerEmail}|${[...rootIds].sort().join("|")}`;
+}
+
+function resetMembershipCache(): void {
+  membershipCache = null;
+}
+
+// Resolves (or reuses) the cached membership artifacts for this query frame.
+// rootIds are deduped/sorted by the signature; an EMPTY list yields an empty
+// membership (fail closed — the caller answers [] without touching the
+// index) without paying for a BFS.
+function resolveMembership(
+  index: MiniSearch<SearchDoc>,
+  ownerEmail: string,
+  rootIds: string[],
+): {
+  parentToChildren: Map<string, Set<string>>;
+  inRootIds: Set<string>;
+} | null {
+  if (rootIds.length === 0) return null;
+  const signature = membershipSignature(ownerEmail, rootIds);
+  if (membershipCache && membershipCache.signature === signature) {
+    return membershipCache;
+  }
+  const parentToChildren = buildParentToChildren(index);
+  const inRootIds = computeRootMembership(index, parentToChildren, rootIds);
+  membershipCache = { signature, parentToChildren, inRootIds };
+  return membershipCache;
+}
+
 // Test seam: wipes the module-level index state between test cases.
 export function resetSearchWorkerState(): void {
   searchWorkerState.index = null;
@@ -72,6 +129,7 @@ export function resetSearchWorkerState(): void {
   searchWorkerState.rebuildPromise = null;
   rebuildGeneration = 0;
   activeOwnerEmail = null;
+  resetMembershipCache();
 }
 
 export function isSearchWorkerRequest(
@@ -87,12 +145,36 @@ export function isSearchWorkerRequest(
       query?: unknown;
       limit?: unknown;
       userEmail?: unknown;
+      context?: unknown;
+    };
+    if (
+      typeof req.requestId !== "number" ||
+      typeof req.query !== "string" ||
+      typeof req.limit !== "number" ||
+      typeof req.userEmail !== "string"
+    ) {
+      return false;
+    }
+    // context (B1/I1): mode + rootIds + sort. A query without it is the OLD
+    // wire shape — still accepted so a stale frame from a previous session
+    // never wedges the pipeline; it degrades to the unscoped legacy behavior.
+    if (req.context === undefined) return true;
+    if (typeof req.context !== "object" || req.context === null) return false;
+    const ctx = req.context as {
+      mode?: unknown;
+      rootIds?: unknown;
+      sortField?: unknown;
+      sortDir?: unknown;
     };
     return (
-      typeof req.requestId === "number" &&
-      typeof req.query === "string" &&
-      typeof req.limit === "number" &&
-      typeof req.userEmail === "string"
+      (ctx.mode === "global" || ctx.mode === "recursive") &&
+      Array.isArray(ctx.rootIds) &&
+      ctx.rootIds.every((id) => typeof id === "string") &&
+      (ctx.sortField === "relevance" ||
+        ctx.sortField === "name" ||
+        ctx.sortField === "modifiedTime" ||
+        ctx.sortField === "size") &&
+      (ctx.sortDir === "asc" || ctx.sortDir === "desc")
     );
   }
   return false;
@@ -181,6 +263,14 @@ async function handleQuery(
     deps.post({ type: "results", requestId: msg.requestId, hits: [] });
     return;
   }
+  // Root scope (I1): an empty rootIds list fails closed — no hits — without
+  // touching the index at all (no rebuild, no BFS). Legacy frames without a
+  // context keep the old unscoped behavior (context is optional by wire).
+  const context: SearchQueryContext | undefined = msg.context;
+  if (context !== undefined && context.rootIds.length === 0) {
+    deps.post({ type: "results", requestId: msg.requestId, hits: [] });
+    return;
+  }
   try {
     await ensureFreshIndex(deps);
   } catch (err) {
@@ -201,7 +291,36 @@ async function handleQuery(
     return;
   }
   try {
-    const hits = deps.query(searchWorkerState.index, msg.query, msg.limit);
+    let scope: SearchQueryScope | undefined;
+    let sortSpec:
+      | {
+          field: SearchQueryContext["sortField"];
+          dir: SearchQueryContext["sortDir"];
+        }
+      | undefined;
+    if (context !== undefined) {
+      const membership = resolveMembership(
+        searchWorkerState.index,
+        msg.userEmail,
+        context.rootIds,
+      );
+      scope = {
+        mode: context.mode,
+        rootIds: context.rootIds,
+        ...(context.currentFolderId !== undefined
+          ? { currentFolderId: context.currentFolderId }
+          : {}),
+        ...(membership ?? {}),
+      };
+      sortSpec = { field: context.sortField, dir: context.sortDir };
+    }
+    const hits = deps.query(
+      searchWorkerState.index,
+      msg.query,
+      msg.limit,
+      scope,
+      sortSpec,
+    );
     deps.post({ type: "results", requestId: msg.requestId, hits });
   } catch (err) {
     deps.post({
@@ -224,6 +343,9 @@ export async function handleSearchWorkerMessage(
     case "invalidate":
       searchWorkerState.stale = true;
       rebuildGeneration++;
+      // The cached membership describes the OLD index — any index change
+      // (file added/removed/moved) invalidates it together with the index.
+      resetMembershipCache();
       return;
     case "query":
       if (msg.userEmail !== activeOwnerEmail) {
@@ -234,6 +356,7 @@ export async function handleSearchWorkerMessage(
         activeOwnerEmail = msg.userEmail;
         searchWorkerState.stale = true;
         rebuildGeneration++;
+        resetMembershipCache();
       }
       await handleQuery(msg, deps);
       return;

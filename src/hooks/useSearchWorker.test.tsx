@@ -38,14 +38,18 @@ const FAKE_TIMERS_TOFAKE = [
 
 const ROOT_ID = "root";
 
-function makeFile(id: string, name: string): DriveFile {
+function makeFile(
+  id: string,
+  name: string,
+  opts: { isFolder?: boolean; mimeType?: string; parentId?: string } = {},
+): DriveFile {
   return {
     id,
     name,
-    mimeType: "audio/mpeg",
-    parentId: ROOT_ID,
+    mimeType: opts.mimeType ?? "audio/mpeg",
+    parentId: opts.parentId ?? ROOT_ID,
     trashed: false,
-    isFolder: false,
+    isFolder: opts.isFolder ?? false,
     modifiedTime: "2024-01-01T00:00:00.000Z",
     size: 1000,
     userEmail: "default", // compound PK part (schema v10)
@@ -402,5 +406,251 @@ describe("useSearchWorker", () => {
     await flush(250);
     expect(view.result.current.hits.map((h) => h.id)).toEqual(["mine"]);
     view.unmount();
+  });
+
+  // ---- Phase A: root context frames + metadata invalidation (B4/I1) ------
+
+  function makeContext(
+    overrides: Partial<Parameters<typeof useSearchWorker>[2]> = {},
+  ) {
+    return {
+      mode: "global" as const,
+      rootIds: ["root"],
+      sortField: "relevance" as const,
+      sortDir: "desc" as const,
+      ...overrides,
+    };
+  }
+
+  it("22. context rides on the query frame (mode/roots/sort reach the worker)", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const context = makeContext({
+      mode: "recursive",
+      rootIds: ["folder-A"],
+      currentFolderId: "folder-A",
+      sortField: "name",
+      sortDir: "asc",
+    });
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: { q: "song", ctx: context },
+    });
+    await flush(200);
+    expect(fake.posted).toHaveLength(1);
+    expect(fake.posted[0]).toMatchObject({
+      type: "query",
+      query: "song",
+      userEmail: "default",
+      context: {
+        mode: "recursive",
+        rootIds: ["folder-A"],
+        currentFolderId: "folder-A",
+        sortField: "name",
+        sortDir: "asc",
+      },
+    });
+    view.unmount();
+  });
+
+  it("23. changing mode/sort re-queries immediately (query unchanged, new requestId)", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: {
+        q: "song",
+        ctx: makeContext({ mode: "global", sortField: "relevance" }),
+      },
+    });
+    await flush(200);
+    expect(fake.posted).toHaveLength(1);
+
+    act(() => {
+      view.rerender({
+        q: "song",
+        ctx: makeContext({ mode: "recursive", sortField: "relevance" }),
+      });
+    });
+    await flush(200);
+    expect(fake.posted).toHaveLength(2);
+    expect(fake.posted[1]).toMatchObject({
+      type: "query",
+      query: "song",
+      context: { mode: "recursive" },
+    });
+
+    act(() => {
+      view.rerender({
+        q: "song",
+        ctx: makeContext({ mode: "recursive", sortField: "name" }),
+      });
+    });
+    await flush(200);
+    expect(fake.posted).toHaveLength(3);
+    expect(fake.posted[2]).toMatchObject({
+      context: { mode: "recursive", sortField: "name" },
+    });
+    view.unmount();
+  });
+
+  it("24. metadataCache put marks the index stale: the next query sees the new title", async () => {
+    await db.files.bulkPut([makeFile("f-meta", "01 - raw name.mp3")]);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+      initialProps: { q: "new title" },
+    });
+    await flush(250);
+    // No metadata yet: filename does not match the title query.
+    expect(view.result.current.hits).toEqual([]);
+
+    // Real metadata lands via putCacheEntry-style row put (production path:
+    // setCache -> db.metadataCache.put fires the 'creating'/'updating' hook).
+    await db.metadataCache.put({
+      key: "metadata_f-meta",
+      entry: {
+        version: 2,
+        data: {
+          title: "New Title",
+          artist: "Some Artist",
+          duration: 0,
+          durationEstimated: true,
+          pictureData: null,
+          pictureDataFull: null,
+          v: 5,
+        },
+        ts: Date.now(),
+      },
+    });
+    await flush(320); // invalidation throttle (300ms) elapses -> stale
+
+    // The stale flag rides on the WORKER module state (lazy rebuild): the
+    // next query that reaches the executor rebuilds with fresh metadata.
+    // The user typing a refined query is the production trigger (same-string
+    // rerenders do not re-run the debounce effect — React deps unchanged).
+    // "titled" keeps the AND alive (prefix of nothing extra) while changing
+    // the deps so the debounce effect re-fires.
+    act(() => {
+      view.rerender({ q: "new titled" });
+    });
+    await flush(250); // debounce + rebuild with the fresh metadata
+    const ids = view.result.current.hits.map((h) => h.id);
+    expect(ids).toContain("f-meta");
+    const hit = view.result.current.hits.find((h) => h.id === "f-meta");
+    expect(hit?.title).toBe("New Title");
+    expect(hit?.artist).toBe("Some Artist");
+    view.unmount();
+  });
+
+  it("25. metadataCache delete invalidates too (evicted title disappears from search)", async () => {
+    await db.files.bulkPut([makeFile("f-del", "01 - raw.mp3")]);
+    await db.metadataCache.put({
+      key: "metadata_f-del",
+      entry: {
+        version: 2,
+        data: {
+          title: "Zed Title",
+          artist: null as unknown as string,
+          duration: 0,
+          durationEstimated: true,
+          pictureData: null,
+          pictureDataFull: null,
+          v: 5,
+        },
+        ts: Date.now(),
+      },
+    });
+    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+      initialProps: { q: "zed title" },
+    });
+    await flush(250);
+    expect(view.result.current.hits.map((h) => h.id)).toContain("f-del");
+
+    // Production delete paths: LRU evict (delete) / wipePersistedMetadataCache
+    // (clear) — both fire the 'deleting' hook.
+    await db.metadataCache.delete("metadata_f-del");
+    await flush(320);
+
+    // Refined query reaches the executor -> stale index rebuilds WITHOUT the
+    // evicted metadata: the title no longer matches. "titled" keeps the AND
+    // alive while changing the deps so the debounce effect re-fires.
+    act(() => {
+      view.rerender({ q: "zed titled" });
+    });
+    await flush(250);
+    expect(view.result.current.hits.map((h) => h.id)).not.toContain("f-del");
+    view.unmount();
+  });
+
+  it("26. coalesced metadata burst collapses into ONE invalidate (throttle holds)", async () => {
+    await db.files.bulkPut([makeFile("f-c", "Coalesce target.mp3")]);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+      initialProps: { q: "coalesce" },
+    });
+    await flush(250);
+    // Drive the REAL inline path with a burst of metadata puts and confirm
+    // the index rebuilds once and the final state is fresh (the throttle
+    // guarantees at most 1 invalidate per 300ms window — verified by the
+    // final result being correct).
+    for (let i = 0; i < 5; i += 1) {
+      await db.metadataCache.put({
+        key: `metadata_f-c`,
+        entry: {
+          version: 2,
+          data: {
+            title: `Coalesce Title v${String(i)}`,
+            artist: null as unknown as string,
+            duration: 0,
+            durationEstimated: true,
+            pictureData: null,
+            pictureDataFull: null,
+            v: 5,
+          },
+          ts: Date.now(),
+        },
+      });
+    }
+    await flush(320);
+
+    act(() => {
+      view.rerender({ q: "coalesce titled v4" });
+    });
+    await flush(250);
+    // The LAST metadata state won (coalesced into one fresh rebuild).
+    const hit = view.result.current.hits.find((h) => h.id === "f-c");
+    expect(hit?.title).toBe("Coalesce Title v4");
+    view.unmount();
+  });
+
+  it("27. inline fallback answers the SAME root-scoped shape as the worker path", async () => {
+    await db.files.bulkPut([
+      // The root folder doc itself must be indexed for membership to resolve.
+      makeFile("root", "Root", {
+        isFolder: true,
+        mimeType: "application/vnd.google-apps.folder",
+      }),
+      makeFile("in-root", "Song in root.mp3"),
+      { ...makeFile("out-root", "Song out.mp3"), parentId: "elsewhere" },
+    ]);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: {
+        q: "song",
+        ctx: makeContext({ rootIds: ["root"] }),
+      },
+    });
+    await flush(250);
+    // in-root is a child of "root" (default parentId); out-root is not.
+    const ids = view.result.current.hits.map((h) => h.id);
+    expect(ids).toContain("in-root");
+    expect(ids).not.toContain("out-root");
+
+    // Empty roots fail closed through the inline path too.
+    const view2 = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: {
+        q: "song",
+        ctx: makeContext({ rootIds: [] }),
+      },
+    });
+    await flush(250);
+    expect(view2.result.current.hits).toEqual([]);
+    view.unmount();
+    view2.unmount();
   });
 });

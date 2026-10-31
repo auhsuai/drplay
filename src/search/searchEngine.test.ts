@@ -4,6 +4,9 @@ import {
   loadRealMetadata,
   queryIndex,
   matchesNormalized,
+  buildParentToChildren,
+  computeRootMembership,
+  computeSubtreeIds,
 } from "./searchEngine";
 import type { DriveFile, MetadataCacheRow } from "../db/db";
 import type { CachedMetadata } from "../utils/metadata";
@@ -262,5 +265,438 @@ describe("searchEngine", () => {
     const clean = queryIndex(index, "anh yeu", 10);
     expect(spaced.map((h) => h.id)).toEqual(clean.map((h) => h.id));
     expect(spaced.length).toBe(1);
+  });
+
+  describe("root-scoped query (B1+B2)", () => {
+    const FOLDER_A = "folder-A";
+    const FOLDER_B = "folder-B";
+
+    function makeTree(): ReturnType<typeof buildSearchIndex> {
+      return buildIndex([
+        makeFile(FOLDER_A, "Alpha", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: "root",
+        }),
+        makeFile("a1", "Alpha song one.mp3", { parentId: FOLDER_A }),
+        makeFile("a2", "Alpha song two.mp3", { parentId: FOLDER_A }),
+        makeFile(FOLDER_B, "Beta", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: "root",
+        }),
+        makeFile("b1", "Beta song.mp3", { parentId: FOLDER_B }),
+        // Orphan: parent never mirrored in the index docs.
+        makeFile("orphan", "Orphan song.mp3", { parentId: "missing" }),
+        // Direct cycle: parent points at itself.
+        makeFile("selfCycle", "Self cycle.mp3", { parentId: "selfCycle" }),
+        // Indirect cycle: c1 -> c2 -> c1.
+        makeFile("c1", "Cycle one.mp3", { parentId: "c2" }),
+        makeFile("c2", "Cycle two.mp3", { parentId: "c1" }),
+      ]);
+    }
+
+    const queryCtx = {
+      mode: "recursive" as const,
+    };
+
+    it("R1. empty rootIds fails closed: no hits even for matching docs", () => {
+      const index = makeTree();
+      const hits = queryIndex(index, "song", 10, { ...queryCtx, rootIds: [] });
+      expect(hits).toEqual([]);
+      // null-ish guards too (defensive): treated like empty.
+      expect(
+        queryIndex(index, "song", 10, { ...queryCtx, rootIds: [] }),
+      ).toEqual([]);
+    });
+
+    it("R2. out-of-root docs are excluded BEFORE the limit slice (small limit proves it)", () => {
+      const index = buildIndex([
+        makeFile(FOLDER_A, "Alpha", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: "root",
+        }),
+        makeFile("r-in1", "Song in root.mp3", { parentId: FOLDER_A }),
+        makeFile("r-in2", "Song in root too.mp3", { parentId: FOLDER_A }),
+        makeFile("r-out", "Song outside.mp3", { parentId: FOLDER_B }),
+      ]);
+      // All three songs match "song"; limit 2 must keep ONLY the two in-root
+      // docs — an engine-level slice before the filter would instead drop one
+      // of the in-root docs (the byScore tail) and leak r-out in.
+      const hits = queryIndex(index, "song", 2, {
+        ...queryCtx,
+        rootIds: [FOLDER_A],
+      });
+      expect(hits.map((h) => h.id).sort()).toEqual(["r-in1", "r-in2"]);
+    });
+
+    it("R3. single root: descendants included, other branches excluded", () => {
+      const index = makeTree();
+      const hits = queryIndex(index, "song", 20, {
+        ...queryCtx,
+        rootIds: [FOLDER_A],
+      });
+      const ids = hits.map((h) => h.id);
+      expect(ids).toContain("a1");
+      expect(ids).toContain("a2");
+      expect(ids).not.toContain("b1");
+      // Orphan/cycles are unreachable from the root -> fail closed.
+      expect(ids).not.toContain("orphan");
+      expect(ids).not.toContain("selfCycle");
+      expect(ids).not.toContain("c1");
+    });
+
+    it("R4. multi-root: union of both subtrees, duplicates deduped", () => {
+      const index = makeTree();
+      const hits = queryIndex(index, "song", 20, {
+        ...queryCtx,
+        rootIds: [FOLDER_A, FOLDER_B, FOLDER_A],
+      });
+      const ids = hits.map((h) => h.id);
+      expect(ids).toEqual(expect.arrayContaining(["a1", "a2", "b1"]));
+      expect(ids).not.toContain("orphan");
+    });
+
+    it("R5. nested roots: child root inside parent root does not duplicate hits", () => {
+      // A truly nested pair: folder-B inside folder-A — BFS from both roots
+      // must dedupe b1 (visited-set), not emit it twice.
+      const nested = buildIndex([
+        makeFile(FOLDER_A, "Alpha", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: "root",
+        }),
+        makeFile(FOLDER_B, "Beta", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: FOLDER_A,
+        }),
+        makeFile("a1", "Alpha song one.mp3", { parentId: FOLDER_A }),
+        makeFile("b1", "Beta song.mp3", { parentId: FOLDER_B }),
+      ]);
+      const hits = queryIndex(nested, "song", 20, {
+        ...queryCtx,
+        rootIds: [FOLDER_A, FOLDER_B],
+      });
+      const ids = hits.map((h) => h.id);
+      expect(ids.filter((id) => id === "b1")).toHaveLength(1);
+      expect(ids.filter((id) => id === "a1")).toHaveLength(1);
+      expect(ids).toEqual(expect.arrayContaining(["a1", "b1"]));
+    });
+
+    it("R6. missing root id (not in index) is skipped silently; all-invalid roots -> []", () => {
+      const index = makeTree();
+      const partial = queryIndex(index, "song", 20, {
+        ...queryCtx,
+        rootIds: [FOLDER_A, "ghost-root"],
+      });
+      expect(partial.map((h) => h.id)).toContain("a1");
+      expect(partial.map((h) => h.id)).not.toContain("b1");
+      const none = queryIndex(index, "song", 20, {
+        ...queryCtx,
+        rootIds: ["ghost-root", "ghost-2"],
+      });
+      expect(none).toEqual([]);
+    });
+
+    it("R7. recursive: subtree of currentFolderId only; current folder itself excluded", () => {
+      const index = makeTree();
+      const hits = queryIndex(index, "Alpha", 20, {
+        ...queryCtx,
+        rootIds: [FOLDER_A],
+        currentFolderId: FOLDER_A,
+      });
+      const ids = hits.map((h) => h.id);
+      expect(ids).toContain("a1");
+      expect(ids).toContain("a2");
+      // The current folder itself is NOT part of its own subtree results.
+      expect(ids).not.toContain(FOLDER_A);
+      expect(ids).not.toContain("b1");
+    });
+
+    it("R8. recursive: VIRTUAL_ROOT_ID degrades to global (all roots scope)", () => {
+      const index = makeTree();
+      const hits = queryIndex(index, "song", 20, {
+        ...queryCtx,
+        rootIds: [FOLDER_A, FOLDER_B],
+        currentFolderId: "__drplay_virtual_root__",
+      });
+      const ids = hits.map((h) => h.id);
+      expect(ids).toContain("a1");
+      expect(ids).toContain("b1");
+    });
+
+    it("R9. recursive: current folder outside the roots -> subtree empty -> []", () => {
+      const index = makeTree();
+      const hits = queryIndex(index, "song", 20, {
+        ...queryCtx,
+        rootIds: [FOLDER_A],
+        currentFolderId: FOLDER_B,
+      });
+      expect(hits).toEqual([]);
+    });
+
+    it("R10. global mode: root filter applies, currentFolderId ignored", () => {
+      const index = makeTree();
+      const hits = queryIndex(index, "song", 20, {
+        mode: "global",
+        rootIds: [FOLDER_A],
+        currentFolderId: FOLDER_B,
+      });
+      const ids = hits.map((h) => h.id);
+      expect(ids).toContain("a1");
+      expect(ids).not.toContain("b1");
+    });
+
+    it("R11. cycles do not hang or crash (BFS visited-set)", () => {
+      const index = buildIndex([
+        makeFile("x1", "Loop song.mp3", { parentId: "x2" }),
+        makeFile("x2", "Loop song two.mp3", { parentId: "x1" }),
+      ]);
+      // BFS from a root that REACHES the cycle must terminate.
+      const parentToChildren = buildParentToChildren(index);
+      const inRootIds = computeRootMembership(index, parentToChildren, ["x1"]);
+      expect(inRootIds.has("x1")).toBe(true);
+      expect(inRootIds.has("x2")).toBe(true);
+      const subtree = computeSubtreeIds(parentToChildren, "x2");
+      expect(subtree.has("x1")).toBe(true);
+    });
+
+    it("R12. no root scope -> legacy behavior identical (mode/scope omitted)", () => {
+      const index = makeTree();
+      // No context at all: the old 3-arg call keeps working.
+      const legacy = queryIndex(index, "song", 20);
+      expect(legacy.map((h) => h.id)).toEqual(
+        expect.arrayContaining(["a1", "a2", "b1", "orphan"]),
+      );
+      // Explicit undefined context behaves the same.
+      expect(queryIndex(index, "song", 20, undefined).map((h) => h.id)).toEqual(
+        legacy.map((h) => h.id),
+      );
+    });
+
+    it("R13. root membership helpers: cycle guard + self-parent + orphan exclusion", () => {
+      const index = makeTree();
+      const parentToChildren = buildParentToChildren(index);
+      const inRootIds = computeRootMembership(index, parentToChildren, [
+        FOLDER_A,
+      ]);
+      expect(inRootIds.has(FOLDER_A)).toBe(true);
+      expect(inRootIds.has("a1")).toBe(true);
+      expect(inRootIds.has("orphan")).toBe(false);
+      expect(inRootIds.has("selfCycle")).toBe(false);
+      expect(inRootIds.has("c1")).toBe(false);
+      const subtree = computeSubtreeIds(parentToChildren, FOLDER_A);
+      expect(subtree.has("a1")).toBe(true);
+      expect(subtree.has(FOLDER_A)).toBe(true);
+      // Subtree BFS from an unknown folder: standard BFS returns the start
+      // node only — fail-closed happens at the call site because the folder
+      // is not in inRootIds (queryIndex answers [] for that combination).
+      expect(computeSubtreeIds(parentToChildren, "ghost")).toEqual(
+        new Set(["ghost"]),
+      );
+    });
+  });
+
+  describe("search sorting (B3)", () => {
+    // Fixed relevance ranking via distinct name-token counts; docs share one
+    // root so the root scope never interferes with sort assertions.
+    const ROOT = "sort-root";
+
+    function makeSortTree(): ReturnType<typeof buildSearchIndex> {
+      return buildIndex([
+        makeFile(ROOT, "Sort Root", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: "grandroot",
+        }),
+        // files: same token "song" so they all match one query.
+        makeFile("f1", "song.mp3", {
+          parentId: ROOT,
+          size: 300,
+          modifiedTime: "2024-03-01T00:00:00.000Z",
+        }),
+        makeFile("f2", "song b.mp3", {
+          parentId: ROOT,
+          size: 100,
+          modifiedTime: "2024-01-01T00:00:00.000Z",
+        }),
+        makeFile("f3", "song a.mp3", {
+          parentId: ROOT,
+          size: 200,
+          modifiedTime: "2024-02-01T00:00:00.000Z",
+        }),
+        // folder matched by the same query via name.
+        makeFile("fold", "song folder", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: ROOT,
+        }),
+        // invalid/missing date + missing size rows.
+        makeFile("f-bad-date", "song bad date.mp3", {
+          parentId: ROOT,
+          size: 50,
+          modifiedTime: "not-a-date",
+        }),
+        makeFile("f-no-size", "song no size.mp3", {
+          parentId: ROOT,
+          modifiedTime: "2023-06-01T00:00:00.000Z",
+        }),
+      ]);
+    }
+
+    const scope = { mode: "global" as const, rootIds: [ROOT] };
+
+    it("S1. relevance default (no sort spec) keeps byScore order + folders first", () => {
+      const index = makeSortTree();
+      const hits = queryIndex(index, "song", 20);
+      // byScore puts the 1-token "song.mp3" above the 2-token names (BM25
+      // length normalization) — "song folder" and "song.mp3" TIE at 1 query
+      // term ("song"), so with the legacy hook sort they interleave by score;
+      // spec B3.2 keeps raw byScore order for field=relevance.
+      const scores = hits.map((h) => h.score);
+      const sortedDesc = [...scores].sort((a, b) => b - a);
+      expect(scores).toEqual(sortedDesc);
+      // Explicit relevance spec behaves identically.
+      const explicit = queryIndex(index, "song", 20, scope, {
+        field: "relevance",
+        dir: "desc",
+      });
+      expect(explicit.map((h) => h.id)).toEqual(hits.map((h) => h.id));
+    });
+
+    it("S2. name asc/desc sorts by filename WITH extension, folders first both ways", () => {
+      const index = makeSortTree();
+      const asc = queryIndex(index, "song", 20, scope, {
+        field: "name",
+        dir: "asc",
+      });
+      const ascIds = asc.map((h) => h.id);
+      // Extension matters: "song.mp3" vs "song a.mp3" — plain names would tie.
+      expect(ascIds.indexOf("fold")).toBeLessThan(ascIds.indexOf("f1"));
+      const fileNames = asc.filter((h) => !h.isFolder).map((h) => h.name);
+      const expected = [...fileNames].sort((a, b) => a.localeCompare(b));
+      expect(fileNames).toEqual(expected);
+      const desc = queryIndex(index, "song", 20, scope, {
+        field: "name",
+        dir: "desc",
+      });
+      // Folders stay first even when desc.
+      expect(desc[0]?.isFolder).toBe(true);
+      const descNames = desc.filter((h) => !h.isFolder).map((h) => h.name);
+      expect(descNames).toEqual(
+        [...descNames].sort((a, b) => b.localeCompare(a)),
+      );
+    });
+
+    it("S3. modifiedTime asc/desc: invalid/missing dates pin to the bottom in BOTH directions", () => {
+      const index = makeSortTree();
+      const asc = queryIndex(index, "song", 20, scope, {
+        field: "modifiedTime",
+        dir: "asc",
+      });
+      const ascFiles = asc.filter((h) => !h.isFolder).map((h) => h.id);
+      expect(ascFiles[ascFiles.length - 1]).toBe("f-bad-date");
+      // asc: oldest real date first.
+      expect(ascFiles[0]).toBe("f-no-size"); // 2023-06-01
+      const desc = queryIndex(index, "song", 20, scope, {
+        field: "modifiedTime",
+        dir: "desc",
+      });
+      const descFiles = desc.filter((h) => !h.isFolder).map((h) => h.id);
+      // desc: newest real date first; invalid STILL pinned bottom.
+      expect(descFiles[0]).toBe("f1"); // 2024-03-01
+      expect(descFiles[descFiles.length - 1]).toBe("f-bad-date");
+    });
+
+    it("S4. size asc/desc: missing sizes pin to the bottom in BOTH directions", () => {
+      const index = makeSortTree();
+      const asc = queryIndex(index, "song", 20, scope, {
+        field: "size",
+        dir: "asc",
+      });
+      const ascFiles = asc.filter((h) => !h.isFolder);
+      const sizedAsc = ascFiles
+        .filter((h) => typeof h.size === "number")
+        .map((h) => h.size as number);
+      expect(sizedAsc).toEqual([...sizedAsc].sort((a, b) => a - b));
+      expect(ascFiles[ascFiles.length - 1]?.size).toBeUndefined();
+      const desc = queryIndex(index, "song", 20, scope, {
+        field: "size",
+        dir: "desc",
+      });
+      const descFiles = desc.filter((h) => !h.isFolder);
+      const sizedDesc = descFiles
+        .filter((h) => typeof h.size === "number")
+        .map((h) => h.size as number);
+      expect(sizedDesc).toEqual([...sizedDesc].sort((a, b) => b - a));
+      // Missing size still last when desc (pin does not flip).
+      expect(descFiles[descFiles.length - 1]?.size).toBeUndefined();
+    });
+
+    it("S5. sort applies to the FULL filtered set BEFORE the limit slice", () => {
+      const index = makeSortTree();
+      // limit 2 on name asc. Folders-first always wins the first slot
+      // ("fold" = "song folder" sorts before files alphabetically too).
+      // If the engine sliced by RELEVANCE before sorting, the name-asc top-2
+      // would be [fold, f1] (byScore ranks f1 #1) — instead the true name
+      // order [fold, f3] proves sort ran on the full set before the slice.
+      const hits = queryIndex(index, "song", 2, scope, {
+        field: "name",
+        dir: "asc",
+      });
+      expect(hits.map((h) => h.id)).toEqual([
+        "fold", // song folder (folder first)
+        "f3", // song a.mp3
+      ]);
+    });
+
+    it("S6. stable sort: equal keys keep byScore relative order", () => {
+      // Two identical names, ONE root: the ROOT itself ("sort-root") also
+      // matches "same size"? No — it matches "song" only. The tie query here
+      // needs both files to match AND to be inside rootIds: both have
+      // parentId=ROOT... which is not itself indexed in this small fixture,
+      // so rootIds=[ROOT] resolves to an empty membership (fail closed).
+      // Include the root doc so membership resolves.
+      const index = buildIndex([
+        makeFile(ROOT, "sort root", {
+          isFolder: true,
+          mimeType: FOLDER_MIME,
+          parentId: "grandroot",
+        }),
+        makeFile("tie-b", "same size.mp3", { parentId: ROOT, size: 100 }),
+        makeFile("tie-a", "same size.mp3", { parentId: ROOT, size: 100 }),
+      ]);
+      const hits = queryIndex(
+        index,
+        "same size",
+        10,
+        {
+          mode: "global",
+          rootIds: [ROOT],
+        },
+        {
+          field: "size",
+          dir: "asc",
+        },
+      );
+      expect(hits.map((h) => h.id)).toEqual(["tie-b", "tie-a"]);
+      const hitsName = queryIndex(
+        index,
+        "same size",
+        10,
+        {
+          mode: "global",
+          rootIds: [ROOT],
+        },
+        {
+          field: "name",
+          dir: "desc",
+        },
+      );
+      // Equal names keep the same relative (byScore) order in both dirs.
+      expect(hitsName.map((h) => h.id)).toEqual(["tie-b", "tie-a"]);
+    });
   });
 });

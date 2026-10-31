@@ -8,10 +8,13 @@ import type { SearchHit } from "../search/searchEngine";
 import {
   handleSearchWorkerMessage,
   isSearchWorkerResponse,
+  type SearchQueryContext,
   type SearchWorkerDeps,
   type SearchWorkerRequest,
   type SearchWorkerResponse,
 } from "../search/search.worker";
+
+export type { SearchQueryContext } from "../search/search.worker";
 
 const DEBOUNCE_MS = 150;
 const INVALIDATE_THROTTLE_MS = 300;
@@ -167,6 +170,7 @@ export function setSearchExecutorFactoryForTests(
 export function useSearchWorker(
   query: string,
   limit: number,
+  context?: SearchQueryContext,
 ): { hits: SearchHit[] } {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const executorRef = useRef<SearchExecutor | null>(null);
@@ -177,7 +181,12 @@ export function useSearchWorker(
   // One executor for the hook's lifetime, plus the freshness subscriptions:
   // main-thread Dexie hooks cover writes from upload/explorer/on-demand
   // fetch, while the pro-sync CustomEvents cover writes the proSync worker
-  // makes on its OWN connection (invisible to main-thread hooks).
+  // makes on its OWN connection (invisible to main-thread hooks). The
+  // metadataCache hooks (B4) join the same throttled invalidation so a fresh
+  // title/artist lands in the index on the next query — Dexie's hooks
+  // middleware fires per-row for bulkPut AND chunks clear() into per-row
+  // deletes, so no separate wipe subscription is needed (verified:
+  // node_modules/dexie/dist/dexie.mjs:4937-5060).
   useEffect(() => {
     const executor = executorFactory();
     executorRef.current = executor;
@@ -219,6 +228,13 @@ export function useSearchWorker(
     db.files.hook("creating", onFilesChanged);
     db.files.hook("updating", onFilesChanged);
     db.files.hook("deleting", onFilesChanged);
+    // Metadata writes (title/artist parsed async after upload) must reach the
+    // index too: putCacheEntry/setCache put one row, fetchPipeline puts rows,
+    // LRU evict deletes one row, wipePersistedMetadataCache clear() chunks
+    // into per-row deletes — every path fires one of the hooks below.
+    db.metadataCache.hook("creating", onFilesChanged);
+    db.metadataCache.hook("updating", onFilesChanged);
+    db.metadataCache.hook("deleting", onFilesChanged);
     window.addEventListener(PRO_SYNC_PROGRESS_EVENT, onProSyncProgress);
     window.addEventListener(PRO_SYNC_COMPLETE_EVENT, onProSyncComplete);
 
@@ -234,6 +250,9 @@ export function useSearchWorker(
       db.files.hook("creating").unsubscribe(onFilesChanged);
       db.files.hook("updating").unsubscribe(onFilesChanged);
       db.files.hook("deleting").unsubscribe(onFilesChanged);
+      db.metadataCache.hook("creating").unsubscribe(onFilesChanged);
+      db.metadataCache.hook("updating").unsubscribe(onFilesChanged);
+      db.metadataCache.hook("deleting").unsubscribe(onFilesChanged);
       window.removeEventListener(PRO_SYNC_PROGRESS_EVENT, onProSyncProgress);
       window.removeEventListener(PRO_SYNC_COMPLETE_EVENT, onProSyncComplete);
       executor.terminate();
@@ -244,6 +263,9 @@ export function useSearchWorker(
   // Debounced query dispatch. Empty queries short-circuit: nothing reaches
   // the executor, and the returned hits derive to [] (normal listing) — the
   // requestId bump drops any still-in-flight response from a previous query.
+  // The context (mode/roots/sort) rides on every frame; the effect re-runs
+  // when it changes so a mode/sort switch re-queries WITHOUT the user
+  // retyping (requestId bump drops the superseded response, I1 stale rule).
   useEffect(() => {
     if (debounceTimerRef.current !== null) {
       clearTimeout(debounceTimerRef.current);
@@ -266,9 +288,22 @@ export function useSearchWorker(
         // Read at post time: a login/logout between debounce ticks lands on
         // the next frame instead of being pinned to a stale executor.
         userEmail: getCurrentUserEmail(),
+        ...(context
+          ? {
+              context: {
+                mode: context.mode,
+                rootIds: context.rootIds,
+                ...(context.currentFolderId !== undefined
+                  ? { currentFolderId: context.currentFolderId }
+                  : {}),
+                sortField: context.sortField,
+                sortDir: context.sortDir,
+              },
+            }
+          : {}),
       });
     }, DEBOUNCE_MS);
-  }, [query, limit]);
+  }, [query, limit, context]);
 
   return { hits: query.trim() === "" ? [] : hits };
 }

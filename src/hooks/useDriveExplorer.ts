@@ -49,7 +49,15 @@ export function useDriveExplorer(
     setSelectedIds(new Set());
   }
 
-  const { searchQuery, setSearchQuery, globalSearchItems } = useDriveSearch();
+  const {
+    searchQuery,
+    setSearchQuery,
+    globalSearchItems,
+    searchMode,
+    setSearchMode,
+    searchSort,
+    setSearchSort,
+  } = useDriveSearch(currentFolderId);
   const { items } = useDriveListing({
     currentFolderId,
     currentFolderName,
@@ -132,6 +140,11 @@ export function useDriveExplorer(
     isVirtualRoot,
     searchQuery,
     setSearchQuery,
+    // Search mode/sort re-export (I2) for MainContent/TopNavigationBar (Phase B).
+    searchMode,
+    setSearchMode,
+    searchSort,
+    setSearchSort,
     currentPage,
     setCurrentPage,
     totalPages,

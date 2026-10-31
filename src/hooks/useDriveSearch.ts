@@ -3,9 +3,23 @@ import type { Dispatch, SetStateAction } from "react";
 import type { DriveItem } from "../types";
 import { useSearchWorker } from "./useSearchWorker";
 import type { SearchHit } from "../search/searchEngine";
+import { useDriveStore } from "../store/driveStore";
 
 const GLOBAL_SEARCH_LIMIT = 500;
 const SEARCH_RESULT_LABEL = "Search Result";
+
+// Search mode + sort model (I2). Sort string mapping (FileListHeader ↔ model,
+// pinned for Phase B): "relevance" ↔ {relevance}; "name" ↔ {name, asc};
+// "name desc" ↔ {name, desc}; "modifiedTime" ↔ {modifiedTime, asc};
+// "modifiedTime desc" ↔ {modifiedTime, desc}; "size" ↔ {size, asc};
+// "size desc" ↔ {size, desc}.
+export type SearchMode = "global" | "recursive";
+export interface SearchSort {
+  field: "relevance" | "name" | "modifiedTime" | "size";
+  dir: "asc" | "desc";
+}
+
+const DEFAULT_SORT: SearchSort = { field: "relevance", dir: "desc" };
 
 // Maps a worker SearchHit to the DriveItem shape the listing uses. The engine
 // already resolved the display title (real metadata title when present, else
@@ -39,30 +53,67 @@ function mapSearchHitToDriveItem(hit: SearchHit): DriveItem {
   };
 }
 
-export function useDriveSearch(): {
+export function useDriveSearch(currentFolderId?: string): {
   searchQuery: string;
   setSearchQuery: Dispatch<SetStateAction<string>>;
   globalSearchItems: DriveItem[];
+  searchMode: SearchMode;
+  setSearchMode: (mode: SearchMode) => void;
+  searchSort: SearchSort;
+  setSearchSort: (sort: SearchSort) => void;
 } {
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>("global");
+  const [searchSort, setSearchSort] = useState<SearchSort>(DEFAULT_SORT);
 
-  // Global search: worker-backed relevance engine (Task 3 of the search
-  // rebuild). The hook debounces the query and keeps last-good hits while one
-  // is in flight; empty queries never reach the worker (return []), so the
-  // normal listing below wins.
-  const { hits } = useSearchWorker(searchQuery, GLOBAL_SEARCH_LIMIT);
+  // The configured roots live in the store (set by useDriveInit /
+  // useDriveRootSelector). Read at render so a root change re-renders and the
+  // context below carries the fresh ids on the next query frame.
+  const rootFolders = useDriveStore((state) => state.rootFolders);
+  const rootIds = useMemo(() => rootFolders.map((r) => r.id), [rootFolders]);
 
+  // NO reset on query change (user feedback 2026-10-31, replaces the old I2
+  // reset rule): clearing the query only clears the RESULTS — mode AND sort
+  // both survive and are re-applied on the next non-empty query. Each lives
+  // for the hook's mount lifetime and changes ONLY through explicit user
+  // clicks (icon toggle / header columns).
+
+  // Query context: recursive mode narrows to the open folder's subtree; at
+  // the virtual root (or without a folder) it degrades to the global root
+  // scope. The worker/engine treat VIRTUAL_ROOT_ID as global.
+  const context = useMemo(
+    () => ({
+      mode: searchMode,
+      rootIds,
+      ...(currentFolderId !== undefined ? { currentFolderId } : {}),
+      sortField: searchSort.field,
+      sortDir: searchSort.dir,
+    }),
+    [searchMode, rootIds, currentFolderId, searchSort],
+  );
+
+  // Global search: worker-backed relevance engine. The hook debounces the
+  // query and keeps last-good hits while one is in flight; empty queries
+  // never reach the worker (return []), so the normal listing below wins.
+  // Changing mode/sort re-queries immediately (context is a debounce dep).
+  const { hits } = useSearchWorker(searchQuery, GLOBAL_SEARCH_LIMIT, context);
+
+  // The engine sorts (folders-first + field/dir) BEFORE slicing to the
+  // limit, so the hook maps hits in order — no hook-level re-sort (B3.5:
+  // the old folders-first/score sort here was the single sort point, now
+  // moved into the engine).
   const globalSearchItems = useMemo(() => {
     if (searchQuery.trim() === "") return [];
-    // Folders first (stable), then relevance (score) descending within each
-    // group — deliberate replacement of the old alphabetical sort (plan Task
-    // 3). A copy is sorted because MiniSearch returns a fresh array per query.
-    const sortedHits = [...hits].sort((a, b) => {
-      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
-      return b.score - a.score;
-    });
-    return sortedHits.map(mapSearchHitToDriveItem);
+    return hits.map(mapSearchHitToDriveItem);
   }, [hits, searchQuery]);
 
-  return { searchQuery, setSearchQuery, globalSearchItems };
+  return {
+    searchQuery,
+    setSearchQuery,
+    globalSearchItems,
+    searchMode,
+    setSearchMode,
+    searchSort,
+    setSearchSort,
+  };
 }

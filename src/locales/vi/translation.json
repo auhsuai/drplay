@@ -495,6 +495,12 @@
     "reload": "Tải lại"
   },
   "search_placeholder": "Tìm kiếm…",
+  "search": {
+    "mode_global": "Tìm kiếm toàn bộ",
+    "mode_recursive": "Tìm kiếm đệ quy",
+    "switch_to_recursive": "Chuyển sang tìm kiếm đệ quy",
+    "switch_to_global": "Chuyển sang tìm kiếm toàn bộ"
+  },
   "loading": "Đang tải…",
   "cancel": "Hủy",
   "ok": "OK",

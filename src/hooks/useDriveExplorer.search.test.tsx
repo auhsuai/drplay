@@ -12,6 +12,7 @@ import {
 import { renderHook, act } from "@testing-library/react";
 import { db, type DriveFile } from "../db/db";
 import { useDriveExplorer } from "./useDriveExplorer";
+import { useDriveStore } from "../store/driveStore";
 import { resetSearchWorkerState } from "../search/search.worker";
 
 // Global search runs through the worker-backed engine (Task 3 of the search
@@ -107,14 +108,27 @@ async function search(query: string) {
 
 describe("useDriveExplorer global search", () => {
   beforeEach(async () => {
+    localStorage.clear();
     await db.files.clear();
     await db.metadataCache.clear();
     resetSearchWorkerState();
+    // Phase A root scoping (B1.4): the search now scopes to the configured
+    // roots read from the store; production always has ≥1 root when the
+    // explorer renders (FolderSelectionGate enforces setup first), so the
+    // tests seed the same shape the app guarantees.
+    act(() => {
+      useDriveStore.setState({
+        rootFolders: [{ id: ROOT_ID, name: "My Drive" }],
+      });
+    });
   });
 
   afterEach(async () => {
     await db.files.clear();
     await db.metadataCache.clear();
+    act(() => {
+      useDriveStore.setState({ rootFolders: [] });
+    });
   });
 
   it("matches Vietnamese đ via normalization (file 'Đổi thay.mp3', query 'doi')", async () => {
