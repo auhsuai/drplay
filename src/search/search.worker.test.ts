@@ -5,6 +5,7 @@ import {
   handleSearchWorkerMessage,
   resetSearchWorkerState,
   searchWorkerState,
+  type SearchQueryContext,
   type SearchWorkerDeps,
   type SearchWorkerRequest,
   type SearchWorkerResponse,
@@ -386,16 +387,24 @@ describe("search.worker", () => {
     expect(deps.buildSpy).not.toHaveBeenCalled();
   });
 
-  it("10. invalidate arriving mid-rebuild is not swallowed (index stays stale)", async () => {
+  it("10. invalidate arriving mid-rebuild is not swallowed (old snapshot never published)", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     // Deferred DB read keeps the rebuild parked mid-await so the test can
     // deliver invalidate exactly inside the DB-read window (precedent:
-    // metadata.concurrency.test.ts generation-guard test).
+    // metadata.concurrency.test.ts generation-guard test). The SECOND read
+    // (the bounded retry) returns post-invalidate data, proving the published
+    // index can only come from a snapshot taken AFTER the invalidate.
     let resolveFiles!: (v: DriveFile[]) => void;
     const filesGate = new Promise<DriveFile[]>((resolve) => {
       resolveFiles = resolve;
     });
-    deps.db.files.toArray = () => filesGate;
+    let readCount = 0;
+    deps.db.files.toArray = () => {
+      readCount += 1;
+      return readCount === 1
+        ? filesGate
+        : Promise.resolve([makeFile("f2", "Anh.mp3")]);
+    };
 
     // First query kicks off the rebuild; everything before the DB await runs
     // synchronously, so the rebuild is already in-flight after this call.
@@ -414,14 +423,14 @@ describe("search.worker", () => {
     resolveFiles([makeFile("f1", "Anh.mp3")]);
     await firstQuery;
 
-    // The invalidate landed mid-rebuild: the freshly built snapshot predates
-    // it, so stale must survive the rebuild instead of being reset to false,
-    // and the in-flight rebuild must not publish its stale snapshot (it is
-    // aborted before even calling deps.build).
-    expect(searchWorkerState.stale).toBe(true);
-    expect(deps.buildSpy).toHaveBeenCalledTimes(0);
+    // The pre-invalidate snapshot (f1) must never be published: the request
+    // retries and answers from data read AFTER the invalidate instead.
+    const ids = hitsOf(deps.posts).map((h) => h.id);
+    expect(ids).toEqual(["f2"]);
+    expect(searchWorkerState.stale).toBe(false);
+    expect(deps.buildSpy).toHaveBeenCalledTimes(1);
 
-    // The next query rebuilds with fresh data and leaves the index usable.
+    // The index is usable afterwards (no extra rebuild).
     await handleSearchWorkerMessage(
       {
         type: "query",
@@ -434,7 +443,6 @@ describe("search.worker", () => {
       deps,
     );
     expect(deps.buildSpy).toHaveBeenCalledTimes(1);
-    expect(searchWorkerState.stale).toBe(false);
     expect(deps.posts[deps.posts.length - 1]?.type).toBe("results");
   });
 
@@ -764,5 +772,261 @@ describe("search.worker", () => {
     expect(deps.posts).toEqual([{ type: "results", requestId: 41, hits: [] }]);
     expect(deps.buildSpy).not.toHaveBeenCalled();
     expect(deps.querySpy).not.toHaveBeenCalled();
+  });
+
+  // ---- Recursive scope must name its folder (P0-2) -------------------------
+
+  it("W9. recursive WITHOUT currentFolderId fails closed: [] for its requestId, no rebuild, no query", async () => {
+    const deps = makeDeps({
+      files: [
+        makeFile("foldA", "Folder A", {
+          isFolder: true,
+          mimeType: "application/vnd.google-apps.folder",
+        }),
+        makeFile("child1", "Song child.mp3", { parentId: "foldA" }),
+      ],
+    });
+    const badContexts: unknown[] = [
+      // Missing entirely: the old wire accepted it (=> global results).
+      {
+        mode: "recursive",
+        rootIds: ["foldA"],
+        sortField: "relevance",
+        sortDir: "desc",
+      },
+      // Empty string: same fail-closed treatment.
+      {
+        mode: "recursive",
+        rootIds: ["foldA"],
+        currentFolderId: "",
+        sortField: "relevance",
+        sortDir: "desc",
+      },
+    ];
+    for (const [i, bad] of badContexts.entries()) {
+      await handleSearchWorkerMessage(
+        {
+          type: "query",
+          requestId: 80 + i,
+          query: "song",
+          limit: 10,
+          userEmail: "default",
+          context: bad,
+        } as unknown as SearchWorkerRequest,
+        deps,
+      );
+    }
+    expect(deps.posts).toEqual(
+      badContexts.map((_, i) => ({
+        type: "results",
+        requestId: 80 + i,
+        hits: [],
+      })),
+    );
+    expect(deps.buildSpy).not.toHaveBeenCalled();
+    expect(deps.querySpy).not.toHaveBeenCalled();
+  });
+
+  it("W10. global mode WITHOUT currentFolderId still queries normally (no over-blocking)", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    await handleSearchWorkerMessage(queryFrame(82, "anh"), deps);
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["f1"]);
+  });
+
+  // ---- Rebuild freshness / account boundary (P0-1) -------------------------
+
+  function queryFrame(
+    requestId: number,
+    query: string,
+    userEmail = "default",
+    context: SearchQueryContext = defaultContext,
+  ): SearchWorkerRequest {
+    return { type: "query", requestId, query, limit: 10, userEmail, context };
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  // Drains the promise chain of one rebuild attempt (toArray -> build ->
+  // ensureFreshIndex .finally -> retry loop tick).
+  async function ticks(n = 20): Promise<void> {
+    for (let i = 0; i < n; i += 1) await Promise.resolve();
+  }
+
+  it("A. a rebuild invalidated mid-flight never serves the OLD (stale) index", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    // Prime the index: a query with f1 publishes it.
+    await handleSearchWorkerMessage(queryFrame(60, "anh"), deps);
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["f1"]);
+
+    // The next rebuild reads the NEW data (f2) but parks inside the DB read.
+    const gate = deferred<DriveFile[]>();
+    deps.db.files.toArray = () => gate.promise;
+    const second = handleSearchWorkerMessage(queryFrame(61, "anh"), deps);
+    // Invalidate AGAIN while the rebuild is parked: its snapshot is obsolete.
+    await handleSearchWorkerMessage({ type: "invalidate" }, deps);
+    gate.resolve([makeFile("f2", "Anh.mp3")]);
+    await second;
+
+    const ids = hitsOf(deps.posts).map((h) => h.id);
+    // The old index (f1) must never be queried: the retry published f2.
+    expect(ids).not.toContain("f1");
+    expect(ids).toEqual(["f2"]);
+    expect(searchWorkerState.stale).toBe(false);
+  });
+
+  it("B. repeated invalidations never publish obsolete data and bound the retry", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    const gates: Array<(v: DriveFile[]) => void> = [];
+    deps.db.files.toArray = () =>
+      new Promise<DriveFile[]>((resolve) => {
+        gates.push(resolve);
+      });
+    const pending = handleSearchWorkerMessage(queryFrame(62, "anh"), deps);
+    await ticks(2);
+
+    for (let i = 0; i < 6; i += 1) {
+      const resolveGate = gates.shift();
+      if (resolveGate === undefined) break;
+      // Invalidate BEFORE releasing each snapshot: every snapshot is obsolete.
+      await handleSearchWorkerMessage({ type: "invalidate" }, deps);
+      resolveGate([makeFile("f1", "Anh.mp3")]);
+      await ticks();
+    }
+    await pending;
+
+    // Bounded: at most MAX_ATTEMPTS rebuilds, and every snapshot predated an
+    // invalidate so none may be published.
+    expect(deps.buildSpy.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(deps.buildSpy).not.toHaveBeenCalled();
+    const results = deps.posts.filter(
+      (p): p is Extract<SearchWorkerResponse, { type: "results" }> =>
+        p.type === "results",
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({ type: "results", requestId: 62, hits: [] });
+  });
+
+  it("C. an owner switch mid-rebuild never crosses accounts (A gets no B rows, B gets only B rows)", async () => {
+    const allFiles = [
+      makeFile("a-song", "Song A.mp3", { userEmail: "a@x" }),
+      makeFile("b-song", "Song B.mp3", { userEmail: "b@x" }),
+    ];
+    const deps = makeDeps({ files: allFiles });
+    const gate = deferred<DriveFile[]>();
+    deps.db.files.toArray = () => gate.promise;
+
+    // Account A starts the rebuild, then B arrives (owner switch) before the
+    // DB read resolves.
+    const aQuery = handleSearchWorkerMessage(
+      queryFrame(63, "song", "a@x"),
+      deps,
+    );
+    await ticks(2);
+    const bQuery = handleSearchWorkerMessage(
+      queryFrame(64, "song", "b@x"),
+      deps,
+    );
+    await ticks(2);
+    gate.resolve(allFiles);
+    await Promise.all([aQuery, bQuery]);
+
+    // A must never receive A's stale index (pre-switch) nor B's rows.
+    const aResults = deps.posts.filter(
+      (p): p is Extract<SearchWorkerResponse, { type: "results" }> =>
+        p.type === "results" && p.requestId === 63,
+    );
+    expect(aResults).toHaveLength(1);
+    expect(aResults[0]?.hits).toEqual([]);
+
+    const bResults = deps.posts.filter(
+      (p): p is Extract<SearchWorkerResponse, { type: "results" }> =>
+        p.type === "results" && p.requestId === 64,
+    );
+    const bLast = bResults[bResults.length - 1];
+    expect(bLast?.hits.map((h) => h.id)).toEqual(["b-song"]);
+  });
+
+  it("D. a published fresh index is reused: no redundant rebuild for the next query", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    await handleSearchWorkerMessage(queryFrame(65, "anh"), deps);
+    await handleSearchWorkerMessage(queryFrame(66, "anh"), deps);
+    expect(deps.buildSpy).toHaveBeenCalledTimes(1);
+    expect(deps.querySpy).toHaveBeenCalledTimes(2);
+    expect(searchWorkerState.stale).toBe(false);
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["f1"]);
+  });
+
+  it("E. membership/adjacency follow the NEW index after a parent change + rebuild", async () => {
+    const folder = makeFile("foldA", "Folder A", {
+      isFolder: true,
+      mimeType: "application/vnd.google-apps.folder",
+    });
+    const deps = makeDeps({
+      files: [
+        folder,
+        makeFile("child1", "Song child.mp3", { parentId: "missing" }),
+      ],
+    });
+    const recursiveCtx = {
+      ...defaultContext,
+      mode: "recursive" as const,
+      currentFolderId: "foldA",
+    };
+    // Warm the membership/adjacency cache with the OLD hierarchy: child1 is
+    // orphaned, so the subtree of foldA is empty.
+    await handleSearchWorkerMessage(
+      queryFrame(67, "song", "default", recursiveCtx),
+      deps,
+    );
+    expect(hitsOf(deps.posts)).toEqual([]);
+
+    // The parent changes: child1 now lives under foldA.
+    deps.db.files.toArray = () =>
+      Promise.resolve([
+        folder,
+        makeFile("child1", "Song child.mp3", { parentId: "foldA" }),
+      ]);
+    await handleSearchWorkerMessage({ type: "invalidate" }, deps);
+    await handleSearchWorkerMessage(
+      queryFrame(68, "song", "default", recursiveCtx),
+      deps,
+    );
+
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["child1"]);
+    expect(deps.buildSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("F. a throwing rebuild answers {type:'error'} (never stale hits) and the worker recovers", async () => {
+    let buildCalls = 0;
+    const deps = makeDeps({
+      files: [makeFile("f1", "Anh.mp3")],
+      buildImpl: (files, meta) => {
+        buildCalls += 1;
+        if (buildCalls === 1) throw new Error("db explode");
+        return buildSearchIndex(files, meta);
+      },
+    });
+    await handleSearchWorkerMessage(queryFrame(69, "anh"), deps);
+    expect(deps.posts).toHaveLength(1);
+    expect(deps.posts[0]).toMatchObject({ type: "error", requestId: 69 });
+    expect(deps.posts[0]).toHaveProperty(
+      "message",
+      expect.stringContaining("db explode"),
+    );
+    expect(deps.posts.some((p) => p.type === "results")).toBe(false);
+
+    // Recovery: the next query rebuilds and serves fresh data.
+    await handleSearchWorkerMessage(queryFrame(70, "anh"), deps);
+    const last = deps.posts[deps.posts.length - 1];
+    expect(last).toMatchObject({ type: "results", requestId: 70 });
+    if (last?.type === "results") {
+      expect(last.hits.map((h) => h.id)).toEqual(["f1"]);
+    }
   });
 });

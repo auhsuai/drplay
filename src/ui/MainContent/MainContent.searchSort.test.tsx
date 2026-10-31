@@ -474,9 +474,10 @@ describe("MainContent search sort isolation (Phase B)", () => {
 
 // Ctrl+D (Cmd+D on macOS) toggles the search scope without the mouse. It
 // mirrors the toolbar mode toggle's semantics (explorer.setSearchMode with the
-// flipped value) but deliberately has NO editable guard: the main use case is
-// flipping scope while the caret is still in the search field. The shared
-// overlay guard (modal/menu open) still stands the whole handler down.
+// flipped value) and stays available while the caret is in the search input
+// (the main use case), while other editable targets and auto-repeat presses
+// stand it down. The shared overlay guard (modal/menu open) still stands the
+// whole handler down.
 describe("MainContent Ctrl+D toggles search scope", () => {
   beforeEach(() => {
     baseProps.onSortChange = vi.fn();
@@ -553,6 +554,92 @@ describe("MainContent Ctrl+D toggles search scope", () => {
 
     fireEvent.keyDown(window, { key: "d", ctrlKey: true });
 
+    expect(explorer.setSearchMode).not.toHaveBeenCalled();
+  });
+
+  it("Cmd+D toggles too, and keeps the query and the search-input focus", () => {
+    const explorer = makeExplorerState({ searchQuery: "son" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    const searchInput = screen.getByPlaceholderText("search_placeholder");
+    searchInput.focus();
+
+    fireEvent.keyDown(searchInput, { key: "d", metaKey: true });
+
+    expect(explorer.setSearchMode).toHaveBeenCalledWith("recursive");
+    expect(explorer.setSearchQuery).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(searchInput);
+  });
+
+  it("Ctrl+D fires when focus is NOT in an editable field", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    // Focus sits on a toolbar button (not editable) — the chord still works.
+    screen.getByRole("button", { name: "drive.new_folder" }).focus();
+
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+
+    expect(explorer.setSearchMode).toHaveBeenCalledWith("recursive");
+  });
+
+  it("Ctrl+D does NOT toggle from ANOTHER input / a textarea / a contenteditable", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(
+      <div>
+        <MainContent {...baseProps} />
+        <input data-testid="foreign-input" type="text" />
+        <textarea data-testid="foreign-textarea" />
+        <div
+          data-testid="foreign-editable"
+          contentEditable
+          suppressContentEditableWarning
+        />
+      </div>,
+    );
+
+    for (const id of [
+      "foreign-input",
+      "foreign-textarea",
+      "foreign-editable",
+    ]) {
+      const el = screen.getByTestId(id);
+      el.focus();
+      expect(document.activeElement).toBe(el);
+      fireEvent.keyDown(el, { key: "d", ctrlKey: true });
+    }
+
+    expect(explorer.setSearchMode).not.toHaveBeenCalled();
+  });
+
+  it("auto-repeat (held chord) does not flip the scope repeatedly", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    // The browser fires one non-repeat keydown, then repeats while held.
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true, repeat: true });
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true, repeat: true });
+
+    expect(explorer.setSearchMode).toHaveBeenCalledTimes(1);
+    expect(explorer.setSearchMode).toHaveBeenCalledWith("recursive");
+  });
+
+  it("a repeat press does NOT preventDefault (the browser default survives)", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    const notCancelled = fireEvent.keyDown(window, {
+      key: "d",
+      ctrlKey: true,
+      repeat: true,
+    });
+
+    // dispatchEvent returns true when nothing called preventDefault().
+    expect(notCancelled).toBe(true);
     expect(explorer.setSearchMode).not.toHaveBeenCalled();
   });
 });

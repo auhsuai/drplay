@@ -3,11 +3,16 @@ import { MOVE_PICKER_OPEN_ATTR } from "../../FolderSelection/FolderSelectionScre
 import { useEventListener } from "../../../hooks/useEventListener";
 import type { SearchMode } from "../../../hooks/useDriveSearch";
 
+// Editable check shared by Escape/Backspace/Ctrl+D. `isContentEditable` is the
+// browser-native signal; the attribute is the equivalent fallback for engines
+// that do not implement the property (jsdom), so a rich-text target is never
+// mistaken for the page background.
 const isEditableTarget = (active: Element | null): boolean =>
   active instanceof HTMLElement &&
   (active.tagName === "INPUT" ||
     active.tagName === "TEXTAREA" ||
-    active.isContentEditable);
+    active.isContentEditable ||
+    active.getAttribute("contenteditable") === "true");
 
 export function useMainContentKeyboard({
   searchInputRef,
@@ -68,16 +73,25 @@ export function useMainContentKeyboard({
       }
     }
     // Ctrl+D (Cmd+D on macOS) flips the search scope, mirroring the toolbar
-    // mode toggle. No editable guard on purpose: the primary use case is
-    // switching scope while the caret is still in the search input. Alt/Shift
-    // are excluded so OS/browser chords and the DEV Ctrl+Shift+D debug panel
-    // stay untouched.
+    // mode toggle. Editable guard: the primary use case is switching scope
+    // while the caret is still in the SEARCH input, so that one input is
+    // allowed; every OTHER input/textarea/contenteditable owns the chord (its
+    // own editing/browser shortcut), so the handler stands down there.
+    // Auto-repeat is ignored (returning BEFORE preventDefault so a held chord
+    // keeps its browser default and never flips the scope in a loop). Alt/
+    // Shift are excluded so OS/browser chords and the DEV Ctrl+Shift+D debug
+    // panel stay untouched.
     if (
       (e.ctrlKey || e.metaKey) &&
       !e.altKey &&
       !e.shiftKey &&
       e.key.toLowerCase() === "d"
     ) {
+      if (e.repeat) return;
+      const active = document.activeElement;
+      if (isEditableTarget(active) && active !== searchInputRef.current) {
+        return;
+      }
       e.preventDefault();
       setSearchMode(searchMode === "global" ? "recursive" : "global");
       return;

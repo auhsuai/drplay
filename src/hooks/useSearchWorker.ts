@@ -250,6 +250,15 @@ export function useSearchWorker(
         return;
       }
       if (response.type === "error") {
+        // Same requestId discipline as results: an error that belongs to an
+        // older identity/account must not be logged against the current one.
+        // Errors with no requestId (worker crash / synthetic) always log.
+        if (
+          response.requestId !== undefined &&
+          response.requestId !== latestRequestIdRef.current
+        ) {
+          return;
+        }
         void captureError({
           level: "warn",
           source: ERROR_SOURCE,

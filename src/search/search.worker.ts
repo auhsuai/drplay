@@ -65,11 +65,18 @@ export interface SearchWorkerDeps {
 export interface SearchWorkerState {
   index: MiniSearch<SearchDoc> | null;
   stale: boolean;
-  rebuildPromise: Promise<void> | null;
+  rebuildPromise: Promise<boolean> | null;
+  /** Owner whose rows the CURRENT index was built from (null = no index). */
+  indexOwnerEmail: string | null;
 }
 
 export function createSearchWorkerState(): SearchWorkerState {
-  return { index: null, stale: true, rebuildPromise: null };
+  return {
+    index: null,
+    stale: true,
+    rebuildPromise: null,
+    indexOwnerEmail: null,
+  };
 }
 
 export const searchWorkerState: SearchWorkerState = createSearchWorkerState();
@@ -129,6 +136,7 @@ export function resetSearchWorkerState(): void {
   searchWorkerState.index = null;
   searchWorkerState.stale = true;
   searchWorkerState.rebuildPromise = null;
+  searchWorkerState.indexOwnerEmail = null;
   rebuildGeneration = 0;
   activeOwnerEmail = null;
   resetMembershipCache();
@@ -167,6 +175,15 @@ export function isSearchWorkerRequest(
       sortField?: unknown;
       sortDir?: unknown;
     };
+    // Recursive mode MUST name its folder (fail-closed): a recursive frame
+    // without a non-empty currentFolderId is a lost-context bug, not a
+    // request for the global scope — reject it instead of widening the search.
+    if (
+      ctx.mode === "recursive" &&
+      (typeof ctx.currentFolderId !== "string" || ctx.currentFolderId === "")
+    ) {
+      return false;
+    }
     return (
       (ctx.mode === "global" || ctx.mode === "recursive") &&
       Array.isArray(ctx.rootIds) &&
@@ -221,33 +238,39 @@ function errorMessage(prefix: string, err: unknown): string {
 // This is the single filter point shared by the real worker and the inline
 // executor; the metadataCache is intentionally NOT scoped (its keys are
 // globally unique fileIds and rows carry no userEmail).
-async function performRebuild(deps: SearchWorkerDeps): Promise<void> {
+async function performRebuild(deps: SearchWorkerDeps): Promise<boolean> {
   const generation = rebuildGeneration;
+  const owner = activeOwnerEmail;
   const [files, metaRows] = await Promise.all([
     deps.db.files.toArray(),
     deps.db.metadataCache.toArray(),
   ]);
   const realMeta = loadRealMetadata(metaRows);
-  if (generation !== rebuildGeneration) {
+  if (generation !== rebuildGeneration || owner !== activeOwnerEmail) {
     // An invalidate (or an owner switch) landed while the DB reads were in
     // flight: this snapshot is already stale, so don't publish it — the next
     // query rebuilds fresh.
-    return;
+    return false;
   }
   const ownerRows =
-    activeOwnerEmail === null
-      ? files
-      : files.filter((f) => f.userEmail === activeOwnerEmail);
+    owner === null ? files : files.filter((f) => f.userEmail === owner);
   searchWorkerState.index = deps.build(ownerRows, realMeta);
   searchWorkerState.stale = false;
+  searchWorkerState.indexOwnerEmail = owner;
+  // The membership/adjacency cache describes the PREVIOUS index; a new index
+  // must never be queried through it (hierarchy/moves would leak stale edges).
+  resetMembershipCache();
+  return true;
 }
 
 // Serializes rebuilds: concurrent queries while stale share ONE rebuild
-// promise instead of racing. On failure the promise is cleared but stale
-// stays true, so the next query retries instead of serving a broken index.
-function ensureFreshIndex(deps: SearchWorkerDeps): Promise<void> {
+// promise instead of racing. Resolves true when a USABLE index was published
+// by that rebuild, false when it was aborted (invalidate/owner switch).
+// On failure the promise is cleared but stale stays true, so the next query
+// retries instead of serving a broken index.
+function ensureFreshIndex(deps: SearchWorkerDeps): Promise<boolean> {
   if (searchWorkerState.index !== null && !searchWorkerState.stale) {
-    return Promise.resolve();
+    return Promise.resolve(true);
   }
   if (searchWorkerState.rebuildPromise === null) {
     searchWorkerState.rebuildPromise = performRebuild(deps).finally(() => {
@@ -255,6 +278,25 @@ function ensureFreshIndex(deps: SearchWorkerDeps): Promise<void> {
     });
   }
   return searchWorkerState.rebuildPromise;
+}
+
+// Bounded attempts: an invalidate storm (bulk import) must never spin the
+// handler forever. Each attempt rebuilds against the LATEST snapshot, so a
+// request that keeps losing the race gives up with an empty answer instead of
+// serving an index that fails the freshness check.
+const MAX_REBUILD_ATTEMPTS = 3;
+
+// A published index may only serve a query when it was built from the CURRENT
+// owner's rows and has not been invalidated since. Everything else fails
+// closed (never query an index that fails this predicate).
+function isIndexUsableFor(userEmail: string): boolean {
+  const st = searchWorkerState;
+  return (
+    st.index !== null &&
+    !st.stale &&
+    st.indexOwnerEmail === userEmail &&
+    activeOwnerEmail === userEmail
+  );
 }
 
 async function handleQuery(
@@ -274,23 +316,38 @@ async function handleQuery(
     deps.post({ type: "results", requestId: msg.requestId, hits: [] });
     return;
   }
-  try {
-    await ensureFreshIndex(deps);
-  } catch (err) {
-    deps.post({
-      type: "error",
-      requestId: msg.requestId,
-      message: errorMessage("rebuild-failed", err),
-    });
-    return;
+  for (let attempt = 0; attempt < MAX_REBUILD_ATTEMPTS; attempt += 1) {
+    let published = false;
+    try {
+      published = await ensureFreshIndex(deps);
+    } catch (err) {
+      deps.post({
+        type: "error",
+        requestId: msg.requestId,
+        message: errorMessage("rebuild-failed", err),
+      });
+      return;
+    }
+    if (isIndexUsableFor(msg.userEmail)) break;
+    // Owner mismatch is permanent for THIS request (the frame belongs to the
+    // previous account): answer empty, never retry against the new owner.
+    if (activeOwnerEmail !== msg.userEmail) {
+      deps.post({ type: "results", requestId: msg.requestId, hits: [] });
+      return;
+    }
+    // Nothing was published and this was the last attempt: give up with a
+    // SAFE empty answer (never an index that failed the freshness check).
+    if (!published && attempt === MAX_REBUILD_ATTEMPTS - 1) {
+      deps.post({ type: "results", requestId: msg.requestId, hits: [] });
+      return;
+    }
+    // Otherwise loop: the next ensureFreshIndex() rebuilds from the snapshot
+    // taken after the invalidate that aborted the previous attempt.
   }
-  if (searchWorkerState.index === null) {
-    // Unreachable after a successful rebuild; defensive for strict null-safety.
-    deps.post({
-      type: "error",
-      requestId: msg.requestId,
-      message: "rebuild-failed: index missing after rebuild",
-    });
+  // Final re-assertion after the loop (a concurrent rebuild/invalidate may
+  // have landed between the last await and this point).
+  if (!isIndexUsableFor(msg.userEmail) || searchWorkerState.index === null) {
+    deps.post({ type: "results", requestId: msg.requestId, hits: [] });
     return;
   }
   try {

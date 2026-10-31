@@ -313,6 +313,14 @@ describe("searchEngine", () => {
       mode: "recursive" as const,
     };
 
+    // Root-scope tests (R2-R6) describe the ROOT membership filter, which
+    // recursive and global share. They are stated in GLOBAL mode so they do
+    // not depend on the (now removed) "recursive without a folder = global"
+    // degrade — recursive without a folder fails closed (R16).
+    const rootCtx = {
+      mode: "global" as const,
+    };
+
     it("R1. empty rootIds fails closed: no hits even for matching docs", () => {
       const index = makeTree();
       const hits = queryIndex(index, "song", 10, { ...queryCtx, rootIds: [] });
@@ -338,7 +346,7 @@ describe("searchEngine", () => {
       // docs — an engine-level slice before the filter would instead drop one
       // of the in-root docs (the byScore tail) and leak r-out in.
       const hits = queryIndex(index, "song", 2, {
-        ...queryCtx,
+        ...rootCtx,
         rootIds: [FOLDER_A],
       });
       expect(hits.map((h) => h.id).sort()).toEqual(["r-in1", "r-in2"]);
@@ -347,7 +355,7 @@ describe("searchEngine", () => {
     it("R3. single root: descendants included, other branches excluded", () => {
       const index = makeTree();
       const hits = queryIndex(index, "song", 20, {
-        ...queryCtx,
+        ...rootCtx,
         rootIds: [FOLDER_A],
       });
       const ids = hits.map((h) => h.id);
@@ -363,7 +371,7 @@ describe("searchEngine", () => {
     it("R4. multi-root: union of both subtrees, duplicates deduped", () => {
       const index = makeTree();
       const hits = queryIndex(index, "song", 20, {
-        ...queryCtx,
+        ...rootCtx,
         rootIds: [FOLDER_A, FOLDER_B, FOLDER_A],
       });
       const ids = hits.map((h) => h.id);
@@ -389,7 +397,7 @@ describe("searchEngine", () => {
         makeFile("b1", "Beta song.mp3", { parentId: FOLDER_B }),
       ]);
       const hits = queryIndex(nested, "song", 20, {
-        ...queryCtx,
+        ...rootCtx,
         rootIds: [FOLDER_A, FOLDER_B],
       });
       const ids = hits.map((h) => h.id);
@@ -401,13 +409,13 @@ describe("searchEngine", () => {
     it("R6. missing root id (not in index) is skipped silently; all-invalid roots -> []", () => {
       const index = makeTree();
       const partial = queryIndex(index, "song", 20, {
-        ...queryCtx,
+        ...rootCtx,
         rootIds: [FOLDER_A, "ghost-root"],
       });
       expect(partial.map((h) => h.id)).toContain("a1");
       expect(partial.map((h) => h.id)).not.toContain("b1");
       const none = queryIndex(index, "song", 20, {
-        ...queryCtx,
+        ...rootCtx,
         rootIds: ["ghost-root", "ghost-2"],
       });
       expect(none).toEqual([]);

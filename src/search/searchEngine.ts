@@ -406,23 +406,36 @@ export function queryIndex(
       : computeRootMembership(index, parentToChildren, scope.rootIds));
   if (inRootIds.size === 0) return [];
   let filterIds: Set<string> | null = null;
-  if (
-    scope.mode === "recursive" &&
-    scope.currentFolderId !== undefined &&
-    scope.currentFolderId !== VIRTUAL_ROOT_ID
-  ) {
-    // The current folder MUST itself be inside the configured roots (B3).
-    // An ancestor that lives outside every root (but happens to contain a
-    // configured root deeper down) must not resurrect scoped results: the
-    // intersection of its subtree with the roots is not the user's scope.
-    if (!inRootIds.has(scope.currentFolderId)) return [];
-    // Recursive mode narrows the root scope to the current folder's
-    // subtree. The current folder itself is NOT part of the results — only
-    // its descendants (the UI shows it as the container, not a hit).
-    const subtree = computeSubtreeIds(parentToChildren, scope.currentFolderId);
-    subtree.delete(scope.currentFolderId);
-    filterIds = subtree;
-    if (filterIds.size === 0) return [];
+  if (scope.mode === "recursive") {
+    // VIRTUAL_ROOT is the one recursive scope that intentionally means "every
+    // configured root" (the synthetic multi-root container has no subtree).
+    if (scope.currentFolderId === VIRTUAL_ROOT_ID) {
+      // filterIds stays null → the root membership is the whole scope.
+    } else if (
+      scope.currentFolderId === undefined ||
+      scope.currentFolderId === ""
+    ) {
+      // FAIL CLOSED: recursive mode without a folder id is a caller bug (a
+      // frame lost its context). Degrading to the global root scope would
+      // silently widen the user's search beyond the folder they are in.
+      return [];
+    } else {
+      // The current folder MUST itself be inside the configured roots (B3).
+      // An ancestor that lives outside every root (but happens to contain a
+      // configured root deeper down) must not resurrect scoped results: the
+      // intersection of its subtree with the roots is not the user's scope.
+      if (!inRootIds.has(scope.currentFolderId)) return [];
+      // Recursive mode narrows the root scope to the current folder's
+      // subtree. The current folder itself is NOT part of the results — only
+      // its descendants (the UI shows it as the container, not a hit).
+      const subtree = computeSubtreeIds(
+        parentToChildren,
+        scope.currentFolderId,
+      );
+      subtree.delete(scope.currentFolderId);
+      filterIds = subtree;
+      if (filterIds.size === 0) return [];
+    }
   }
 
   // MiniSearch filter option (verified: node_modules/minisearch/dist/es/

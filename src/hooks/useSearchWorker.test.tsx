@@ -317,6 +317,51 @@ describe("useSearchWorker", () => {
     view.unmount();
   });
 
+  it("16b. a STALE error response (older requestId) is not logged; only the latest one is", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "old" },
+    });
+    await flush(200); // requestId 1 in flight
+    act(() => {
+      view.rerender({ q: "new" });
+    });
+    await flush(200); // requestId 2 is the latest
+
+    act(() => {
+      respond(fake, {
+        type: "error",
+        requestId: 1,
+        message: "rebuild-failed: stale context",
+      });
+    });
+    // A late error from an older request must not log against the new one.
+    expect(vi.mocked(captureError)).not.toHaveBeenCalled();
+
+    act(() => {
+      respond(fake, {
+        type: "error",
+        requestId: 2,
+        message: "rebuild-failed: current",
+      });
+    });
+    expect(vi.mocked(captureError)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("current") as unknown as string,
+      }),
+    );
+
+    // Errors with NO requestId (worker crash) still log.
+    act(() => {
+      respond(fake, { type: "error", message: "worker-crashed" });
+    });
+    expect(vi.mocked(captureError)).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
   describe("createWorkerExecutor resilience (B15-4)", () => {
     it("17. surfaces a synthetic error response and logs at error level when the worker crashes", () => {
       const { instances } = installFakeWorker();
