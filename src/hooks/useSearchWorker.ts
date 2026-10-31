@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../db/db";
 import { captureError } from "../utils/errorLog";
 import { SYNC_EVENT_NAMES } from "../utils/proSyncManager";
 import { getCurrentUserEmail } from "../utils/storageKeys";
+import { useAuthStore } from "../store/authStore";
 import { buildSearchIndex, queryIndex } from "../search/searchEngine";
 import type { SearchHit } from "../search/searchEngine";
 import {
@@ -18,6 +19,9 @@ export type { SearchQueryContext } from "../search/search.worker";
 
 const DEBOUNCE_MS = 150;
 const INVALIDATE_THROTTLE_MS = 300;
+// Identity separator: NUL never occurs in a query/folder/email, so joining
+// the identity parts stays unambiguous.
+const IDENTITY_SEPARATOR = "\u0000";
 // Event names come from proSyncManager so the main->UI protocol never drifts
 // from the strings the manager dispatches.
 const PRO_SYNC_PROGRESS_EVENT = SYNC_EVENT_NAMES.progress;
@@ -170,13 +174,54 @@ export function setSearchExecutorFactoryForTests(
 export function useSearchWorker(
   query: string,
   limit: number,
-  context?: SearchQueryContext,
+  context: SearchQueryContext,
 ): { hits: SearchHit[] } {
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  // Request identity = everything a result depends on. Results are only ever
+  // exposed when their identity matches the CURRENT one, so a scope/account/
+  // sort switch hides stale hits in the same render instead of waiting for
+  // the debounce + a round-trip.
+  const [result, setResult] = useState<{
+    identity: string;
+    hits: SearchHit[];
+  } | null>(null);
   const executorRef = useRef<SearchExecutor | null>(null);
   const latestRequestIdRef = useRef(0);
+  const inFlightIdentityRef = useRef("");
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Reactive owner: the auth store is the live source (written by
+  // useAuthProfileSync at the same instant as localStorage). The localStorage
+  // read is only the pre-hydration fallback; the store subscription re-renders
+  // on login/logout, which changes the identity below.
+  const storeEmail = useAuthStore((s) => s.userProfile?.email ?? "");
+  const accountEmail = storeEmail !== "" ? storeEmail : getCurrentUserEmail();
+
+  const rootsKey = useMemo(
+    () => [...context.rootIds].sort().join(IDENTITY_SEPARATOR),
+    [context.rootIds],
+  );
+  const identity = useMemo(
+    () =>
+      [
+        query,
+        accountEmail,
+        rootsKey,
+        context.mode,
+        context.currentFolderId ?? "",
+        context.sortField,
+        context.sortDir,
+      ].join(IDENTITY_SEPARATOR),
+    [
+      query,
+      accountEmail,
+      rootsKey,
+      context.mode,
+      context.currentFolderId,
+      context.sortField,
+      context.sortDir,
+    ],
+  );
 
   // One executor for the hook's lifetime, plus the freshness subscriptions:
   // main-thread Dexie hooks cover writes from upload/explorer/on-demand
@@ -192,10 +237,16 @@ export function useSearchWorker(
     executorRef.current = executor;
     executor.onResponse((response) => {
       if (response.type === "results") {
-        // Out-of-order responses (an older query resolving after a newer one)
-        // are dropped; last-good hits stay until the newer result lands.
+        // Two layers of staleness protection: the requestId check drops an
+        // older query resolving after a newer one (last-good hits stay until
+        // the newer result lands), and the identity stored at dispatch time
+        // keeps the result bound to the scope/account/sort it was produced
+        // for — a mismatched identity is never exposed (see `hits` below).
         if (response.requestId !== latestRequestIdRef.current) return;
-        setHits(response.hits);
+        setResult({
+          identity: inFlightIdentityRef.current,
+          hits: response.hits,
+        });
         return;
       }
       if (response.type === "error") {
@@ -260,50 +311,83 @@ export function useSearchWorker(
     };
   }, []);
 
+  // Root ids derived from the CONTENT key, not the caller's array identity: a
+  // caller that builds the array inline on every render must not make the
+  // dispatch effect re-fire (that would bump the requestId per render forever).
+  const postedRootIds = useMemo(
+    () =>
+      rootsKey === "" ? [] : rootsKey.split(IDENTITY_SEPARATOR).filter(Boolean),
+    [rootsKey],
+  );
+
+  // The exact frame posted for this identity. Memoized on its content so the
+  // dispatch effect depends on ONE stable object instead of reaching into
+  // `context` (which callers re-create per render).
+  const dispatchFrame = useMemo(
+    () => ({
+      query,
+      limit,
+      // Same value the identity above uses, so the index scope and the result
+      // identity can never disagree about the owner.
+      userEmail: accountEmail,
+      context: {
+        mode: context.mode,
+        rootIds: postedRootIds,
+        ...(context.currentFolderId !== undefined
+          ? { currentFolderId: context.currentFolderId }
+          : {}),
+        sortField: context.sortField,
+        sortDir: context.sortDir,
+      },
+    }),
+    [
+      query,
+      limit,
+      accountEmail,
+      postedRootIds,
+      context.mode,
+      context.currentFolderId,
+      context.sortField,
+      context.sortDir,
+    ],
+  );
+
   // Debounced query dispatch. Empty queries short-circuit: nothing reaches
   // the executor, and the returned hits derive to [] (normal listing) — the
   // requestId bump drops any still-in-flight response from a previous query.
-  // The context (mode/roots/sort) rides on every frame; the effect re-runs
-  // when it changes so a mode/sort switch re-queries WITHOUT the user
-  // retyping (requestId bump drops the superseded response, I1 stale rule).
+  // The identity (query/account/mode/roots/folder/sort) rides on every frame;
+  // the effect re-runs when it changes so a mode/sort switch re-queries
+  // WITHOUT the user retyping.
+  //
+  // The requestId bump happens IMMEDIATELY on an identity change (not inside
+  // the debounce timer): a stale response that lands during the debounce
+  // window must be dropped by requestId, and the identity bound to the
+  // previous dispatch no longer matches the render-time identity anyway.
   useEffect(() => {
     if (debounceTimerRef.current !== null) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
-    if (query.trim() === "") {
-      latestRequestIdRef.current += 1;
-      return;
-    }
+    latestRequestIdRef.current += 1;
+    if (dispatchFrame.query.trim() === "") return;
+    const scheduledIdentity = identity;
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
       const executor = executorRef.current;
       if (executor === null) return; // unmounted before the debounce elapsed
-      latestRequestIdRef.current += 1;
+      inFlightIdentityRef.current = scheduledIdentity;
       executor.post({
         type: "query",
         requestId: latestRequestIdRef.current,
-        query,
-        limit,
-        // Read at post time: a login/logout between debounce ticks lands on
-        // the next frame instead of being pinned to a stale executor.
-        userEmail: getCurrentUserEmail(),
-        ...(context
-          ? {
-              context: {
-                mode: context.mode,
-                rootIds: context.rootIds,
-                ...(context.currentFolderId !== undefined
-                  ? { currentFolderId: context.currentFolderId }
-                  : {}),
-                sortField: context.sortField,
-                sortDir: context.sortDir,
-              },
-            }
-          : {}),
+        ...dispatchFrame,
       });
     }, DEBOUNCE_MS);
-  }, [query, limit, context]);
+  }, [identity, dispatchFrame]);
 
+  // Render-derived exposure rule: a result is only visible while it belongs
+  // to the identity being rendered. An identity switch therefore clears the
+  // visible hits in the SAME render — no effect, no debounce, no round-trip.
+  const hits =
+    result !== null && result.identity === identity ? result.hits : [];
   return { hits: query.trim() === "" ? [] : hits };
 }

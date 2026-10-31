@@ -7,15 +7,8 @@ import { metadataCache } from "../utils/metadata";
 import { stripAudioExtension } from "../utils/pathUtils";
 import { getCurrentUserEmail } from "../utils/storageKeys";
 import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
+import { SORT_COLLATOR } from "../utils/naturalSortCollator";
 import { useDriveStore } from "../store/driveStore";
-
-// Module-level so the items useMemo sort (re-run on every dbFiles change)
-// never re-initializes the collator — locale data load has real cost and
-// sorting is a hot path.
-const SORT_COLLATOR = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: "base",
-});
 
 // Map.get carries the true nullability (CachedMetadata | undefined) so the
 // optional chain below is checked by the compiler instead of by comment.

@@ -20,6 +20,14 @@ import type { CachedMetadata } from "../utils/metadata";
 const ROOT_ID = "root";
 const META_VERSION = 2;
 
+// Every query frame must carry a scope (fail-closed wire, FIX 1/B2).
+const defaultContext = {
+  mode: "global" as const,
+  rootIds: ["root"],
+  sortField: "relevance" as const,
+  sortDir: "desc" as const,
+};
+
 function makeFile(
   id: string,
   name: string,
@@ -134,6 +142,7 @@ describe("search.worker", () => {
         query: "doi",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -153,6 +162,7 @@ describe("search.worker", () => {
         query: "noi buon",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -174,6 +184,7 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -184,6 +195,7 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -200,6 +212,7 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -211,6 +224,7 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -229,6 +243,7 @@ describe("search.worker", () => {
         query: "",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -239,6 +254,7 @@ describe("search.worker", () => {
         query: "   ",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -263,6 +279,7 @@ describe("search.worker", () => {
           query: "anh",
           limit: 10,
           userEmail: "default",
+          context: defaultContext,
         },
         deps,
       ),
@@ -281,6 +298,7 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -302,6 +320,7 @@ describe("search.worker", () => {
           query: "anh",
           limit: 10,
           userEmail: "default",
+          context: defaultContext,
         },
         deps,
       ),
@@ -324,6 +343,7 @@ describe("search.worker", () => {
           query: "anh",
           limit: 10,
           userEmail: "default",
+          context: defaultContext,
         },
         deps,
       ),
@@ -334,6 +354,7 @@ describe("search.worker", () => {
           query: "anh",
           limit: 10,
           userEmail: "default",
+          context: defaultContext,
         },
         deps,
       ),
@@ -385,6 +406,7 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -407,6 +429,7 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
+        context: defaultContext,
       },
       deps,
     );
@@ -429,6 +452,7 @@ describe("search.worker", () => {
         query: "song",
         limit: 10,
         userEmail: "me@x",
+        context: defaultContext,
       },
       deps,
     );
@@ -453,6 +477,7 @@ describe("search.worker", () => {
         query: "song",
         limit: 10,
         userEmail: "me@x",
+        context: defaultContext,
       },
       deps,
     );
@@ -465,6 +490,7 @@ describe("search.worker", () => {
         query: "song",
         limit: 10,
         userEmail: "other@x",
+        context: defaultContext,
       },
       deps,
     );
@@ -478,13 +504,6 @@ describe("search.worker", () => {
   });
 
   // ---- Root-scoped context (I1/B1/B2) -------------------------------------
-
-  const defaultContext = {
-    mode: "global" as const,
-    rootIds: ["root"],
-    sortField: "relevance" as const,
-    sortDir: "desc" as const,
-  };
 
   it("W1. empty rootIds posts [] WITHOUT rebuilding or querying (fail closed)", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
@@ -673,7 +692,7 @@ describe("search.worker", () => {
     expect(hitsOf(deps.posts)).toEqual(first);
   });
 
-  it("W7. legacy frame without context still works (backward-compatible wire)", async () => {
+  it("W7. frame WITHOUT context fails closed: answers [] for its requestId, no rebuild, no query", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     await handleSearchWorkerMessage(
       {
@@ -682,13 +701,49 @@ describe("search.worker", () => {
         query: "anh",
         limit: 10,
         userEmail: "default",
-      },
+      } as unknown as SearchWorkerRequest,
       deps,
     );
-    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["f1"]);
+    // Fail-closed answer (B2.1): the caller gets an empty result set for its
+    // own requestId, and nothing unscoped ever runs.
+    expect(deps.posts).toEqual([{ type: "results", requestId: 40, hits: [] }]);
+    expect(deps.buildSpy).not.toHaveBeenCalled();
+    expect(deps.querySpy).not.toHaveBeenCalled();
   });
 
-  it("W8. malformed context is rejected by the wire guard (no post, no crash)", async () => {
+  it("W7b. invalid rootIds (non-string / empty string / not an array) fail closed", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+    const badContexts: unknown[] = [
+      { ...defaultContext, rootIds: "root" },
+      { ...defaultContext, rootIds: ["root", 42] },
+      { ...defaultContext, rootIds: [""] },
+      { ...defaultContext, sortDir: "sideways" },
+    ];
+    for (const [i, bad] of badContexts.entries()) {
+      await handleSearchWorkerMessage(
+        {
+          type: "query",
+          requestId: 50 + i,
+          query: "anh",
+          limit: 10,
+          userEmail: "default",
+          context: bad,
+        } as unknown as SearchWorkerRequest,
+        deps,
+      );
+    }
+    expect(deps.posts).toEqual(
+      badContexts.map((_, i) => ({
+        type: "results",
+        requestId: 50 + i,
+        hits: [],
+      })),
+    );
+    expect(deps.buildSpy).not.toHaveBeenCalled();
+    expect(deps.querySpy).not.toHaveBeenCalled();
+  });
+
+  it("W8. malformed context fails CLOSED for its requestId (no rebuild, no query, no crash)", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     await handleSearchWorkerMessage(
       {
@@ -706,7 +761,8 @@ describe("search.worker", () => {
       } as unknown as SearchWorkerRequest,
       deps,
     );
-    expect(deps.posts).toHaveLength(0);
+    expect(deps.posts).toEqual([{ type: "results", requestId: 41, hits: [] }]);
     expect(deps.buildSpy).not.toHaveBeenCalled();
+    expect(deps.querySpy).not.toHaveBeenCalled();
   });
 });

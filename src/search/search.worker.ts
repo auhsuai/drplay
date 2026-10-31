@@ -32,9 +32,11 @@ export type SearchWorkerRequest =
       query: string;
       limit: number;
       userEmail: string;
-      /** Root/sort scope. Optional for wire backward-compat: a frame without
-       * it degrades to the legacy unscoped behavior (validated at runtime). */
-      context?: SearchQueryContext;
+      /** Root/sort scope. REQUIRED (fail-closed): every query must state the
+       * roots it is scoped to, so a frame can never degrade into an unscoped
+       * global query. A frame without a valid context is rejected by the wire
+       * guard and answers nothing. */
+      context: SearchQueryContext;
     };
 
 export type SearchWorkerResponse =
@@ -155,21 +157,22 @@ export function isSearchWorkerRequest(
     ) {
       return false;
     }
-    // context (B1/I1): mode + rootIds + sort. A query without it is the OLD
-    // wire shape — still accepted so a stale frame from a previous session
-    // never wedges the pipeline; it degrades to the unscoped legacy behavior.
-    if (req.context === undefined) return true;
+    // context is REQUIRED (fail-closed): a frame without a valid scope is
+    // rejected here and nothing is queried — no unscoped fallback exists.
     if (typeof req.context !== "object" || req.context === null) return false;
     const ctx = req.context as {
       mode?: unknown;
       rootIds?: unknown;
+      currentFolderId?: unknown;
       sortField?: unknown;
       sortDir?: unknown;
     };
     return (
       (ctx.mode === "global" || ctx.mode === "recursive") &&
       Array.isArray(ctx.rootIds) &&
-      ctx.rootIds.every((id) => typeof id === "string") &&
+      ctx.rootIds.every((id) => typeof id === "string" && id.length > 0) &&
+      (ctx.currentFolderId === undefined ||
+        typeof ctx.currentFolderId === "string") &&
       (ctx.sortField === "relevance" ||
         ctx.sortField === "name" ||
         ctx.sortField === "modifiedTime" ||
@@ -263,11 +266,11 @@ async function handleQuery(
     deps.post({ type: "results", requestId: msg.requestId, hits: [] });
     return;
   }
-  // Root scope (I1): an empty rootIds list fails closed — no hits — without
-  // touching the index at all (no rebuild, no BFS). Legacy frames without a
-  // context keep the old unscoped behavior (context is optional by wire).
-  const context: SearchQueryContext | undefined = msg.context;
-  if (context !== undefined && context.rootIds.length === 0) {
+  // Root scope (I1/B2): an empty rootIds list fails closed — no hits —
+  // without touching the index at all (no rebuild, no BFS). The context is
+  // mandatory on the wire, so there is no unscoped path left.
+  const context = msg.context;
+  if (context.rootIds.length === 0) {
     deps.post({ type: "results", requestId: msg.requestId, hits: [] });
     return;
   }
@@ -291,29 +294,20 @@ async function handleQuery(
     return;
   }
   try {
-    let scope: SearchQueryScope | undefined;
-    let sortSpec:
-      | {
-          field: SearchQueryContext["sortField"];
-          dir: SearchQueryContext["sortDir"];
-        }
-      | undefined;
-    if (context !== undefined) {
-      const membership = resolveMembership(
-        searchWorkerState.index,
-        msg.userEmail,
-        context.rootIds,
-      );
-      scope = {
-        mode: context.mode,
-        rootIds: context.rootIds,
-        ...(context.currentFolderId !== undefined
-          ? { currentFolderId: context.currentFolderId }
-          : {}),
-        ...(membership ?? {}),
-      };
-      sortSpec = { field: context.sortField, dir: context.sortDir };
-    }
+    const membership = resolveMembership(
+      searchWorkerState.index,
+      msg.userEmail,
+      context.rootIds,
+    );
+    const scope: SearchQueryScope = {
+      mode: context.mode,
+      rootIds: context.rootIds,
+      ...(context.currentFolderId !== undefined
+        ? { currentFolderId: context.currentFolderId }
+        : {}),
+      ...(membership ?? {}),
+    };
+    const sortSpec = { field: context.sortField, dir: context.sortDir };
     const hits = deps.query(
       searchWorkerState.index,
       msg.query,
@@ -331,11 +325,28 @@ async function handleQuery(
   }
 }
 
+// A query frame that fails the wire guard still gets an explicit fail-closed
+// answer () for its requestId when it carries one, so the UI can never
+// wait forever and the pipeline has no silent hole. Frames that are not a
+// query at all (or carry no numeric requestId) stay dropped.
+function failClosedQueryRequestId(data: unknown): number | null {
+  if (typeof data !== "object" || data === null) return null;
+  const frame = data as { type?: unknown; requestId?: unknown };
+  if (frame.type !== "query") return null;
+  return typeof frame.requestId === "number" ? frame.requestId : null;
+}
+
 export async function handleSearchWorkerMessage(
   msg: SearchWorkerRequest,
   deps: SearchWorkerDeps,
 ): Promise<void> {
-  if (!isSearchWorkerRequest(msg)) return;
+  if (!isSearchWorkerRequest(msg)) {
+    const requestId = failClosedQueryRequestId(msg);
+    if (requestId !== null) {
+      deps.post({ type: "results", requestId, hits: [] });
+    }
+    return;
+  }
   switch (msg.type) {
     case "init":
       deps.post({ type: "ready" });
@@ -376,7 +387,13 @@ if (typeof self !== "undefined" && typeof window === "undefined") {
     },
   };
   self.onmessage = (e: MessageEvent) => {
-    if (!isSearchWorkerRequest(e.data)) return;
+    if (!isSearchWorkerRequest(e.data)) {
+      const requestId = failClosedQueryRequestId(e.data);
+      if (requestId !== null) {
+        self.postMessage({ type: "results", requestId, hits: [] });
+      }
+      return;
+    }
     void handleSearchWorkerMessage(e.data, workerDeps);
   };
 }

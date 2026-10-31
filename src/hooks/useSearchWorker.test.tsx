@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { db, type DriveFile } from "../db/db";
+import { useAuthStore } from "../store/authStore";
 import { captureError } from "../utils/errorLog";
 import { resetSearchWorkerState } from "../search/search.worker";
 import type {
@@ -37,6 +38,15 @@ const FAKE_TIMERS_TOFAKE = [
 ] as const;
 
 const ROOT_ID = "root";
+
+// Every query frame needs a scope now (fail-closed wire, FIX 1/B2); module
+// level so its identity never changes between renders of the same test.
+const DEFAULT_CTX = {
+  mode: "global" as const,
+  rootIds: [ROOT_ID],
+  sortField: "relevance" as const,
+  sortDir: "desc" as const,
+};
 
 function makeFile(
   id: string,
@@ -150,6 +160,7 @@ describe("useSearchWorker", () => {
     vi.useFakeTimers({ toFake: [...FAKE_TIMERS_TOFAKE] });
     setSearchExecutorFactoryForTests(createSearchExecutor);
     resetSearchWorkerState();
+    useAuthStore.setState({ userProfile: null });
     vi.mocked(captureError).mockClear();
   });
 
@@ -161,7 +172,7 @@ describe("useSearchWorker", () => {
   it("10. debounces: rapid query changes collapse to the last one only", async () => {
     const fake = createFakeExecutor();
     setSearchExecutorFactoryForTests(() => fake);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "a" },
     });
     act(() => {
@@ -173,10 +184,13 @@ describe("useSearchWorker", () => {
     });
     await flush(200); // 'abc' debounce elapses
     expect(fake.posted).toHaveLength(1);
+    // The requestId is bumped the moment an identity changes (B1.4), so the
+    // surviving 'abc' frame carries the 3rd id; the ONE-post assertion above
+    // is what proves the debounce collapsed 'a'/'ab'/'abc'.
     expect(fake.posted[0]).toMatchObject({
       type: "query",
       query: "abc",
-      requestId: 1,
+      requestId: 3,
       // Owner rides on every query frame so the worker can scope its index.
       userEmail: "default",
     });
@@ -186,7 +200,7 @@ describe("useSearchWorker", () => {
   it("11. empty query clears hits immediately and never touches the executor", async () => {
     const fake = createFakeExecutor();
     setSearchExecutorFactoryForTests(() => fake);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "" },
     });
     expect(view.result.current.hits).toEqual([]);
@@ -210,7 +224,7 @@ describe("useSearchWorker", () => {
 
   it("12. diacritics end-to-end through the real inline path", async () => {
     await db.files.bulkPut([makeFile("f1", "Đổi thay.mp3")]);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "doi" },
     });
     await flush(250); // debounce + rebuild + query
@@ -220,7 +234,7 @@ describe("useSearchWorker", () => {
 
   it("13. invalidation: a new db.files write marks the index stale and the next query rebuilds", async () => {
     await db.files.bulkPut([makeFile("f1", "Anh dong vien - Yeu em.mp3")]);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "anh" },
     });
     await flush(250);
@@ -241,7 +255,7 @@ describe("useSearchWorker", () => {
   it("14. race guard: an older response arriving after a newer one is dropped", async () => {
     const fake = createFakeExecutor();
     setSearchExecutorFactoryForTests(() => fake);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "old" },
     });
     await flush(200); // requestId 1 sent
@@ -267,7 +281,7 @@ describe("useSearchWorker", () => {
   it("15. unmount terminates the executor and clears pending timers", async () => {
     const fake = createFakeExecutor();
     setSearchExecutorFactoryForTests(() => fake);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "x" },
     });
     view.unmount();
@@ -279,7 +293,7 @@ describe("useSearchWorker", () => {
   it("16. error response logs via captureError and keeps last-good hits", async () => {
     const fake = createFakeExecutor();
     setSearchExecutorFactoryForTests(() => fake);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "x" },
     });
     await flush(200);
@@ -361,6 +375,7 @@ describe("useSearchWorker", () => {
         query: "anything",
         limit: 10,
         userEmail: "default",
+        context: DEFAULT_CTX,
       });
 
       await flush(250);
@@ -400,7 +415,7 @@ describe("useSearchWorker", () => {
       makeFile("mine", "My Song.mp3"),
       { ...makeFile("theirs", "Other Song.mp3"), userEmail: "other@x" },
     ]);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "song" },
     });
     await flush(250);
@@ -492,9 +507,164 @@ describe("useSearchWorker", () => {
     view.unmount();
   });
 
+  // ---- Stale results / request identity (FIX 1) ---------------------------
+
+  it("28. context change hides the previous hits IMMEDIATELY (before debounce)", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const hitOld = makeHit("old", "old.mp3", 1);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: { q: "song", ctx: makeContext({ mode: "global" }) },
+    });
+    await flush(200);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+    });
+    expect(view.result.current.hits).toEqual([hitOld]);
+
+    act(() => {
+      view.rerender({
+        q: "song",
+        ctx: makeContext({ mode: "recursive", currentFolderId: "folder-A" }),
+      });
+    });
+    // No timer advance: the identity changed, so the old scoped hits must be
+    // gone in the SAME render (render-derived, not effect-derived).
+    expect(view.result.current.hits).toEqual([]);
+    view.unmount();
+  });
+
+  it("29. an in-flight response from the OLD identity is dropped even before the new debounce fires", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: { q: "song", ctx: makeContext({ rootIds: ["root"] }) },
+    });
+    await flush(200); // requestId 1 in flight
+    act(() => {
+      view.rerender({ q: "song", ctx: makeContext({ rootIds: ["other"] }) });
+    });
+    act(() => {
+      // The stale request answers inside the debounce window.
+      respond(fake, {
+        type: "results",
+        requestId: 1,
+        hits: [makeHit("stale", "stale.mp3", 1)],
+      });
+    });
+    expect(view.result.current.hits).toEqual([]);
+    view.unmount();
+  });
+
+  it("30. a late response from an old identity never overwrites the new identity's hits", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: { q: "song", ctx: makeContext({ mode: "global" }) },
+    });
+    await flush(200);
+    act(() => {
+      view.rerender({ q: "song", ctx: makeContext({ mode: "recursive" }) });
+    });
+    await flush(200); // requestId 2 in flight for the NEW identity
+    const hitNew = makeHit("new", "new.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 2, hits: [hitNew] });
+    });
+    expect(view.result.current.hits).toEqual([hitNew]);
+    act(() => {
+      respond(fake, {
+        type: "results",
+        requestId: 1,
+        hits: [makeHit("stale", "stale.mp3", 1)],
+      });
+    });
+    expect(view.result.current.hits).toEqual([hitNew]);
+    view.unmount();
+  });
+
+  it("31. account switch (reactive store) clears hits immediately and sends the new owner", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    act(() => {
+      useAuthStore.setState({
+        userProfile: { name: "Me", email: "me@x", picture: "" },
+      });
+    });
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    expect(fake.posted[0]).toMatchObject({ userEmail: "me@x" });
+    act(() => {
+      respond(fake, {
+        type: "results",
+        requestId: 1,
+        hits: [makeHit("mine", "mine.mp3", 1)],
+      });
+    });
+    expect(view.result.current.hits).toHaveLength(1);
+
+    act(() => {
+      useAuthStore.setState({
+        userProfile: { name: "Other", email: "other@x", picture: "" },
+      });
+    });
+    // Different account = different identity: the previous owner's hits are
+    // never exposed while the new query is in flight.
+    expect(view.result.current.hits).toEqual([]);
+    await flush(200);
+    expect(fake.posted[1]).toMatchObject({ userEmail: "other@x" });
+    view.unmount();
+  });
+
+  it("32. query/folder/roots/sort changes each invalidate immediately", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const hit = makeHit("h", "h.mp3", 1);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: {
+        q: "song",
+        ctx: makeContext({ sortField: "relevance" }),
+      },
+    });
+    await flush(200);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hit] });
+    });
+    expect(view.result.current.hits).toEqual([hit]);
+
+    const changes: Array<{
+      q: string;
+      ctx: Parameters<typeof useSearchWorker>[2];
+    }> = [
+      { q: "songs", ctx: makeContext({ sortField: "relevance" }) },
+      { q: "songs", ctx: makeContext({ sortField: "name" }) },
+      { q: "songs", ctx: makeContext({ sortField: "name", rootIds: ["r2"] }) },
+      {
+        q: "songs",
+        ctx: makeContext({
+          sortField: "name",
+          rootIds: ["r2"],
+          currentFolderId: "f1",
+        }),
+      },
+    ];
+    let prev = view.result.current.hits;
+    for (const change of changes) {
+      act(() => {
+        view.rerender({ q: change.q, ctx: change.ctx });
+      });
+      expect(view.result.current.hits).toEqual([]);
+      expect(prev).not.toBe(view.result.current.hits);
+      prev = view.result.current.hits;
+    }
+    view.unmount();
+  });
+
   it("24. metadataCache put marks the index stale: the next query sees the new title", async () => {
     await db.files.bulkPut([makeFile("f-meta", "01 - raw name.mp3")]);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "new title" },
     });
     await flush(250);
@@ -557,7 +727,7 @@ describe("useSearchWorker", () => {
         ts: Date.now(),
       },
     });
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "zed title" },
     });
     await flush(250);
@@ -581,7 +751,7 @@ describe("useSearchWorker", () => {
 
   it("26. coalesced metadata burst collapses into ONE invalidate (throttle holds)", async () => {
     await db.files.bulkPut([makeFile("f-c", "Coalesce target.mp3")]);
-    const view = renderHook(({ q }) => useSearchWorker(q, 10), {
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
       initialProps: { q: "coalesce" },
     });
     await flush(250);

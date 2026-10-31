@@ -335,8 +335,11 @@ export const MainContent = React.memo(function MainContent({
             chrome so it inherits stickiness with zero offset math (a second
             sticky band would double the sticky offset for rows). Guards,
             each mirroring an existing precedent:
-            - isVirtualRoot: root rows are all folders with no date/size
-              (precedent: showNewFolderButton).
+            - isVirtualRoot (ONLY while no search is active): root rows are all
+              folders with no date/size (precedent: showNewFolderButton). A
+              search returns real files at any location, so the guard lifts and
+              the header also sorts the RESULTS there through searchSort
+              (global/recursive/0-results alike).
             - isSelectionMode: selection checkboxes lead every row and would
               misalign the columns, so the header hides (it is the only sort
               control in this view now — the toolbar dropdown was removed).
@@ -350,9 +353,9 @@ export const MainContent = React.memo(function MainContent({
             sortOption is untouched by search sorting (B2-3).
             Changing the sort clears selection and resets the page — the
             existing useDriveExplorer contract. */}
-        {!isVirtualRoot &&
-          !explorer.isSelectionMode &&
-          headerOnSortChange !== undefined && (
+        {!explorer.isSelectionMode &&
+          headerOnSortChange !== undefined &&
+          (isSearchActive || !isVirtualRoot) && (
             <>
               {/* Toolbar divider. Edges are pinned to the toolbar's own
                   elements, not to the chrome padding: the Back icon starts

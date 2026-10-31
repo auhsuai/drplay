@@ -1,5 +1,6 @@
 import MiniSearch from "minisearch";
 import { normalizeText } from "../utils/normalizeText";
+import { compareNatural } from "../utils/naturalSortCollator";
 import { METADATA_KEY_PREFIX } from "../utils/metadata/constants";
 import type { CachedMetadata } from "../utils/metadata/types";
 import {
@@ -61,6 +62,10 @@ export interface SearchSortSpec {
   field: "relevance" | "name" | "modifiedTime" | "size";
   dir: "asc" | "desc";
 }
+
+// The no-spec default. Equal to what the hook sends, so the engine's default
+// ordering and an explicit relevance request can never disagree.
+const DEFAULT_RELEVANCE: SearchSortSpec = { field: "relevance", dir: "desc" };
 
 // Name matches matter most, then real ID3 title, then artist (plan: exact >
 // prefix > fuzzy; name > title > artist).
@@ -294,7 +299,19 @@ function sortResults(
   index: MiniSearch<SearchDoc>,
   sort: SearchSortSpec,
 ): SearchResultLike[] {
-  if (sort.field === "relevance") return [...results];
+  if (sort.field === "relevance") {
+    // Relevance keeps MiniSearch's byScore order but partitions folders first
+    // (B4). Stable partition: no re-sort, so the score order inside each
+    // group is exactly the engine's, and equal scores never wobble.
+    const folders: SearchResultLike[] = [];
+    const files: SearchResultLike[] = [];
+    for (const result of results) {
+      const stored = index.getStoredFields(result.id);
+      if (stored?.isFolder === true) folders.push(result);
+      else files.push(result);
+    }
+    return [...folders, ...files];
+  }
   const storedById = new Map<string, Record<string, unknown>>();
   const storedOf = (id: string): Record<string, unknown> => {
     const cached = storedById.get(id);
@@ -317,7 +334,7 @@ function sortResults(
       case "name": {
         const nameA = typeof aStored.name === "string" ? aStored.name : "";
         const nameB = typeof bStored.name === "string" ? bStored.name : "";
-        return nameA.localeCompare(nameB) * dirFactor;
+        return compareNatural(nameA, nameB) * dirFactor;
       }
       case "modifiedTime": {
         // Invalid/missing dates pin to the bottom in BOTH directions; the
@@ -333,8 +350,12 @@ function sortResults(
         return (aTime - bTime) * dirFactor;
       }
       case "size": {
-        const aSize = typeof aStored.size === "number" ? aStored.size : null;
-        const bSize = typeof bStored.size === "number" ? bStored.size : null;
+        // Valid = a real, finite, non-negative byte count (B6). Missing rows,
+        // NaN, ±Infinity and negatives are all "invalid" — they pin to the
+        // bottom in BOTH directions instead of corrupting the comparator with
+        // a NaN delta.
+        const aSize = validSize(aStored.size);
+        const bSize = validSize(bStored.size);
         // Missing/invalid sizes pin to the bottom in BOTH directions.
         if (aSize === null && bSize === null) return 0;
         if (aSize === null) return 1;
@@ -353,6 +374,14 @@ function isFiniteDateString(value: unknown): boolean {
   return Number.isFinite(parsed);
 }
 
+// Size is sortable only when it is a real, finite, non-negative number. Zero
+// IS valid (an empty file); NaN/±Infinity/negatives are not.
+function validSize(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
 export function queryIndex(
   index: MiniSearch<SearchDoc>,
   query: string,
@@ -363,36 +392,37 @@ export function queryIndex(
   const tokens = tokenizeQuery(query);
   if (tokens.length === 0) return [];
 
-  // Root scope resolution (B1/B2): no scope = legacy global behavior.
-  // An EMPTY rootIds (present but zero valid roots) fails closed — no hits —
-  // while a missing scope entirely keeps the old unscoped results.
-  let inRootIds: Set<string> | null = null;
+  // Root scope resolution (B1/B2): a scope is MANDATORY — there is no
+  // unscoped global path left, so a caller that forgets it fails closed
+  // instead of leaking the whole library. An EMPTY rootIds likewise fails
+  // closed (present but zero valid roots).
+  if (scope === undefined) return [];
+  const parentToChildren =
+    scope.parentToChildren ?? buildParentToChildren(index);
+  const inRootIds =
+    scope.inRootIds ??
+    (scope.rootIds.length === 0
+      ? new Set<string>()
+      : computeRootMembership(index, parentToChildren, scope.rootIds));
+  if (inRootIds.size === 0) return [];
   let filterIds: Set<string> | null = null;
-  if (scope !== undefined) {
-    const parentToChildren =
-      scope.parentToChildren ?? buildParentToChildren(index);
-    inRootIds =
-      scope.inRootIds ??
-      (scope.rootIds.length === 0
-        ? new Set<string>()
-        : computeRootMembership(index, parentToChildren, scope.rootIds));
-    if (inRootIds.size === 0) return [];
-    if (
-      scope.mode === "recursive" &&
-      scope.currentFolderId !== undefined &&
-      scope.currentFolderId !== VIRTUAL_ROOT_ID
-    ) {
-      // Recursive mode narrows the root scope to the current folder's
-      // subtree. The current folder itself is NOT part of the results — only
-      // its descendants (the UI shows it as the container, not a hit).
-      const subtree = computeSubtreeIds(
-        parentToChildren,
-        scope.currentFolderId,
-      );
-      subtree.delete(scope.currentFolderId);
-      filterIds = subtree;
-      if (filterIds.size === 0) return [];
-    }
+  if (
+    scope.mode === "recursive" &&
+    scope.currentFolderId !== undefined &&
+    scope.currentFolderId !== VIRTUAL_ROOT_ID
+  ) {
+    // The current folder MUST itself be inside the configured roots (B3).
+    // An ancestor that lives outside every root (but happens to contain a
+    // configured root deeper down) must not resurrect scoped results: the
+    // intersection of its subtree with the roots is not the user's scope.
+    if (!inRootIds.has(scope.currentFolderId)) return [];
+    // Recursive mode narrows the root scope to the current folder's
+    // subtree. The current folder itself is NOT part of the results — only
+    // its descendants (the UI shows it as the container, not a hit).
+    const subtree = computeSubtreeIds(parentToChildren, scope.currentFolderId);
+    subtree.delete(scope.currentFolderId);
+    filterIds = subtree;
+    if (filterIds.size === 0) return [];
   }
 
   // MiniSearch filter option (verified: node_modules/minisearch/dist/es/
@@ -402,20 +432,20 @@ export function queryIndex(
   const filter = filterIds
     ? (result: { id: unknown }): boolean => {
         const id = String(result.id);
-        return inRootIds !== null && inRootIds.has(id) && filterIds.has(id);
+        return inRootIds.has(id) && filterIds.has(id);
       }
-    : inRootIds
-      ? (result: { id: unknown }): boolean => inRootIds.has(String(result.id))
-      : undefined;
+    : (result: { id: unknown }): boolean => inRootIds.has(String(result.id));
 
   const results = index.search(tokens.join(" "), {
     combineWith: "AND",
     prefix: true,
     fuzzy: FUZZY,
-    ...(filter ? { filter } : {}),
+    filter,
   });
 
-  const sorted = sort ? sortResults(results, index, sort) : results;
+  // Default (no sort spec) is relevance — the same folders-first partition as
+  // an explicit {field:"relevance"}, so the two paths can never diverge.
+  const sorted = sortResults(results, index, sort ?? DEFAULT_RELEVANCE);
 
   return sorted.slice(0, Math.max(0, limit)).map((result) => {
     // MiniSearch types stored fields as Record<string, unknown> (v7.2.0), so

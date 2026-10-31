@@ -224,9 +224,9 @@ describe("MainContent header visibility during search (Phase B)", () => {
     expect(headerRow()).toBeTruthy();
   });
 
-  it("virtual root during search: header STAYS hidden (guard kept)", () => {
+  it("normal virtual root listing (no search): header STAYS hidden", () => {
     useDriveExplorerMock.mockReturnValue(
-      makeExplorerState({ searchQuery: "song", isVirtualRoot: true }),
+      makeExplorerState({ isVirtualRoot: true }),
     );
     render(
       <MainContent
@@ -236,7 +236,71 @@ describe("MainContent header visibility during search (Phase B)", () => {
       />,
     );
 
+    // Root rows are all folders with no date/size — no sortable columns.
     expect(screen.queryByRole("presentation")).toBeNull();
+  });
+
+  it("virtual root + global search active: header VISIBLE", () => {
+    useDriveExplorerMock.mockReturnValue(
+      makeExplorerState({
+        searchQuery: "song",
+        searchMode: "global",
+        isVirtualRoot: true,
+      }),
+    );
+    render(
+      <MainContent
+        {...baseProps}
+        currentFolderId={VIRTUAL_ROOT_ID}
+        currentFolderName={VIRTUAL_ROOT_NAME}
+      />,
+    );
+
+    expect(headerRow()).toBeTruthy();
+    // Relevance default → unknown base → every column aria-sort "none".
+    expect(
+      screen.getByRole("columnheader", { name: "drive.col_name" }),
+    ).toHaveAttribute("aria-sort", "none");
+  });
+
+  it("virtual root + recursive search active: header VISIBLE", () => {
+    useDriveExplorerMock.mockReturnValue(
+      makeExplorerState({
+        searchQuery: "song",
+        searchMode: "recursive",
+        isVirtualRoot: true,
+      }),
+    );
+    render(
+      <MainContent
+        {...baseProps}
+        currentFolderId={VIRTUAL_ROOT_ID}
+        currentFolderName={VIRTUAL_ROOT_NAME}
+      />,
+    );
+
+    expect(headerRow()).toBeTruthy();
+  });
+
+  it("virtual root + search with 0 results: header STILL visible", () => {
+    useDriveExplorerMock.mockReturnValue(
+      makeExplorerState({
+        searchQuery: "zzz",
+        isVirtualRoot: true,
+        currentItems: [],
+        filteredItems: [],
+      }),
+    );
+    render(
+      <MainContent
+        {...baseProps}
+        currentFolderId={VIRTUAL_ROOT_ID}
+        currentFolderName={VIRTUAL_ROOT_NAME}
+      />,
+    );
+
+    expect(screen.getByText("drive.no_search_results")).toBeTruthy();
+    expect(headerRow()).toBeTruthy();
   });
 
   it("selection mode during search: header STAYS hidden (guard kept)", () => {
@@ -244,6 +308,25 @@ describe("MainContent header visibility during search (Phase B)", () => {
       makeExplorerState({ searchQuery: "song", isSelectionMode: true }),
     );
     render(<MainContent {...baseProps} />);
+
+    expect(screen.queryByRole("presentation")).toBeNull();
+  });
+
+  it("virtual root + search + selection mode: header STAYS hidden", () => {
+    useDriveExplorerMock.mockReturnValue(
+      makeExplorerState({
+        searchQuery: "song",
+        isVirtualRoot: true,
+        isSelectionMode: true,
+      }),
+    );
+    render(
+      <MainContent
+        {...baseProps}
+        currentFolderId={VIRTUAL_ROOT_ID}
+        currentFolderName={VIRTUAL_ROOT_NAME}
+      />,
+    );
 
     expect(screen.queryByRole("presentation")).toBeNull();
   });
@@ -339,6 +422,29 @@ describe("MainContent search sort isolation (Phase B)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "drive.col_size" }));
     fireEvent.click(screen.getByRole("button", { name: "drive.col_name" }));
+    expect(baseProps.onSortChange).not.toHaveBeenCalled();
+  });
+
+  it("virtual root + search active: clicking a column routes setSearchSort only, listing sortOption untouched", () => {
+    const explorer = makeExplorerState({
+      searchQuery: "song",
+      isVirtualRoot: true,
+    });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(
+      <MainContent
+        {...baseProps}
+        currentFolderId={VIRTUAL_ROOT_ID}
+        currentFolderName={VIRTUAL_ROOT_NAME}
+        sortOption="name"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "drive.col_size" }));
+    expect(explorer.setSearchSort).toHaveBeenCalledWith({
+      field: "size",
+      dir: "desc",
+    });
     expect(baseProps.onSortChange).not.toHaveBeenCalled();
   });
 
