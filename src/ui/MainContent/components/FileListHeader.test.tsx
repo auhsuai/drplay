@@ -112,4 +112,27 @@ describe("FileListHeader sorting", () => {
       screen.getByRole("button", { name: "drive.col_date_modified" }),
     ).not.toBeNull();
   });
+
+  it("dateLabel prop overrides the Date column label (Recent view 'Last played')", () => {
+    render(
+      <FileListHeader
+        sortOption="modifiedTime desc"
+        onSortChange={vi.fn()}
+        dateLabel="Last played"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Last played" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "drive.col_date_modified" }),
+    ).toBeNull();
+  });
+
+  it("without dateLabel the Date column keeps the My Drive label (default untouched)", () => {
+    render(<FileListHeader sortOption="modifiedTime desc" />);
+
+    expect(
+      screen.getByRole("button", { name: "drive.col_date_modified" }),
+    ).toBeTruthy();
+  });
 });

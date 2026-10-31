@@ -502,6 +502,9 @@
   "loading": "Loading...",
   "cancel": "Cancel",
   "ok": "OK",
+  "recent": {
+    "col_last_played": "Last played"
+  },
   "cache": {
     "label": {
       "metadata": "Metadata cache",

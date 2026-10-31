@@ -13,6 +13,12 @@ export interface FileListHeaderProps {
   sortOption: string;
   /** Same chain TabContentRouter persists (store + drplay_sort_option LS). */
   onSortChange?: (option: string) => void;
+  /**
+   * Optional override for the Date column label. My Drive omits it (keeps
+   * t("drive.col_date_modified")); the Recent full view passes its own label
+   * ("Last played") because that column shows play recency, not file mtime.
+   */
+  dateLabel?: string | undefined;
 }
 
 // aria-sort value for one column header given the full sort string. Columns
@@ -71,6 +77,7 @@ function SortIndicator({ desc }: { desc: boolean }) {
 export function FileListHeader({
   sortOption,
   onSortChange,
+  dateLabel,
 }: FileListHeaderProps) {
   const { t } = useTranslation();
 
@@ -131,7 +138,9 @@ export function FileListHeader({
           }}
           className="flex w-full items-center gap-1 text-left text-[15px] font-semibold text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer"
         >
-          <span className="truncate">{t("drive.col_date_modified")}</span>
+          <span className="truncate">
+            {dateLabel ?? t("drive.col_date_modified")}
+          </span>
           {sortOption.replace(" desc", "") === "modifiedTime" && (
             <SortIndicator desc={sortOption.endsWith(" desc")} />
           )}

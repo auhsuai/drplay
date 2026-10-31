@@ -6,10 +6,13 @@ import { prefetchVisibleTracks } from "../../../utils/streamPrefetcher";
 import { ArrowLeft, Search, X } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { SongCard } from "../../MainContent/components/SongCard";
-import { SortDropdown } from "../../components/SortDropdown";
+import { FileListHeader } from "../../MainContent/components/FileListHeader";
 import { matchesNormalized } from "../../../search/searchEngine";
+import type { RecentItem } from "../recentView";
 
-const DEFAULT_SORT_OPTION = "modifiedTime";
+// Date column follows the My Drive convention (FileListHeader): desc =
+// newest-first, so the default "recent" order opens the Date column active.
+const DEFAULT_SORT_OPTION = "modifiedTime desc";
 
 function compareSizeAsc(a: Track, b: Track): number {
   const sizeA = a.size;
@@ -31,15 +34,35 @@ function compareSizeDesc(a: Track, b: Track): number {
   return sizeB - sizeA;
 }
 
-export function sortRecentTracks(items: Track[], sortOption: string): Track[] {
+export function sortRecentTracks(
+  items: RecentItem[],
+  sortOption: string,
+): RecentItem[] {
   const result = [...items];
-  // Why: Track has no modifiedTime field, so recency is derived from the
-  // original array position — getRecentlyPlayed already returns tracks
-  // newest-first (createdAt desc), and filter() preserves relative order,
-  // so the filtered index is a valid "date" proxy.
-  const indexByTrack = new Map<Track, number>();
+  // Why: the date columns must follow the My Drive convention (FileListHeader
+  // + aria-sort): "modifiedTime desc" = newest-first, "modifiedTime" =
+  // oldest-first. Recency proxy when NO track carries a real viewDate: the
+  // input array position — the Recent Files source (getRecentlyPlayedWithDates)
+  // already returns tracks newest-first, so desc = array order, asc = reverse.
+  const indexByTrack = new Map<RecentItem, number>();
   result.forEach((track, index) => indexByTrack.set(track, index));
-  const byRecency = (a: Track, b: Track) =>
+  const hasAnyDate = result.some((track) => track.viewDate !== undefined);
+  // Direction-aware date comparator: dir=1 → oldest-first (asc), dir=-1 →
+  // newest-first (desc). Tracks without a date are pinned to the bottom in
+  // BOTH directions (the pin must NOT flip with the direction, so the
+  // direction multiplies only the date delta — arg-flipping the whole
+  // comparator would float date-less tracks to the top on desc).
+  const byViewDateDir = (dir: 1 | -1) => (a: RecentItem, b: RecentItem) => {
+    const aDate = a.viewDate;
+    const bDate = b.viewDate;
+    // Date-less pairs (and equal dates) keep their relative (filter) order.
+    if (aDate === undefined && bDate === undefined) return 0;
+    if (aDate === undefined) return 1;
+    if (bDate === undefined) return -1;
+    return (aDate - bDate) * dir;
+  };
+  // Recency proxy over the array order: 0 = oldest … N-1 = newest.
+  const byRecencyAsc = (a: RecentItem, b: RecentItem) =>
     (indexByTrack.get(a) ?? 0) - (indexByTrack.get(b) ?? 0);
 
   switch (sortOption) {
@@ -55,13 +78,28 @@ export function sortRecentTracks(items: Track[], sortOption: string): Track[] {
     case "size desc":
       result.sort(compareSizeDesc);
       break;
+    case "modifiedTime":
+      if (hasAnyDate) {
+        result.sort(byViewDateDir(1));
+      } else {
+        // No real dates anywhere: recency proxy, oldest-first = reverse of
+        // the array's newest-first order.
+        result.sort((a, b) => byRecencyAsc(b, a));
+      }
+      break;
     case "modifiedTime desc":
-      result.sort((a, b) => byRecency(b, a));
+      if (hasAnyDate) {
+        result.sort(byViewDateDir(-1));
+      } else {
+        // No real dates anywhere: recency proxy, newest-first = the array's
+        // own order (the Recent Files source returns newest-first).
+        result.sort(byRecencyAsc);
+      }
       break;
     default:
-      // 'modifiedTime' and any unknown/legacy option (e.g. 'recent') keep
-      // the recency order — newest first, matching the default recent list.
-      result.sort(byRecency);
+      // Unknown/legacy option (e.g. 'recent') keeps the recency order —
+      // newest first, matching the default recent list.
+      result.sort(byRecencyAsc);
       break;
   }
   return result;
@@ -75,7 +113,7 @@ export function FullRecentView({
   currentTrack,
   title,
 }: {
-  recent: Track[];
+  recent: RecentItem[];
   onBack: () => void;
   onPlay: (track: Track, ctx?: Track[]) => void;
   token: string | null;
@@ -87,11 +125,17 @@ export function FullRecentView({
   // Recently Added view reuses this component and overrides it via the title
   // prop. Undefined title falls back to the translated Recent Files label.
   const resolvedTitle = title ?? t("home.recent_files");
+  // Date column label per view: Recent Files shows the last-played timestamp
+  // (createdAt), Recently Added shows the file's modifiedTime — the shared
+  // FileListHeader label "Date modified" would lie on the play-recency view.
+  const isRecentlyAdded = title !== undefined;
+  const dateColumnLabel = isRecentlyAdded
+    ? t("drive.col_date_modified")
+    : t("recent.col_last_played");
   const parentRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  // Why: the default "recent" order (newest first) maps to the Ngày option
-  // without the desc suffix — sortRecentTracks keeps the array order for
-  // 'modifiedTime' and reverses it for 'modifiedTime desc'.
+  // Default = Date desc (newest-first), matching the pre-header dropdown's
+  // default recency display order under the unified desc-first convention.
   const [sortOption, setSortOption] = useState(DEFAULT_SORT_OPTION);
   // Why: deleting from the MoreMenu removes the Drive file and fires
   // onRemoveItem, but the parent (HomeTab) only refetches on 'recent-updated'
@@ -122,12 +166,6 @@ export function FullRecentView({
       );
     return sortRecentTracks(filtered, sortOption);
   }, [recent, searchQuery, sortOption, removedIds]);
-
-  const sortOptions = [
-    { id: "name", label: t("sort.name") },
-    { id: "modifiedTime", label: t("sort.date") },
-    { id: "size", label: t("sort.size") },
-  ];
 
   // Latest-ref pattern (mirrors MainContent's handlePlay, P2-03-1): SongCard's
   // memo comparator deliberately ignores callback props, so a mounted card
@@ -208,16 +246,18 @@ export function FullRecentView({
                 </button>
               )}
             </div>
-
-            {/* Sort Dropdown */}
-            <SortDropdown
-              sortOption={sortOption}
-              onSortChange={setSortOption}
-              options={sortOptions}
-              fallbackLabel={t("sort.sort_label")}
-            />
           </div>
         </div>
+
+        {/* Sortable column header (same component as My Drive): one sorting
+            entry point below the toolbar, still inside this sticky
+            data-view-header (no second sticky layer). dateLabel only relabels
+            the Date column — sort semantics stay My Drive-compatible. */}
+        <FileListHeader
+          sortOption={sortOption}
+          onSortChange={setSortOption}
+          dateLabel={dateColumnLabel}
+        />
       </div>
 
       <div
@@ -244,6 +284,14 @@ export function FullRecentView({
                 isFolder: false,
                 size: track.size,
                 trackInfo: track,
+                // Internal transport only: SongCard's Date cell renders
+                // formatModifiedDate(item.modifiedTime), so the viewDate
+                // (last-played for Recent Files, file mtime for Recently
+                // Added) rides the same field to reach the cell.
+                modifiedTime:
+                  track.viewDate !== undefined
+                    ? new Date(track.viewDate).toISOString()
+                    : undefined,
               };
               return (
                 <div

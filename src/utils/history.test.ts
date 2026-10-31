@@ -13,6 +13,7 @@ import type { Track } from "../types";
 import {
   recordPlay,
   getRecentlyPlayed,
+  getRecentlyPlayedWithDates,
   getHeavyRotation,
   getRandomDiscoveries,
   recordFolderVisit,
@@ -83,6 +84,31 @@ describe("history (Dexie-backed)", () => {
 
     const recents = await getRecentlyPlayed();
     expect(recents.map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("getRecentlyPlayedWithDates keeps per-track createdAt, newest first, deduped", async () => {
+    await recordPlay(TRACK); // t1, createdAt ~ now
+    await recordPlay(TRACK2); // t2, newer
+    await recordPlay(TRACK); // t1 again (dedup: t1 keeps the newest play)
+
+    const entries = await getRecentlyPlayedWithDates();
+    expect(entries.map((e) => e.track.id)).toEqual(["t1", "t2"]);
+    expect(entries[0]?.createdAt).toBeGreaterThanOrEqual(
+      entries[1]?.createdAt ?? 0,
+    );
+    expect(typeof entries[0]?.createdAt).toBe("number");
+  });
+
+  it("getRecentlyPlayedWithDates keeps the older play date after dedupe (t1 re-play updates its row)", async () => {
+    await recordPlay(TRACK);
+    await recordPlay(TRACK2);
+    const first = await getRecentlyPlayedWithDates();
+    const t2Date = first.find((e) => e.track.id === "t2")?.createdAt;
+
+    await recordPlay(TRACK);
+    const second = await getRecentlyPlayedWithDates();
+    expect(second.map((e) => e.track.id)).toEqual(["t1", "t2"]);
+    expect(second.find((e) => e.track.id === "t2")?.createdAt).toBe(t2Date);
   });
 
   it("getHeavyRotation sorts by count desc and caps at 10", async () => {

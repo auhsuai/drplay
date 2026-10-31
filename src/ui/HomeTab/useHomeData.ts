@@ -1,12 +1,13 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import type { Track } from "../../types";
-import type { FolderVisitEntry } from "../../utils/history";
+import type { FolderVisitEntry, RecentPlayedEntry } from "../../utils/history";
+import { getRecentlyPlayedWithDates } from "../../utils/history";
 import {
-  getRecentlyPlayed,
   getHeavyRotation,
   getRandomDiscoveries,
   getMostVisitedFolders,
 } from "../../utils/history";
+import type { RecentItem } from "./recentView";
 import { db } from "../../db/db";
 import { getCurrentUserEmail } from "../../utils/storageKeys";
 import { isPlayableMediaFile } from "../../utils/mediaKind";
@@ -85,13 +86,17 @@ const RECENTLY_ADDED_LIMIT = 100;
 export function useHomeData(token: string | null) {
   const { t, i18n } = useTranslation();
   // null = first load still in flight (skeleton); [] = genuinely empty.
-  const [recent, setRecent] = useState<Track[] | null>(null);
+  // Recent Items carry an optional viewDate (epoch ms): last-played for the
+  // Recent Files source, modifiedTime for the Recently Added source — it
+  // feeds FullRecentView's real-date sorting and display. A plain Track[]
+  // elsewhere (heavy/discover) never gets one.
+  const [recent, setRecent] = useState<RecentItem[] | null>(null);
   const [heavy, setHeavy] = useState<Track[] | null>(null);
   const [discover, setDiscover] = useState<Track[] | null>(null);
   const [mostVisitedFolders, setMostVisitedFolders] = useState<
     FolderVisitEntry[] | null
   >(null);
-  const [recentlyAdded, setRecentlyAdded] = useState<Track[] | null>(null);
+  const [recentlyAdded, setRecentlyAdded] = useState<RecentItem[] | null>(null);
   // Guards the Recently Added refetch against overlapping responses:
   // a poll burst triggers overlapping fetches. Every call bumps the
   // generation and only the NEWEST call may write state — a slow stale
@@ -204,6 +209,11 @@ export function useHomeData(token: string | null) {
                 streamUrl: "",
                 originalName: row.name,
                 size: row.size,
+                // Real Drive modifiedTime (ISO) as the view date (epoch ms) —
+                // feeds FullRecentView's date column and real-date sorting.
+                viewDate: row.modifiedTime
+                  ? new Date(row.modifiedTime).getTime()
+                  : undefined,
               })),
           );
         })
@@ -224,9 +234,14 @@ export function useHomeData(token: string | null) {
 
     const loadData = async () => {
       const generation = ++loadDataRef.current;
-      const recent = await getRecentlyPlayed();
+      const recentEntries = await getRecentlyPlayedWithDates();
       if (generation !== loadDataRef.current) return;
-      setRecent(recent);
+      setRecent(
+        recentEntries.map((entry: RecentPlayedEntry) => ({
+          ...entry.track,
+          viewDate: entry.createdAt,
+        })),
+      );
       const heavy = await getHeavyRotation();
       if (generation !== loadDataRef.current) return;
       setHeavy(heavy);

@@ -24,8 +24,9 @@ interface TopNavigationBarProps {
   onNewFolderClick: () => void;
   // false hides the New Folder action (virtual root: no real parent folder).
   showNewFolderButton?: boolean;
-  // Retained for call-site compatibility (previously drove SortDropdown's
-  // first-frame arrow animation).
+  // Retained for call-site compatibility (previously drove the removed
+  // SortDropdown's first-frame arrow animation; no consumer inside this
+  // component anymore — do not remove without updating MainContent).
   isInitialMount: React.RefObject<boolean>;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -154,8 +155,8 @@ export function TopNavigationBar({
           </div>
 
           {/* Sorting lives in the FileListHeader column row now — the old
-              SortDropdown was removed from this toolbar (the Recent tab's
-              FullRecentView keeps its own dropdown). */}
+              SortDropdown was removed app-wide (My Drive and the Recent full
+              views both sort through their FileListHeader instances). */}
           {token && showNewFolderButton && (
             <button
               onClick={onNewFolderClick}

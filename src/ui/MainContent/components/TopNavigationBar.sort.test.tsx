@@ -10,9 +10,8 @@ import {
 } from "../../../utils/driveConstants";
 
 // scope: TopNavigationBar's own remaining responsibilities. The sort dropdown
-// used to live in this toolbar and its menu/APG coverage moved to
-// src/ui/components/SortDropdown.test.tsx (the component still ships for the
-// Recent tab); My Drive sorts through FileListHeader (FileListHeader.test.tsx).
+// used to live in this toolbar and was then removed app-wide (both My Drive
+// and the Recent full views sort through FileListHeader instances now).
 // react-i18next has no initialized instance in the node test env (i18n.ts
 // touches localStorage at import time), so we stub useTranslation to return
 // the defaultValue passed to t().

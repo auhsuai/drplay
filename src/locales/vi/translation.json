@@ -498,6 +498,9 @@
   "loading": "Đang tải…",
   "cancel": "Hủy",
   "ok": "OK",
+  "recent": {
+    "col_last_played": "Nghe gần nhất"
+  },
   "cache": {
     "label": {
       "metadata": "Bộ nhớ đệm thông tin bài hát",

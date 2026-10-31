@@ -44,6 +44,17 @@ export interface FolderVisitEntry {
 }
 
 /**
+ * A recently-played track plus the timestamp of its last play (epoch ms).
+ * `viewDate` feeds FullRecentView's real-date sorting/display; it is the
+ * RecentTrackRow.createdAt that getRecentlyPlayed() discards when mapping
+ * rows down to bare Tracks.
+ */
+export interface RecentPlayedEntry {
+  track: Track;
+  createdAt: number;
+}
+
+/**
  * Record a play: upsert the track into the recently-played list (deduped by
  * id, newest first) and bump its per-user play count, then prune both tables
  * back to their caps so per-user history cannot grow unbounded on disk. Fires
@@ -172,6 +183,36 @@ export async function getRecentlyPlayed(): Promise<Track[]> {
     return deduped.slice(0, RECENT_CAP);
   } catch (e: unknown) {
     await logHistoryError("getRecentlyPlayed-failed", e);
+    return [];
+  }
+}
+
+/**
+ * Same read as getRecentlyPlayed (newest first, deduped, capped) but keeps
+ * each row's last-played timestamp so the Recent Files full view can sort and
+ * display real dates instead of an array-position proxy. Returns [] (logged)
+ * when the read fails, mirroring getRecentlyPlayed.
+ */
+export async function getRecentlyPlayedWithDates(): Promise<
+  RecentPlayedEntry[]
+> {
+  const email = getCurrentUserEmail();
+  try {
+    const rows = await db.recentTracks
+      .where("userEmail")
+      .equals(email)
+      .toArray();
+    rows.sort((a, b) => b.createdAt - a.createdAt);
+    const deduped: RecentPlayedEntry[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      deduped.push({ track: row.track, createdAt: row.createdAt });
+    }
+    return deduped.slice(0, RECENT_CAP);
+  } catch (e: unknown) {
+    await logHistoryError("getRecentlyPlayedWithDates-failed", e);
     return [];
   }
 }

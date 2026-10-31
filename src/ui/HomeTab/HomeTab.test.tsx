@@ -12,7 +12,7 @@ import { HomeTab } from "./HomeTab";
 import en from "../../locales/en/translation.json";
 import type { Track, UserProfile } from "../../types";
 import type { DriveFile } from "../../db/db";
-import type { FolderVisitEntry } from "../../utils/history";
+import type { FolderVisitEntry, RecentPlayedEntry } from "../../utils/history";
 import { SYNC_EVENT_NAMES } from "../../utils/proSyncManager";
 import { DEBUG_EVENTS } from "../debug/debugEvents";
 
@@ -52,7 +52,7 @@ vi.mock("lucide-react", () => {
 });
 
 const mocks = vi.hoisted(() => ({
-  getRecentlyPlayed: vi.fn(),
+  getRecentlyPlayedWithDates: vi.fn(),
   getHeavyRotation: vi.fn(),
   getRandomDiscoveries: vi.fn(),
   getMostVisitedFolders: vi.fn(),
@@ -66,7 +66,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../utils/history", () => ({
-  getRecentlyPlayed: mocks.getRecentlyPlayed,
+  getRecentlyPlayedWithDates: mocks.getRecentlyPlayedWithDates,
   getHeavyRotation: mocks.getHeavyRotation,
   getRandomDiscoveries: mocks.getRandomDiscoveries,
   getMostVisitedFolders: mocks.getMostVisitedFolders,
@@ -167,7 +167,7 @@ const DRIVE_FILES_CHANGED = "drive-files-changed";
 
 describe("HomeTab Recently Added delta sync", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getRecentlyPlayedWithDates.mockResolvedValue([]);
     mocks.getHeavyRotation.mockResolvedValue([]);
     mocks.getRandomDiscoveries.mockResolvedValue([]);
     mocks.getMostVisitedFolders.mockResolvedValue([]);
@@ -197,7 +197,7 @@ describe("HomeTab Recently Added delta sync", () => {
     ]);
     render(<HomeTab {...baseProps()} />);
     await screen.findByText("First.mp3");
-    expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
 
     mocks.dbFilesToArray.mockResolvedValue([
       mirrorRow({ id: "b", name: "Second.mp3" }),
@@ -221,7 +221,7 @@ describe("HomeTab Recently Added delta sync", () => {
     expect(await screen.findByText("Second.mp3")).toBeTruthy();
     expect(screen.queryByText("First.mp3")).toBeNull();
     // Delta sync must not re-run the heavy local loads.
-    expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
   });
 
   it("3. generation guard: stale response never overwrites the newest one (burst collapsed + overlapping fetches)", async () => {
@@ -279,7 +279,7 @@ describe("HomeTab Recently Added delta sync", () => {
   it("4. does not fetch when token is null, even after drive-files-changed", async () => {
     render(<HomeTab {...baseProps({ token: null })} />);
     await waitFor(() => {
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+      expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
     });
 
     act(() => {
@@ -349,18 +349,18 @@ describe("HomeTab Recently Added delta sync", () => {
     expect(mocks.dbFilesToArray).toHaveBeenCalledTimes(1);
   });
 
-  it("7. recent-updated still runs the full loadData (getRecentlyPlayed re-fetches)", async () => {
+  it("7. recent-updated still runs the full loadData (getRecentlyPlayedWithDates re-fetches)", async () => {
     mocks.dbFilesToArray.mockResolvedValue([]);
     render(<HomeTab {...baseProps()} />);
     await waitFor(() => {
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+      expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
     });
 
     act(() => {
       window.dispatchEvent(new Event("recent-updated"));
     });
     await waitFor(() => {
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(2);
+      expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -421,7 +421,7 @@ describe("HomeTab Recently Added delta sync", () => {
     ]);
     render(<HomeTab {...baseProps()} />);
     await screen.findByText("First.mp3");
-    expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
 
     mocks.dbFilesToArray.mockResolvedValue([
       mirrorRow({ id: "b", name: "Second.mp3" }),
@@ -440,13 +440,13 @@ describe("HomeTab Recently Added delta sync", () => {
     expect(await screen.findByText("Second.mp3")).toBeTruthy();
     expect(screen.queryByText("First.mp3")).toBeNull();
     // Delta sync must not re-run the heavy local loads.
-    expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+    expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
   });
 
   it("11. pro-sync-complete with null token does not fetch", async () => {
     render(<HomeTab {...baseProps({ token: null })} />);
     await waitFor(() => {
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+      expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
     });
 
     act(() => {
@@ -494,7 +494,7 @@ describe("HomeTab Recently Added delta sync", () => {
 
 describe("HomeTab Recently Added mirror query (db.files source)", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getRecentlyPlayedWithDates.mockResolvedValue([]);
     mocks.getHeavyRotation.mockResolvedValue([]);
     mocks.getRandomDiscoveries.mockResolvedValue([]);
     mocks.getMostVisitedFolders.mockResolvedValue([]);
@@ -585,7 +585,7 @@ describe("HomeTab Recently Added mirror query (db.files source)", () => {
 
 describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism)", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getRecentlyPlayedWithDates.mockResolvedValue([]);
     mocks.getHeavyRotation.mockResolvedValue([]);
     mocks.getRandomDiscoveries.mockResolvedValue([]);
     mocks.getMostVisitedFolders.mockResolvedValue([]);
@@ -807,7 +807,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
 
 describe("HomeTab skeleton loading (null-state contract)", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockReset();
+    mocks.getRecentlyPlayedWithDates.mockReset();
     mocks.getHeavyRotation.mockReset();
     mocks.getRandomDiscoveries.mockReset();
     mocks.getMostVisitedFolders.mockReset();
@@ -848,7 +848,10 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
   }
 
   function mockAllPending(d: {
-    recent: { promise: Promise<Track[]>; resolve: (v: Track[]) => void };
+    recent: {
+      promise: Promise<RecentPlayedEntry[]>;
+      resolve: (v: RecentPlayedEntry[]) => void;
+    };
     heavy: { promise: Promise<Track[]>; resolve: (v: Track[]) => void };
     discover: { promise: Promise<Track[]>; resolve: (v: Track[]) => void };
     folders: {
@@ -860,7 +863,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
       resolve: (v: DriveFile[]) => void;
     };
   }) {
-    mocks.getRecentlyPlayed.mockReturnValue(d.recent.promise);
+    mocks.getRecentlyPlayedWithDates.mockReturnValue(d.recent.promise);
     mocks.getHeavyRotation.mockReturnValue(d.heavy.promise);
     mocks.getRandomDiscoveries.mockReturnValue(d.discover.promise);
     mocks.getMostVisitedFolders.mockReturnValue(d.folders.promise);
@@ -869,7 +872,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
   it("a. shows 5 section skeletons + greeting skeleton while every fetch is pending (null state)", () => {
     mockAllPending({
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
@@ -888,7 +891,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
   it("b. resolving every fetch replaces all skeletons with real sections", async () => {
     const d = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
@@ -900,9 +903,9 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
     await act(async () => {
       d.recent.resolve([
-        track({ id: "r1" }),
-        track({ id: "r2" }),
-        track({ id: "r3" }),
+        { track: track({ id: "r1" }), createdAt: 1 },
+        { track: track({ id: "r2" }), createdAt: 2 },
+        { track: track({ id: "r3" }), createdAt: 3 },
       ]);
       d.heavy.resolve([
         track({ id: "h1" }),
@@ -935,7 +938,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
   it("c. partial resolve: only the resolved section renders, the other four stay skeleton", async () => {
     const d = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
@@ -946,9 +949,9 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
     await act(async () => {
       d.recent.resolve([
-        track({ id: "r1" }),
-        track({ id: "r2" }),
-        track({ id: "r3" }),
+        { track: track({ id: "r1" }), createdAt: 1 },
+        { track: track({ id: "r2" }), createdAt: 2 },
+        { track: track({ id: "r3" }), createdAt: 3 },
       ]);
       await Promise.resolve();
     });
@@ -964,7 +967,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
   it("d. delta sync after a completed load never re-shows skeletons (no flicker)", async () => {
     const d = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
@@ -975,9 +978,9 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
     await act(async () => {
       d.recent.resolve([
-        track({ id: "r1" }),
-        track({ id: "r2" }),
-        track({ id: "r3" }),
+        { track: track({ id: "r1" }), createdAt: 1 },
+        { track: track({ id: "r2" }), createdAt: 2 },
+        { track: track({ id: "r3" }), createdAt: 3 },
       ]);
       d.heavy.resolve([]);
       d.discover.resolve([]);
@@ -1005,7 +1008,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
   it("e. all fetches resolving to [] means truly empty: no skeleton, no section", async () => {
     const d = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
@@ -1035,7 +1038,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
   it("f. prefetch effect survives the all-null state and receives exactly the resolved ids", async () => {
     const d = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
@@ -1048,20 +1051,23 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(mocks.prefetchVisibleTracks).not.toHaveBeenCalled();
 
     await act(async () => {
-      d.recent.resolve([track({ id: "r1" }), track({ id: "r2" })]);
+      d.recent.resolve([
+        { track: track({ id: "r1" }), createdAt: 1 },
+        { track: track({ id: "r2" }), createdAt: 2 },
+      ]);
       await Promise.resolve();
     });
 
     expect(mocks.prefetchVisibleTracks).toHaveBeenCalledTimes(1);
     expect(mocks.prefetchVisibleTracks).toHaveBeenCalledWith([
-      track({ id: "r1" }),
-      track({ id: "r2" }),
+      { ...track({ id: "r1" }), viewDate: 1 },
+      { ...track({ id: "r2" }), viewDate: 2 },
     ]);
   });
 
   it("g. greeting skeleton shows only while recent is null, then the real greeting replaces it", async () => {
     const d = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
@@ -1074,7 +1080,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.queryByText(/^Good (morning|afternoon|evening)/)).toBeNull();
 
     await act(async () => {
-      d.recent.resolve([track({ id: "r1" })]);
+      d.recent.resolve([{ track: track({ id: "r1" }), createdAt: 1 }]);
       d.heavy.resolve([]);
       d.discover.resolve([]);
       d.folders.resolve([]);
@@ -1089,7 +1095,7 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
 
 describe("HomeTab loadData stale-write race", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockReset();
+    mocks.getRecentlyPlayedWithDates.mockReset();
     mocks.getHeavyRotation.mockReset();
     mocks.getRandomDiscoveries.mockReset();
     mocks.getMostVisitedFolders.mockReset();
@@ -1130,18 +1136,18 @@ describe("HomeTab loadData stale-write race", () => {
     // loadData awaits its reads SEQUENTIALLY, so an older flow can only still
     // be mid-flight on its last read when a newer flow runs to completion.
     const stale = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
     };
     const fresh = {
-      recent: deferred<Track[]>(),
+      recent: deferred<RecentPlayedEntry[]>(),
       heavy: deferred<Track[]>(),
       discover: deferred<Track[]>(),
       folders: deferred<FolderVisitEntry[]>(),
     };
-    mocks.getRecentlyPlayed
+    mocks.getRecentlyPlayedWithDates
       .mockReturnValueOnce(stale.recent.promise)
       .mockReturnValueOnce(fresh.recent.promise);
     mocks.getHeavyRotation
@@ -1159,7 +1165,9 @@ describe("HomeTab loadData stale-write race", () => {
 
     // Advance flow 1 (mount) one read at a time until its LAST read is pending.
     await act(async () => {
-      stale.recent.resolve([track({ id: "old-r", title: "Old Recent" })]);
+      stale.recent.resolve([
+        { track: track({ id: "old-r", title: "Old Recent" }), createdAt: 1 },
+      ]);
       await Promise.resolve();
     });
     await waitFor(() => {
@@ -1185,12 +1193,14 @@ describe("HomeTab loadData stale-write race", () => {
       window.dispatchEvent(new Event("recent-updated"));
     });
     await waitFor(() => {
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(2);
+      expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(2);
     });
 
     // The NEWER flow completes first: every section shows the fresh data.
     await act(async () => {
-      fresh.recent.resolve([track({ id: "new-r", title: "New Recent" })]);
+      fresh.recent.resolve([
+        { track: track({ id: "new-r", title: "New Recent" }), createdAt: 2 },
+      ]);
       fresh.heavy.resolve([track({ id: "new-h", title: "New Heavy" })]);
       fresh.discover.resolve([track({ id: "new-d", title: "New Discover" })]);
       fresh.folders.resolve([folder({ id: "new-v", name: "New Folder" })]);
@@ -1215,9 +1225,9 @@ describe("HomeTab loadData stale-write race", () => {
   });
 
   it("b. stale loadData stops at its FIRST read when a newer flow starts (no partial overwrite)", async () => {
-    const staleRecent = deferred<Track[]>();
-    const freshRecent = deferred<Track[]>();
-    mocks.getRecentlyPlayed
+    const staleRecent = deferred<RecentPlayedEntry[]>();
+    const freshRecent = deferred<RecentPlayedEntry[]>();
+    mocks.getRecentlyPlayedWithDates
       .mockReturnValueOnce(staleRecent.promise)
       .mockReturnValueOnce(freshRecent.promise);
     mocks.getHeavyRotation.mockResolvedValue([
@@ -1233,7 +1243,7 @@ describe("HomeTab loadData stale-write race", () => {
 
     render(<HomeTab {...baseProps()} />);
     await waitFor(() => {
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(1);
+      expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(1);
     });
 
     // Newer flow starts while the older flow is stuck on its first read.
@@ -1241,12 +1251,14 @@ describe("HomeTab loadData stale-write race", () => {
       window.dispatchEvent(new Event("recent-updated"));
     });
     await waitFor(() => {
-      expect(mocks.getRecentlyPlayed).toHaveBeenCalledTimes(2);
+      expect(mocks.getRecentlyPlayedWithDates).toHaveBeenCalledTimes(2);
     });
 
     // Newest flow resolves first → fresh data rendered.
     await act(async () => {
-      freshRecent.resolve([track({ id: "new-r", title: "New Recent" })]);
+      freshRecent.resolve([
+        { track: track({ id: "new-r", title: "New Recent" }), createdAt: 2 },
+      ]);
       await Promise.resolve();
     });
     expect(await screen.findByText("New Recent")).toBeTruthy();
@@ -1254,7 +1266,9 @@ describe("HomeTab loadData stale-write race", () => {
     // Older flow's read resolves LAST. Without a guard it overwrites recent
     // with stale data (RED).
     await act(async () => {
-      staleRecent.resolve([track({ id: "old-r", title: "Old Recent" })]);
+      staleRecent.resolve([
+        { track: track({ id: "old-r", title: "Old Recent" }), createdAt: 1 },
+      ]);
       await Promise.resolve();
     });
 
@@ -1265,8 +1279,16 @@ describe("HomeTab loadData stale-write race", () => {
 
 describe("HomeTab debug skeleton trigger", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockResolvedValue([
-      { id: "r-1", title: "Recent Track", artist: "Artist", streamUrl: "" },
+    mocks.getRecentlyPlayedWithDates.mockResolvedValue([
+      {
+        track: {
+          id: "r-1",
+          title: "Recent Track",
+          artist: "Artist",
+          streamUrl: "",
+        },
+        createdAt: 1,
+      },
     ]);
     mocks.getHeavyRotation.mockResolvedValue([]);
     mocks.getRandomDiscoveries.mockResolvedValue([]);
@@ -1323,8 +1345,16 @@ describe("HomeTab debug skeleton trigger", () => {
 
 describe("HomeTab Ctrl+F guard (browser find dialog must not open on Home)", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockResolvedValue([
-      { id: "r-1", title: "Recent Track", artist: "Artist", streamUrl: "" },
+    mocks.getRecentlyPlayedWithDates.mockResolvedValue([
+      {
+        track: {
+          id: "r-1",
+          title: "Recent Track",
+          artist: "Artist",
+          streamUrl: "",
+        },
+        createdAt: 1,
+      },
     ]);
     mocks.getHeavyRotation.mockResolvedValue([]);
     mocks.getRandomDiscoveries.mockResolvedValue([]);
@@ -1433,7 +1463,7 @@ describe("HomeTab Ctrl+F guard (browser find dialog must not open on Home)", () 
 
 describe("HomeTab first-load failure + blocked storage (P2-11-5 / P2-11-6)", () => {
   beforeEach(() => {
-    mocks.getRecentlyPlayed.mockReset();
+    mocks.getRecentlyPlayedWithDates.mockReset();
     mocks.getHeavyRotation.mockReset();
     mocks.getRandomDiscoveries.mockReset();
     mocks.getMostVisitedFolders.mockReset();
@@ -1448,7 +1478,7 @@ describe("HomeTab first-load failure + blocked storage (P2-11-5 / P2-11-6)", () 
   });
 
   it("a failed first recently-added load clears the skeleton instead of hanging forever", async () => {
-    mocks.getRecentlyPlayed.mockResolvedValue([]);
+    mocks.getRecentlyPlayedWithDates.mockResolvedValue([]);
     mocks.getHeavyRotation.mockResolvedValue([]);
     mocks.getRandomDiscoveries.mockResolvedValue([]);
     mocks.getMostVisitedFolders.mockResolvedValue([]);
@@ -1483,7 +1513,7 @@ describe("HomeTab first-load failure + blocked storage (P2-11-5 / P2-11-6)", () 
         throw new DOMException("blocked", "SecurityError");
       });
     try {
-      mocks.getRecentlyPlayed.mockResolvedValue([]);
+      mocks.getRecentlyPlayedWithDates.mockResolvedValue([]);
       mocks.getHeavyRotation.mockResolvedValue([]);
       mocks.getRandomDiscoveries.mockResolvedValue([]);
       mocks.getMostVisitedFolders.mockResolvedValue([]);
