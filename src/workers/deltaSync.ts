@@ -27,6 +27,15 @@ export async function performDeltaSync(
   // Files skipped because they lack a usable id, accumulated across all pages
   // of this delta run and reported as one summary line at the end.
   let skippedDeltaFiles = 0;
+  // Set when at least one change of this run could NOT be applied to the
+  // mirror (malformed removal, file missing a usable name, or a Dexie
+  // failure). The cursor must never advance past such a change: a failed run
+  // neither saves newStartPageToken nor reports SYNC_COMPLETE, so the next
+  // poll replays this exact window (the writes are idempotent by primary key).
+  let changesFailed = false;
+  // How many changes were left unapplied — reported as ONE summary line with
+  // counts only (no tokens, no file metadata beyond the ids already logged).
+  let unappliedChanges = 0;
 
   try {
     do {
@@ -93,22 +102,58 @@ export async function performDeltaSync(
       for (const change of changes) {
         try {
           if (change.removed || (change.file && change.file.trashed)) {
-            // The Drive changes API always reports fileId for removed entries;
-            // the explicit assertion mirrors the previous `!` with identical
-            // runtime semantics (a missing fileId still throws inside the
-            // per-change try/catch below).
+            // Drive always reports fileId for removed entries; a removal with
+            // no usable id cannot be applied at all. Classify it as
+            // malformed/unapplied (never a silent no-op) so the cursor stays
+            // behind it instead of stepping over an undeleted row.
+            const removedId = change.fileId;
+            if (typeof removedId !== "string" || removedId.length === 0) {
+              changesFailed = true;
+              unappliedChanges += 1;
+              logWorkerError(
+                "proSync/delta-sync",
+                {
+                  phase: "applyChange",
+                  kind: "malformed-removal",
+                  fileId: change.fileId,
+                },
+                new Error("removal change has no usable fileId"),
+                "error",
+              );
+              continue;
+            }
             // Delete by THIS run's owner key — the compound [userEmail+id]
             // primary key only addresses rows of the account being synced.
-            await db.files.delete([ownerEmail, change.fileId as string]);
+            await db.files.delete([ownerEmail, removedId]);
             hasValidChanges = true;
           } else if (change.file) {
             const file = change.file;
-            // A change whose file lacks an id cannot be persisted; skip it
-            // (per-change isolation, matching the try/catch below). The count
-            // is accumulated across pages and reported in one summary line
-            // after the pagination loop.
+            // A change whose file lacks an id cannot be persisted; the run
+            // cannot apply it, so it is counted AND blocks the cursor (the
+            // count alone would let the checkpoint advance past it).
             if (!isValidDriveFile(file)) {
               skippedDeltaFiles += 1;
+              changesFailed = true;
+              unappliedChanges += 1;
+              continue;
+            }
+            // `name` drives the "is this playable" classification: without it
+            // the change cannot be applied at all. It must NOT be treated as
+            // "unsupported" — deleting a row on an unclassifiable change would
+            // silently drop a real library entry.
+            if (typeof file.name !== "string" || file.name.length === 0) {
+              changesFailed = true;
+              unappliedChanges += 1;
+              logWorkerError(
+                "proSync/delta-sync",
+                {
+                  phase: "applyChange",
+                  kind: "missing-name",
+                  fileId: file.id,
+                },
+                new Error("change file has no usable name"),
+                "error",
+              );
               continue;
             }
             const isFolder = file.mimeType === FOLDER_MIME;
@@ -118,7 +163,7 @@ export async function performDeltaSync(
             // file too. An audio-only predicate here would drop every .mkv /
             // .mp4 change from Drive — movies would appear after a full sync
             // and then never update, rename or delete in place.
-            if (isFolder || isPlayableMediaFile(file.name as string)) {
+            if (isFolder || isPlayableMediaFile(file.name)) {
               // Per-change helper call keeps the one-bad-change isolation of
               // the previous per-change put (a batched page-wide upsert would
               // let one poisoned row abort its valid siblings).
@@ -127,10 +172,24 @@ export async function performDeltaSync(
                 ownerEmail,
               );
               hasValidChanges = true;
+            } else {
+              // Unsupported (non-folder, non-playable) — e.g. an mp3 renamed
+              // to .txt/.pdf — must not stay in the mirror: without this
+              // branch the stale row survived forever and kept showing up in
+              // the explorer and in search. Delete by the compound key only,
+              // so another account's row with the same Drive id is untouched.
+              // A missing row is a successful no-op (Dexie delete resolves).
+              await db.files.delete([ownerEmail, file.id]);
+              hasValidChanges = true;
             }
           }
         } catch (err) {
-          // One bad change must not abort the whole delta batch.
+          // One bad change must not abort the whole delta batch, but it MUST
+          // block the checkpoint: continuing the loop with the flag set keeps
+          // the remaining changes applied while guaranteeing this window is
+          // replayed on the next run.
+          changesFailed = true;
+          unappliedChanges += 1;
           logWorkerError(
             "proSync/delta-sync",
             { phase: "applyChange", fileId: change.fileId },
@@ -161,22 +220,53 @@ export async function performDeltaSync(
       );
     }
 
-    if (newStartPageToken !== startPageToken) {
-      try {
-        await db.syncState.put({
-          key: START_PAGE_TOKEN_KEY,
-          value: newStartPageToken,
-        });
-      } catch (err) {
-        logWorkerError(
-          "proSync/delta-sync",
-          { phase: "saveStartToken" },
-          err,
-          "error",
-        );
-      }
-      self.postMessage({ type: "SYNC_COMPLETE" });
+    // A run with at least one unapplied change is NOT a completed run: the
+    // cursor must not step over it. Report exactly one terminal signal and
+    // return BEFORE the checkpoint save, so the stored startPageToken keeps
+    // pointing at this window and the next poll replays it (applied changes
+    // are idempotent by primary key; the failed ones get another chance).
+    if (changesFailed) {
+      logWorkerError(
+        "proSync/delta-sync/changes",
+        { kind: "unapplied", unappliedCount: unappliedChanges },
+        new Error(
+          `${String(unappliedChanges)} change(s) not applied: cursor not advanced`,
+        ),
+        "error",
+      );
+      self.postMessage({ type: "SYNC_ERROR" });
+      return;
     }
+
+    // No-change run: Drive returned the same startPageToken and nothing to
+    // persist. This is a SUCCESSFUL, fully terminated run — it used to post no
+    // terminal event at all, leaving the poller waiting forever. Post the one
+    // COMPLETE it owes the main thread, and do not save.
+    if (newStartPageToken === startPageToken) {
+      self.postMessage({ type: "SYNC_COMPLETE" });
+      return;
+    }
+
+    // Checkpoint persistence is part of the run's success: if the token
+    // cannot be stored, the main thread must not be told the run completed
+    // (it would then believe this window is consumed while the next poll
+    // replays it).
+    try {
+      await db.syncState.put({
+        key: START_PAGE_TOKEN_KEY,
+        value: newStartPageToken,
+      });
+    } catch (err) {
+      logWorkerError(
+        "proSync/delta-sync",
+        { phase: "saveStartToken" },
+        err,
+        "error",
+      );
+      self.postMessage({ type: "SYNC_ERROR" });
+      return;
+    }
+    self.postMessage({ type: "SYNC_COMPLETE" });
   } catch (err) {
     if (err instanceof WorkerAbortError) return;
     logWorkerError("proSync/delta-sync", { phase: "changes" }, err, "error");

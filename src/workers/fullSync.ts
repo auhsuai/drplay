@@ -163,6 +163,11 @@ export async function performFullSync(ownerEmail: string) {
   }
 
   if (startToken) {
+    // Checkpoint persistence is PART of the pass's success: if the fresh
+    // startPageToken cannot be stored, the pass must not be branded complete
+    // (the next delta run would then re-consume a window this pass already
+    // applied) and the cleanup sweep must not run on a pass whose checkpoint
+    // is unrecorded. Report one terminal signal and stop here.
     try {
       await db.syncState.put({ key: START_PAGE_TOKEN_KEY, value: startToken });
     } catch (err) {
@@ -172,6 +177,8 @@ export async function performFullSync(ownerEmail: string) {
         err,
         "error",
       );
+      self.postMessage({ type: "SYNC_ERROR" });
+      return;
     }
   }
 

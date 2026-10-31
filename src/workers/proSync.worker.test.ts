@@ -14,6 +14,8 @@ import {
 import type { SyncRetryState } from "./proSync.worker";
 import { syncRetryDeps } from "./tokenRefresh";
 import { syncRetry } from "./syncState";
+import { performDeltaSync } from "./deltaSync";
+import { performFullSync } from "./fullSync";
 import { DEFAULT_USER_EMAIL } from "../utils/storageKeys";
 
 vi.mock("../utils/errorLog", async (importOriginal) => ({
@@ -356,6 +358,9 @@ describe("full-sync cleanup of non-playable rows", () => {
     expect(await db.files.get([FIXTURE_EMAIL, "flac2"])).toBeDefined();
     expect(await db.files.get([FIXTURE_EMAIL, "folder1"])).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+    // Success tail: exactly one terminal event, and it is COMPLETE.
+    expect(posted.filter((m) => m.type === "SYNC_COMPLETE")).toHaveLength(1);
+    expect(posted).not.toContainEqual({ type: "SYNC_ERROR" });
   });
 
   // Schema v10 keys filesV2 by [userEmail+id]: the table is shared across
@@ -1610,4 +1615,626 @@ describe("sync without a usable owner email is rejected before any write", () =>
       ).toBeUndefined();
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Delta-sync apply integrity (cursor never advances past an unapplied change).
+//
+// Before this fix the per-change catch only logged: the run still saved
+// newStartPageToken and posted SYNC_COMPLETE, so the poller permanently
+// skipped changes the mirror never received. The unsupported-file branch was
+// missing entirely, so an mp3 renamed to .txt/.pdf left its stale row in the
+// mirror forever. These tests drive performDeltaSync/performFullSync directly
+// (the token is primed through the same "token" wire frame the main thread
+// sends on rotation) so each invariant is pinned without runSync's
+// full-vs-delta decision.
+// ---------------------------------------------------------------------------
+const DELTA_OWNER = "delta-owner@example.com";
+const OTHER_DELTA_OWNER = "other-delta@example.com";
+
+function postedCount(posted: Array<{ type: string }>, type: string): number {
+  return posted.filter((m) => m.type === type).length;
+}
+
+function deltaFileChange(id: string, name: string, mimeType = "audio/mpeg") {
+  return {
+    fileId: id,
+    file: { id, name, mimeType, parents: ["root"] },
+  };
+}
+
+function deltaFolderChange(id: string, name: string) {
+  return {
+    fileId: id,
+    file: {
+      id,
+      name,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: ["root"],
+    },
+  };
+}
+
+async function primeWorkerToken(token: string): Promise<void> {
+  await handleWorkerMessage({
+    data: { type: "token", token },
+  } as MessageEvent);
+}
+
+function seedTokenRow(id: string, name: string, email: string) {
+  return {
+    id,
+    name,
+    mimeType: "audio/mpeg",
+    parentId: "root",
+    size: 1,
+    trashed: false,
+    isFolder: false,
+    userEmail: email,
+  };
+}
+
+describe("delta-sync apply integrity (Group A)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("A1: file upsert failure posts exactly one SYNC_ERROR, zero COMPLETE and keeps the previous token", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("a1", "a1.mp3")],
+            newStartPageToken: "start-new",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.spyOn(db.files, "bulkPut").mockRejectedValueOnce(
+      new Error("simulated upsert failure"),
+    );
+
+    await primeWorkerToken("tok-a1");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    // The failed change was never applied, so the window must be replayed.
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+    expect(await db.files.get([DELTA_OWNER, "a1"])).toBeUndefined();
+  });
+
+  it("A2: removal delete failure posts exactly one SYNC_ERROR, zero COMPLETE and keeps the previous token", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.put(seedTokenRow("a2", "a2.mp3", DELTA_OWNER));
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [{ fileId: "a2", removed: true }],
+            newStartPageToken: "start-new",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.spyOn(db.files, "delete").mockRejectedValueOnce(
+      new Error("simulated delete failure"),
+    );
+
+    await primeWorkerToken("tok-a2");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+    // The undeleted row is exactly why the cursor must stay put.
+    expect(await db.files.get([DELTA_OWNER, "a2"])).toBeDefined();
+  });
+
+  it("A3: a failure after an earlier successful change keeps that write but never advances the token", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.put(seedTokenRow("a3-del", "a3-del.mp3", DELTA_OWNER));
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [
+              deltaFileChange("a3-new", "a3-new.mp3"),
+              { fileId: "a3-del", removed: true },
+            ],
+            newStartPageToken: "start-new",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.spyOn(db.files, "delete").mockRejectedValueOnce(
+      new Error("simulated delete failure"),
+    );
+
+    await primeWorkerToken("tok-a3");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    // Per-change isolation: the first change landed.
+    expect(await db.files.get([DELTA_OWNER, "a3-new"])).toBeDefined();
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+
+  it("A4: failed pass then clean replay converges the mirror and advances the token only on the replay", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.put(seedTokenRow("a4-del", "a4-del.mp3", DELTA_OWNER));
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const changesPayload = JSON.stringify({
+      changes: [
+        deltaFileChange("a4-new", "a4-new.mp3"),
+        { fileId: "a4-del", removed: true },
+      ],
+      newStartPageToken: "start-new",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => {
+        return Promise.resolve(new Response(changesPayload, { status: 200 }));
+      }),
+    );
+
+    await primeWorkerToken("tok-a4");
+    vi.spyOn(db.files, "delete").mockRejectedValueOnce(
+      new Error("simulated delete failure"),
+    );
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+
+    // The next poll replays the very same window (old token) — now cleanly.
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(await db.files.get([DELTA_OWNER, "a4-new"])).toBeDefined();
+    expect(await db.files.get([DELTA_OWNER, "a4-del"])).toBeUndefined();
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-new" }),
+    );
+  });
+});
+
+describe("delta-sync unsupported-change cleanup (Group B)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("B1: an mp3 renamed to .txt removes the stale mirror row", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.put(seedTokenRow("b1", "song.mp3", DELTA_OWNER));
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("b1", "song.txt", "text/plain")],
+            newStartPageToken: "start-b1",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-b1");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(await db.files.get([DELTA_OWNER, "b1"])).toBeUndefined();
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-b1" }),
+    );
+  });
+
+  it("B2: a .mp3 renamed to .flac updates the existing row instead of deleting it", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.put(seedTokenRow("b2", "song.mp3", DELTA_OWNER));
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("b2", "song.flac", "audio/flac")],
+            newStartPageToken: "start-b2",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-b2");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    const row = await db.files.get([DELTA_OWNER, "b2"]);
+    expect(row).toBeDefined();
+    expect(row?.name).toBe("song.flac");
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+  });
+
+  it("B3: a folder with no media extension is still persisted, never deleted", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFolderChange("b3", "Album Folder")],
+            newStartPageToken: "start-b3",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-b3");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    const row = await db.files.get([DELTA_OWNER, "b3"]);
+    expect(row).toBeDefined();
+    expect(row?.isFolder).toBe(true);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+  });
+
+  it("B4: the same file id under two accounts — only the synced account's row is removed", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.bulkPut([
+      seedTokenRow("b4", "shared.mp3", DELTA_OWNER),
+      seedTokenRow("b4", "shared.mp3", OTHER_DELTA_OWNER),
+    ]);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("b4", "shared.pdf", "application/pdf")],
+            newStartPageToken: "start-b4",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-b4");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(await db.files.get([DELTA_OWNER, "b4"])).toBeUndefined();
+    expect(await db.files.get([OTHER_DELTA_OWNER, "b4"])).toBeDefined();
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+  });
+
+  it("B5: an unsupported change with no existing row is a no-op — no crash, no broad deletion", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.put(seedTokenRow("b5-keep", "keep.mp3", DELTA_OWNER));
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("b5-absent", "ghost.txt", "text/plain")],
+            newStartPageToken: "start-b5",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-b5");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(await db.files.get([DELTA_OWNER, "b5-absent"])).toBeUndefined();
+    expect(await db.files.get([DELTA_OWNER, "b5-keep"])).toBeDefined();
+    expect(await db.files.count()).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+  });
+});
+
+describe("checkpoint persistence is part of success (Groups C and D)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("C1: a rejected delta checkpoint put posts exactly one SYNC_ERROR and leaves the old token", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("c1", "c1.mp3")],
+            newStartPageToken: "start-new",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.spyOn(db.syncState, "put").mockRejectedValueOnce(
+      new Error("simulated syncState failure"),
+    );
+
+    await primeWorkerToken("tok-c1");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+
+  it("D1: a rejected full-sync checkpoint put posts exactly one SYNC_ERROR, keeps the old token and never reaches the success tail", async () => {
+    await resetSyncTables();
+    // A real previous token (the pass must not be brandable complete).
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-prev",
+    });
+    await db.files.put({
+      id: "d1-stale",
+      name: "stale.wvx",
+      mimeType: "audio/x-wavpack",
+      parentId: "root",
+      size: 1,
+      trashed: false,
+      isFolder: false,
+      userEmail: DELTA_OWNER,
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("startPageToken")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ startPageToken: "start-fresh" }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ files: [audioFileRow("d1-new")] }), {
+            status: 200,
+          }),
+        );
+      }),
+    );
+    vi.spyOn(db.syncState, "put").mockRejectedValueOnce(
+      new Error("simulated syncState failure"),
+    );
+
+    await primeWorkerToken("tok-d1");
+    await performFullSync(DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-prev" }),
+    );
+    // The success tail (cleanup sweep) was never reached.
+    expect(await db.files.get([DELTA_OWNER, "d1-stale"])).toBeDefined();
+  });
+});
+
+describe("terminal-signal contracts (Group E)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("E1: a successful full sync posts exactly one SYNC_COMPLETE and no SYNC_ERROR", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("startPageToken")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ startPageToken: "start-ok" }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ files: [audioFileRow("e1")] }), {
+            status: 200,
+          }),
+        );
+      }),
+    );
+
+    await primeWorkerToken("tok-e1");
+    await performFullSync(DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-ok" }),
+    );
+  });
+
+  it("E2: a successful delta run posts exactly one SYNC_COMPLETE and no SYNC_ERROR", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("e2", "e2.mp3")],
+            newStartPageToken: "start-e2",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-e2");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+    expect(await db.files.get([DELTA_OWNER, "e2"])).toBeDefined();
+  });
+
+  it("E3: a no-change run (same startPageToken, no changes) posts exactly one SYNC_COMPLETE and saves nothing", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-same",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ changes: [], newStartPageToken: "start-same" }),
+            { status: 200 },
+          ),
+        ),
+    );
+    const putSpy = vi.spyOn(db.syncState, "put");
+
+    await primeWorkerToken("tok-e3");
+    await performDeltaSync("start-same", DELTA_OWNER);
+
+    // Previously this run posted NOTHING, leaving the poller waiting forever.
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+    expect(putSpy).not.toHaveBeenCalled();
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-same" }),
+    );
+  });
+
+  it("E4: a second sync while one is in flight still posts SYNC_BUSY once and completes the first", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              changes: [deltaFileChange("e4", "e4.mp3")],
+              newStartPageToken: "start-e4",
+            }),
+            { status: 200 },
+          ),
+        ),
+      ),
+    );
+
+    const first = handleWorkerMessage({
+      data: { type: "sync", token: "tok-e4", userEmail: DELTA_OWNER },
+    } as MessageEvent);
+    const second = handleWorkerMessage({
+      data: { type: "sync", token: "tok-e4", userEmail: DELTA_OWNER },
+    } as MessageEvent);
+    await Promise.all([first, second]);
+
+    expect(postedCount(posted, "SYNC_BUSY")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(await db.files.get([DELTA_OWNER, "e4"])).toBeDefined();
+  });
+
+  it("E5: a sync frame with an empty token still posts SYNC_NO_TOKEN and fetches nothing", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "", userEmail: DELTA_OWNER },
+    } as MessageEvent);
+
+    expect(postedCount(posted, "SYNC_NO_TOKEN")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
