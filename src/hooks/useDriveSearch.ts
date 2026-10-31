@@ -78,9 +78,12 @@ export function useDriveSearch(currentFolderId?: string): {
   // for the hook's mount lifetime and changes ONLY through explicit user
   // clicks (icon toggle / header columns).
 
-  // Query context: recursive mode narrows to the open folder's subtree; at
-  // the virtual root (or without a folder) it degrades to the global root
-  // scope. The worker/engine treat VIRTUAL_ROOT_ID as global.
+  // Query context: recursive mode narrows to the open folder's subtree, which
+  // REQUIRES a real folder id — the engine and the worker wire guard both fail
+  // closed (no hits, no throw) when a recursive frame has none, so a lost
+  // context never silently widens the search. Only VIRTUAL_ROOT_ID is special:
+  // recursive there means every configured root (the synthetic multi-root
+  // container has no subtree of its own).
   const context = useMemo(
     () => ({
       mode: searchMode,

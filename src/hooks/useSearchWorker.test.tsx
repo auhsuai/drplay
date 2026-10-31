@@ -5,6 +5,7 @@ import { act, renderHook } from "@testing-library/react";
 import { db, type DriveFile } from "../db/db";
 import { useAuthStore } from "../store/authStore";
 import { captureError } from "../utils/errorLog";
+import { SYNC_EVENT_NAMES } from "../utils/proSyncManager";
 import { resetSearchWorkerState } from "../search/search.worker";
 import type {
   SearchWorkerRequest,
@@ -428,6 +429,70 @@ describe("useSearchWorker", () => {
       await flush(250);
       expect(responses).toEqual([{ type: "results", requestId: 1, hits: [] }]);
       expect(WorkerCtor).toHaveBeenCalledTimes(1);
+      executor.terminate();
+    });
+
+    it("20b. a failing recreate answers the pending QUERY with one correlated error (never dropped silently)", () => {
+      const { instances, WorkerCtor } = installFakeWorker();
+      const executor = createSearchExecutor();
+      const responses: SearchWorkerResponse[] = [];
+      executor.onResponse((r) => responses.push(r));
+      WorkerCtor.mockImplementation(() => {
+        throw new DOMException("bad url", "SyntaxError");
+      });
+      instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+      responses.length = 0; // drop the synthetic crash error
+
+      // dead stays true, so the next post retries the create and fails again.
+      executor.post({
+        type: "query",
+        requestId: 7,
+        query: "x",
+        limit: 10,
+        userEmail: "default",
+        context: DEFAULT_CTX,
+      });
+      expect(responses).toEqual([
+        {
+          type: "error",
+          requestId: 7,
+          message: "worker-recreate-failed",
+        },
+      ]);
+
+      executor.post({
+        type: "query",
+        requestId: 8,
+        query: "x",
+        limit: 10,
+        userEmail: "default",
+        context: DEFAULT_CTX,
+      });
+      // Exactly one correlated error per failed post — no duplicates, no hang.
+      expect(responses).toHaveLength(2);
+      expect(responses[1]).toEqual({
+        type: "error",
+        requestId: 8,
+        message: "worker-recreate-failed",
+      });
+      // initial create + 2 retried creates (the failed one is not cached).
+      expect(WorkerCtor).toHaveBeenCalledTimes(3);
+      executor.terminate();
+    });
+
+    it("20c. a failing recreate drops non-query messages silently (invalidate has no response contract)", () => {
+      const { instances, WorkerCtor } = installFakeWorker();
+      const executor = createSearchExecutor();
+      const responses: SearchWorkerResponse[] = [];
+      executor.onResponse((r) => responses.push(r));
+      WorkerCtor.mockImplementation(() => {
+        throw new DOMException("bad url", "SyntaxError");
+      });
+      instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+      responses.length = 0;
+
+      executor.post({ type: "invalidate" });
+      expect(responses).toEqual([]);
       executor.terminate();
     });
 
@@ -1071,6 +1136,395 @@ describe("useSearchWorker", () => {
     // Obsolete failure: neither clears B's hits nor logs.
     expect(view.result.current.hits).toEqual([hitB]);
     expect(vi.mocked(captureError)).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  // ---- Phase B: live refresh of the ACTIVE query -------------------------
+
+  const INVALIDATE_MS = 300;
+  const DEBOUNCE_MS = 150;
+
+  // The refresh is deliberately TWO windows: the 300ms trailing coalescer
+  // (invalidate lands here) and then the ordinary 150ms dispatch debounce for
+  // the re-posted query. Flush both, plus the inline rebuild round-trip.
+  async function flushRefresh(extra = 0): Promise<void> {
+    await flush(INVALIDATE_MS + 50);
+    await flush(DEBOUNCE_MS + 50 + extra);
+    await flush(200);
+  }
+
+  function postCount(
+    fake: FakeExecutor,
+    type: SearchWorkerRequest["type"],
+  ): number {
+    return fake.posted.filter((m) => m.type === type).length;
+  }
+
+  it("39. a db.files insert refreshes the ACTIVE query without retyping (invalidate then new query)", async () => {
+    await db.files.bulkPut([makeFile("f1", "Anh dong vien.mp3")]);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "anh" },
+    });
+    await flush(250);
+    expect(view.result.current.hits.map((h) => h.id)).toEqual(["f1"]);
+
+    // No rerender, no typing: the write alone must refresh the live results.
+    await db.files.put(makeFile("f2", "Anh yeu em.mp3"));
+    await flushRefresh();
+
+    expect(view.result.current.hits.map((h) => h.id)).toContain("f2");
+    view.unmount();
+  });
+
+  it("40. a db.files delete refreshes too (deleted row disappears from live hits)", async () => {
+    await db.files.bulkPut([
+      makeFile("keep", "Anh keep.mp3"),
+      makeFile("gone", "Anh gone.mp3"),
+    ]);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "anh" },
+    });
+    await flush(250);
+    expect(view.result.current.hits.map((h) => h.id).sort()).toEqual([
+      "gone",
+      "keep",
+    ]);
+
+    await db.files.delete(["default", "gone"]);
+    await flushRefresh();
+
+    expect(view.result.current.hits.map((h) => h.id)).toEqual(["keep"]);
+    view.unmount();
+  });
+
+  it("41. refresh posts invalidate BEFORE the new query (same executor, ordered)", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200); // requestId 1
+    expect(fake.posted.map((m) => m.type)).toEqual(["query"]);
+
+    await db.files.put(makeFile("f-new", "song new.mp3"));
+    await flushRefresh(); // trailing 300ms + query debounce 150ms
+
+    expect(fake.posted.map((m) => m.type)).toEqual([
+      "query",
+      "invalidate",
+      "query",
+    ]);
+    const refreshed = fake.posted[2];
+    const initial = fake.posted[0];
+    expect(refreshed).toMatchObject({ type: "query", query: "song" });
+    if (refreshed?.type !== "query" || initial?.type !== "query")
+      throw new Error("expected a query frame");
+    expect(refreshed.requestId).toBeGreaterThan(initial.requestId);
+    view.unmount();
+  });
+
+  it("42. an empty query refreshes the index but never posts a query", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "" },
+    });
+    await flush(200);
+    expect(fake.posted).toEqual([]);
+
+    await db.files.put(makeFile("f-empty", "whatever.mp3"));
+    await flushRefresh();
+
+    expect(fake.posted.map((m) => m.type)).toEqual(["invalidate"]);
+    view.unmount();
+  });
+
+  it("43. a burst of writes coalesces into ONE invalidate + ONE refresh query", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    expect(postCount(fake, "query")).toBe(1);
+
+    // Writes land inside the trailing window: each one RESETS the timer.
+    for (let i = 0; i < 5; i += 1) {
+      await db.files.put(
+        makeFile(`burst-${String(i)}`, `song ${String(i)}.mp3`),
+      );
+      await flush(50);
+    }
+    await flushRefresh();
+
+    expect(postCount(fake, "invalidate")).toBe(1);
+    expect(postCount(fake, "query")).toBe(2); // initial + exactly one refresh
+    view.unmount();
+  });
+
+  it("44. sync progress invalidates without refreshing; sync complete refreshes once", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    const queriesAfterMount = postCount(fake, "query");
+
+    for (let i = 0; i < 4; i += 1) {
+      act(() => {
+        window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.progress));
+      });
+      await flush(400); // page-by-page progress, each one throttled
+    }
+    // Sync progress must never rebuild+requery (per-page storm guard).
+    expect(postCount(fake, "query")).toBe(queriesAfterMount);
+    expect(postCount(fake, "invalidate")).toBeGreaterThanOrEqual(1);
+
+    const invalidatesBeforeComplete = postCount(fake, "invalidate");
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.complete));
+    });
+    await flushRefresh();
+
+    expect(postCount(fake, "query")).toBe(queriesAfterMount + 1);
+    expect(postCount(fake, "invalidate")).toBeGreaterThanOrEqual(
+      invalidatesBeforeComplete + 1,
+    );
+    view.unmount();
+  });
+
+  it("45. refresh keeps the OLD hits visible while pending and adopts the new response", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const hitOld = makeHit("old", "song-old.mp3", 1);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+    });
+    expect(view.result.current.hits).toEqual([hitOld]);
+
+    await db.files.put(makeFile("f-refresh", "song refresh.mp3"));
+    await flushRefresh(); // refresh query (requestId 2) is in flight
+    // Same identity, same epoch: no flicker to [] while the refresh runs.
+    expect(view.result.current.hits).toEqual([hitOld]);
+
+    const hitFresh = makeHit("fresh", "song-fresh.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 2, hits: [hitFresh] });
+    });
+    expect(view.result.current.hits).toEqual([hitFresh]);
+    view.unmount();
+  });
+
+  it("46. a stale (pre-refresh) response cannot replace the refreshed hits", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200); // requestId 1
+    const hitOld = makeHit("old", "song-old.mp3", 1);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+    });
+
+    await db.files.put(makeFile("f-stale", "song stale.mp3"));
+    await flushRefresh(); // requestId 2 in flight
+    const hitFresh = makeHit("fresh", "song-fresh.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 2, hits: [hitFresh] });
+    });
+    expect(view.result.current.hits).toEqual([hitFresh]);
+
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+    });
+    expect(view.result.current.hits).toEqual([hitFresh]);
+    view.unmount();
+  });
+
+  it("47. a failing refresh clears the hits and logs a warn", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    const hitOld = makeHit("old", "song-old.mp3", 1);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+    });
+    expect(view.result.current.hits).toEqual([hitOld]);
+
+    await db.files.put(makeFile("f-fail", "song fail.mp3"));
+    await flushRefresh(); // requestId 2 in flight
+    act(() => {
+      respond(fake, {
+        type: "error",
+        requestId: 2,
+        message: "rebuild-failed: refresh boom",
+      });
+    });
+    expect(view.result.current.hits).toEqual([]);
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "useSearchWorker",
+        message: expect.stringContaining("refresh boom") as unknown as string,
+      }),
+    );
+    view.unmount();
+  });
+
+  it("48. unmount clears the pending refresh timer and posts nothing afterwards", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    expect(fake.posted).toHaveLength(1);
+
+    await db.files.put(makeFile("f-late", "song late.mp3"));
+    // The trailing refresh timer is armed but not fired yet.
+    view.unmount();
+    await flush(2000);
+    expect(fake.posted).toHaveLength(1);
+    expect(fake.terminateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("49. metadataCache write refreshes live hits without retyping", async () => {
+    await db.files.bulkPut([makeFile("f-meta-live", "01 - raw name.mp3")]);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "new title" },
+    });
+    await flush(250);
+    expect(view.result.current.hits).toEqual([]);
+
+    await db.metadataCache.put({
+      key: "metadata_f-meta-live",
+      entry: {
+        version: 2,
+        data: {
+          title: "New Title",
+          artist: "Some Artist",
+          duration: 0,
+          durationEstimated: true,
+          pictureData: null,
+          pictureDataFull: null,
+          v: 5,
+        },
+        ts: Date.now(),
+      },
+    });
+    await flushRefresh();
+
+    const ids = view.result.current.hits.map((h) => h.id);
+    expect(ids).toEqual(["f-meta-live"]);
+    expect(view.result.current.hits[0]?.title).toBe("New Title");
+    view.unmount();
+  });
+
+  it("50. metadataCache delete refreshes live hits too (evicted title disappears)", async () => {
+    await db.files.bulkPut([makeFile("f-meta-gone", "01 - raw.mp3")]);
+    await db.metadataCache.put({
+      key: "metadata_f-meta-gone",
+      entry: {
+        version: 2,
+        data: {
+          title: "Zed Title",
+          artist: null as unknown as string,
+          duration: 0,
+          durationEstimated: true,
+          pictureData: null,
+          pictureDataFull: null,
+          v: 5,
+        },
+        ts: Date.now(),
+      },
+    });
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "zed title" },
+    });
+    await flush(250);
+    expect(view.result.current.hits.map((h) => h.id)).toEqual(["f-meta-gone"]);
+
+    await db.metadataCache.delete("metadata_f-meta-gone");
+    await flushRefresh();
+
+    expect(view.result.current.hits).toEqual([]);
+    view.unmount();
+  });
+
+  it("51. hook-level: crash + recreate failure surfaces a correlated error (no hang) and recovers", async () => {
+    const { instances, WorkerCtor } = installFakeWorker();
+    setSearchExecutorFactoryForTests(createSearchExecutor);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200); // requestId 1 reaches the fake worker
+    expect(instances).toHaveLength(1);
+    expect(instances[0]?.postMessage).toHaveBeenCalledTimes(1);
+
+    // Worker dies; every recreate throws, so the refresh cannot be delivered.
+    instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+    WorkerCtor.mockImplementation(() => {
+      throw new DOMException("bad url", "SyntaxError");
+    });
+    act(() => {
+      view.rerender({ q: "song live" });
+    });
+    await flush(200);
+
+    // The query was not silently dropped: the hook saw the correlated error,
+    // failed closed and logged it — no pending state, nothing hangs.
+    expect(view.result.current.hits).toEqual([]);
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "useSearchWorker",
+        message: expect.stringContaining(
+          "worker-recreate-failed",
+        ) as unknown as string,
+      }),
+    );
+
+    // Recovery: constructor works again -> the next query lands on a fresh
+    // worker and its results are exposed.
+    const working: FakeWorkerInstance = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage: vi.fn(),
+      terminate: vi.fn(),
+    };
+    WorkerCtor.mockImplementation(function () {
+      instances.push(working);
+      return working;
+    });
+    act(() => {
+      view.rerender({ q: "song recovered" });
+    });
+    await flush(200);
+    expect(working.postMessage).toHaveBeenCalledTimes(1);
+    const frame = working.postMessage.mock.calls[0]?.[0] as
+      SearchWorkerRequest | undefined;
+    expect(frame).toMatchObject({ type: "query", query: "song recovered" });
+    const requestId = frame?.type === "query" ? frame.requestId : -1;
+    act(() => {
+      working.onmessage?.({
+        data: {
+          type: "results",
+          requestId,
+          hits: [makeHit("ok", "song recovered.mp3", 1)],
+        },
+      } as MessageEvent);
+    });
+    expect(view.result.current.hits.map((h) => h.id)).toEqual(["ok"]);
     view.unmount();
   });
 

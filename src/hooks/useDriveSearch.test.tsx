@@ -259,4 +259,54 @@ describe("useDriveSearch phase A (mode/sort/roots)", () => {
     expect(file?.trackInfo?.originalName).toBe("Song.mp3");
     view.unmount();
   });
+
+  it("H9. recursive WITHOUT a folder id is fail-closed: [] and no throw (contract comment)", async () => {
+    // Contract: recursive needs a REAL folder. Only VIRTUAL_ROOT means "all
+    // configured roots"; a missing folder is a lost-context bug, never a
+    // silent widening of the search.
+    await db.files.bulkPut([
+      makeFile(FOLDER_A, "Root A", { isFolder: true, mimeType: FOLDER_MIME }),
+      makeFile("a1", "Song inside.mp3", { parentId: FOLDER_A }),
+    ]);
+    const view = renderHook(() => useDriveSearch(undefined));
+    await settle(view, "song");
+    expect(() => {
+      act(() => {
+        view.result.current.setSearchMode("recursive");
+      });
+    }).not.toThrow();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    expect(view.result.current.searchMode).toBe("recursive");
+    expect(view.result.current.globalSearchItems).toEqual([]);
+    view.unmount();
+  });
+
+  it("H10. an ACTIVE query refreshes on its own when the store changes", async () => {
+    await db.files.bulkPut([
+      makeFile(FOLDER_A, "Root A", { isFolder: true, mimeType: FOLDER_MIME }),
+      makeFile("a1", "Song inside.mp3", { parentId: FOLDER_A }),
+    ]);
+    const view = renderHook(() => useDriveSearch(ROOT_ID));
+    await settle(view, "song");
+    expect(view.result.current.globalSearchItems.map((i) => i.id)).toEqual([
+      "a1",
+    ]);
+
+    // A write while results are on screen must refresh them (no retyping).
+    await db.files.put(makeFile("a2", "Song new.mp3", { parentId: FOLDER_A }));
+    // Two windows: the 300ms trailing coalescer, then the 150ms dispatch
+    // debounce created by the re-render it triggers.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    expect(
+      view.result.current.globalSearchItems.map((i) => i.id).sort(),
+    ).toEqual(["a1", "a2"]);
+    view.unmount();
+  });
 });

@@ -18,6 +18,8 @@ import {
 export type { SearchQueryContext } from "../search/search.worker";
 
 const DEBOUNCE_MS = 150;
+// Trailing window for index invalidation AND for re-running the active query:
+// a burst of writes collapses into one invalidate + one refresh.
 const INVALIDATE_THROTTLE_MS = 300;
 // Identity separator: NUL never occurs in a query/folder/email, so joining
 // the identity parts stays unambiguous.
@@ -124,10 +126,24 @@ function createWorkerExecutor(): SearchExecutor {
       if (dead) {
         // Recreate lazily on the next post: the fresh worker rebuilds its
         // index on the first query. One attempt per post bounds the
-        // crash -> recreate -> crash cycle (a failing create is logged and
-        // leaves dead=true, dropping that post).
+        // crash -> recreate -> crash cycle; a failing create is logged.
         const recreated = createWorkerInstance();
-        if (recreated === null) return;
+        if (recreated === null) {
+          // The post that triggered the recreate is lost with the old worker
+          // (its port queue was already emptied). A dropped QUERY would leave
+          // the hook waiting forever, so answer it with a correlated error the
+          // listeners can match against their in-flight requestId. `dead`
+          // stays true: the next post retries the create (no retry timer).
+          if (msg.type === "query") {
+            for (const listener of listeners)
+              listener({
+                type: "error",
+                requestId: msg.requestId,
+                message: "worker-recreate-failed",
+              });
+          }
+          return;
+        }
         worker = recreated;
         dead = false;
         bind(worker);
@@ -226,6 +242,19 @@ export function useSearchWorker(
   });
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Live-refresh plumbing (Phase B). `refreshTick` re-runs the dispatch effect
+  // for the SAME identity so on-screen results follow the index; the identity
+  // (and therefore the epoch) never changes, so the previous hits stay
+  // visible until the refreshed response lands — no flicker.
+  const [refreshTick, setRefreshTick] = useState(0);
+  // Bumped by the subscription effect, read at refresh time: a refresh must
+  // never fire without an active query (an empty query only needs the stale
+  // flag, the next typed query rebuilds lazily).
+  const queryRef = useRef("");
+  // True between SYNC_PROGRESS and SYNC_COMPLETE. While a pro-sync run is
+  // writing, progress events fire PER PAGE — refreshing there would rebuild
+  // the index once per page. Only the completion event refreshes.
+  const syncActiveRef = useRef(false);
 
   // Reactive owner: the auth store is the live source (written by
   // useAuthProfileSync at the same instant as localStorage). The localStorage
@@ -347,23 +376,49 @@ export function useSearchWorker(
       }
     });
 
-    // Throttled invalidation: burst writes (e.g. a bulk import) collapse into
-    // one stale-flag; the rebuild itself stays lazy (next non-empty query).
-    const scheduleInvalidate = () => {
-      if (invalidateTimerRef.current !== null) return;
+    // Invalidation + live refresh. The index is rebuilt lazily by the worker
+    // on the next query, so every write path only needs to (a) mark it stale
+    // and (b) re-run the ACTIVE query so on-screen results follow the data.
+    //
+    // Two regimes, both coalesced:
+    // - Outside a sync: TRAILING debounce — each event re-arms the window, so
+    //   a burst (bulk import, page of metadata) yields ONE invalidate + ONE
+    //   refresh.
+    // - During a pro-sync run: THROTTLE, invalidate only. Progress fires per
+    //   page; refreshing there would rebuild the index once per page. The
+    //   completion event is what refreshes.
+    //
+    // Order matters: invalidate is posted first, on the same executor, so the
+    // worker sees the stale flag before the refresh query.
+    const promiseRefresh = () => {
+      if (syncActiveRef.current) return;
+      if (queryRef.current.trim() === "") return;
+      setRefreshTick((tick) => tick + 1);
+    };
+    const scheduleInvalidateAndRefresh = () => {
+      if (invalidateTimerRef.current !== null) {
+        // Syncing: keep the timer already armed (throttle).
+        if (syncActiveRef.current) return;
+        clearTimeout(invalidateTimerRef.current);
+      }
       invalidateTimerRef.current = setTimeout(() => {
         invalidateTimerRef.current = null;
         executor.post({ type: "invalidate" });
+        promiseRefresh();
       }, INVALIDATE_THROTTLE_MS);
     };
     const onFilesChanged = () => {
-      scheduleInvalidate();
+      scheduleInvalidateAndRefresh();
     };
     const onProSyncProgress = () => {
-      scheduleInvalidate();
+      // Progress = still syncing: flag it BEFORE scheduling so the shared
+      // timer callback cannot refresh mid-run.
+      syncActiveRef.current = true;
+      scheduleInvalidateAndRefresh();
     };
     const onProSyncComplete = () => {
-      scheduleInvalidate();
+      syncActiveRef.current = false;
+      scheduleInvalidateAndRefresh();
     };
     db.files.hook("creating", onFilesChanged);
     db.files.hook("updating", onFilesChanged);
@@ -464,6 +519,9 @@ export function useSearchWorker(
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
+    // Read at refresh-scheduling time by the subscription effect, so a write
+    // that lands after the query was cleared still only invalidates.
+    queryRef.current = dispatchFrame.query;
     latestRequestIdRef.current += 1;
     if (dispatchFrame.query.trim() === "") return;
     const requestId = latestRequestIdRef.current;
@@ -487,7 +545,11 @@ export function useSearchWorker(
         ...dispatchFrame,
       });
     }, DEBOUNCE_MS);
-  }, [identity, dispatchFrame]);
+    // `refreshTick` re-runs this effect for the SAME identity when the index
+    // changed: new requestId, same identity+epoch — the previous hits stay
+    // exposed until the refreshed response replaces them (no flicker), and the
+    // stale response guard drops any older in-flight answer.
+  }, [identity, dispatchFrame, refreshTick]);
 
   // Render-derived exposure rule: a result is only visible while it belongs to
   // BOTH the identity and the epoch being rendered. Returning to an earlier
