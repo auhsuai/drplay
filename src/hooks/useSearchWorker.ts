@@ -28,6 +28,7 @@ const IDENTITY_SEPARATOR = "\u0000";
 // from the strings the manager dispatches.
 const PRO_SYNC_PROGRESS_EVENT = SYNC_EVENT_NAMES.progress;
 const PRO_SYNC_COMPLETE_EVENT = SYNC_EVENT_NAMES.complete;
+const PRO_SYNC_ERROR_EVENT = SYNC_EVENT_NAMES.error;
 const ERROR_SOURCE = "useSearchWorker";
 
 // A result is only ever exposed for the exact (identity, epoch) lifecycle that
@@ -420,6 +421,15 @@ export function useSearchWorker(
       syncActiveRef.current = false;
       scheduleInvalidateAndRefresh();
     };
+    const onProSyncError = () => {
+      // A sync ERROR is terminal: the run died without its completion event, so
+      // the flag must clear here or `promiseRefresh` stays suppressed forever
+      // and the active results go stale until a remount. The pages that were
+      // written before the failure are real IndexedDB rows, so they still have
+      // to surface: go through the shared throttle path (invalidate + refresh).
+      syncActiveRef.current = false;
+      scheduleInvalidateAndRefresh();
+    };
     db.files.hook("creating", onFilesChanged);
     db.files.hook("updating", onFilesChanged);
     db.files.hook("deleting", onFilesChanged);
@@ -432,6 +442,7 @@ export function useSearchWorker(
     db.metadataCache.hook("deleting", onFilesChanged);
     window.addEventListener(PRO_SYNC_PROGRESS_EVENT, onProSyncProgress);
     window.addEventListener(PRO_SYNC_COMPLETE_EVENT, onProSyncComplete);
+    window.addEventListener(PRO_SYNC_ERROR_EVENT, onProSyncError);
 
     return () => {
       if (debounceTimerRef.current !== null) {
@@ -450,6 +461,7 @@ export function useSearchWorker(
       db.metadataCache.hook("deleting").unsubscribe(onFilesChanged);
       window.removeEventListener(PRO_SYNC_PROGRESS_EVENT, onProSyncProgress);
       window.removeEventListener(PRO_SYNC_COMPLETE_EVENT, onProSyncComplete);
+      window.removeEventListener(PRO_SYNC_ERROR_EVENT, onProSyncError);
       executor.terminate();
       if (executorRef.current === executor) executorRef.current = null;
     };

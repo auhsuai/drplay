@@ -1528,6 +1528,161 @@ describe("useSearchWorker", () => {
     view.unmount();
   });
 
+  // ---- Phase B2: a FAILED pro-sync must release the refresh gate ----------
+
+  // Records the frames posted through a REAL executor (jsdom: the inline one)
+  // and forwards them, so a single test can assert BOTH the invalidate/query
+  // sequence AND the actual search hits. The fake executor cannot do the
+  // latter: it never rebuilds an index, so there is no helper for this yet.
+  function createRecordingExecutor(): FakeExecutor {
+    const delegate = createSearchExecutor();
+    const posted: SearchWorkerRequest[] = [];
+    const responders: Array<(r: SearchWorkerResponse) => void> = [];
+    const terminateSpy = vi.fn();
+    return {
+      posted,
+      responders,
+      terminateSpy,
+      post: (msg) => {
+        posted.push(msg);
+        delegate.post(msg);
+      },
+      onResponse: (listener) => {
+        responders.push(listener);
+        delegate.onResponse(listener);
+      },
+      terminate: () => {
+        terminateSpy();
+        delegate.terminate();
+      },
+    };
+  }
+
+  it("52. a sync ERROR refreshes the active query and surfaces the pages written before the failure", async () => {
+    await db.files.bulkPut([makeFile("f1", "Anh dong vien.mp3")]);
+    const fake = createRecordingExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "anh" },
+    });
+    await flush(250);
+    expect(view.result.current.hits.map((h) => h.id)).toEqual(["f1"]);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.progress));
+    });
+    // A page DID land in IndexedDB before the run died (real write through
+    // fake-indexeddb, i.e. the file's existing Dexie-write simulation).
+    await db.files.put(makeFile("f2", "Anh yeu em.mp3"));
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
+    });
+    await flushRefresh();
+
+    // Error is terminal: the flag clears and the coalesced timer yields exactly
+    // one invalidate + one refresh query (plus the mount query).
+    expect(postCount(fake, "invalidate")).toBe(1);
+    expect(postCount(fake, "query")).toBe(2);
+    expect(fake.posted.map((m) => m.type)).toEqual([
+      "query",
+      "invalidate",
+      "query",
+    ]);
+    // The partial write is visible: the refresh ran against a rebuilt index.
+    expect(view.result.current.hits.map((h) => h.id)).toContain("f2");
+    view.unmount();
+  });
+
+  it("53. the sync-error refresh clears the gate permanently: a later db write still refreshes", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    expect(postCount(fake, "query")).toBe(1);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.progress));
+    });
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
+    });
+    await flushRefresh();
+    expect(postCount(fake, "query")).toBe(2); // the error-triggered refresh
+
+    // If `syncActiveRef` were still true, this write would invalidate only.
+    await db.files.put(makeFile("f-after", "song after.mp3"));
+    await flushRefresh();
+    expect(postCount(fake, "invalidate")).toBe(2);
+    expect(postCount(fake, "query")).toBe(3);
+    view.unmount();
+  });
+
+  it("54. a sync error with an EMPTY query invalidates but never posts a query", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "" },
+    });
+    await flush(200);
+    expect(fake.posted).toEqual([]);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
+    });
+    await flushRefresh();
+
+    // The empty-query guard is unchanged: index goes stale, nothing is queried.
+    expect(fake.posted.map((m) => m.type)).toEqual(["invalidate"]);
+    view.unmount();
+  });
+
+  it("55. progress then error before the timer fires coalesces into ONE invalidate + ONE refresh", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    expect(postCount(fake, "query")).toBe(1);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.progress));
+    });
+    await flush(100); // timer armed by progress, not yet elapsed
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
+    });
+    await flushRefresh();
+
+    // Re-armed (not duplicated): the failure refreshes exactly once.
+    expect(postCount(fake, "invalidate")).toBe(1);
+    expect(postCount(fake, "query")).toBe(2);
+    view.unmount();
+  });
+
+  it("56. after unmount a sync error posts nothing (listener removed, no leaked timer)", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    expect(fake.posted).toHaveLength(1);
+
+    view.unmount();
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_EVENT_NAMES.error));
+    });
+    await flush(2000);
+
+    // Existing unmount tests (15/48) cover leaked TIMERS; this covers the
+    // sync-event LISTENER: an unremoved one would arm a timer post-unmount.
+    expect(fake.posted).toHaveLength(1);
+    expect(fake.terminateSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("38. an obsolete success after B succeeded does not replace B's hits", async () => {
     const fake = createFakeExecutor();
     setSearchExecutorFactoryForTests(() => fake);
