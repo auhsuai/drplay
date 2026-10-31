@@ -92,10 +92,13 @@ export function useDriveSearch(currentFolderId?: string): {
     [searchMode, rootIds, currentFolderId, searchSort],
   );
 
-  // Global search: worker-backed relevance engine. The hook debounces the
-  // query and keeps last-good hits while one is in flight; empty queries
-  // never reach the worker (return []), so the normal listing below wins.
-  // Changing mode/sort re-queries immediately (context is a debounce dep).
+  // Global search: results come from the worker-backed search engine, and
+  // query dispatch is debounced. Hits are exposed only while they belong to
+  // the current search identity AND lifecycle epoch, so any change to query,
+  // scope, account or sorting hides the previous lifecycle's results in the
+  // same render instead of keeping them visible while the next request runs.
+  // Empty queries never reach the worker (return []), so the normal Drive
+  // listing below wins.
   const { hits } = useSearchWorker(searchQuery, GLOBAL_SEARCH_LIMIT, context);
 
   // The engine sorts (folders-first + field/dir) BEFORE slicing to the
