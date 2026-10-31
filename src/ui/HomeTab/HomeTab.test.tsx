@@ -191,6 +191,43 @@ describe("HomeTab Recently Added delta sync", () => {
     expect(mocks.dbFilesToArray).toHaveBeenCalledTimes(1);
   });
 
+  it("1b. sanitizes invalid modifiedTime: viewDate is undefined, not NaN", async () => {
+    mocks.dbFilesToArray.mockResolvedValue([
+      mirrorRow({ id: "bad", name: "Broken.mp3", modifiedTime: "not-a-date" }),
+      mirrorRow({
+        id: "missing",
+        name: "NoDate.mp3",
+        modifiedTime: undefined,
+      }),
+      ...Array.from({ length: 5 }, (_, i) =>
+        mirrorRow({ id: `g-${String(i)}`, name: `Good ${String(i)}.mp3` }),
+      ),
+    ]);
+    render(<HomeTab {...baseProps()} />);
+    await screen.findByText("Good 0.mp3");
+
+    fireEvent.click(screen.getByTestId("premium-card-overlay"));
+
+    expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
+    const firstCall = mocks.FullRecentViewSpy.mock.calls[0];
+    if (firstCall === undefined)
+      throw new Error("expected FullRecentView call");
+    const props = firstCall[0];
+    const byId = new Map(
+      (props.recent as Array<{ id: string; viewDate?: number }>).map((t) => [
+        t.id,
+        t,
+      ]),
+    );
+    const bad = byId.get("bad");
+    const missing = byId.get("missing");
+    if (!bad || !missing) throw new Error("expected sanitized tracks");
+    expect("viewDate" in bad).toBe(true);
+    expect(bad.viewDate).toBeUndefined();
+    expect("viewDate" in missing).toBe(true);
+    expect(missing.viewDate).toBeUndefined();
+  });
+
   it("2. refetches ONLY recently added (not the whole loadData) on drive-files-changed", async () => {
     mocks.dbFilesToArray.mockResolvedValue([
       mirrorRow({ id: "a", name: "First.mp3" }),
@@ -1530,5 +1567,95 @@ describe("HomeTab first-load failure + blocked storage (P2-11-5 / P2-11-6)", () 
       getItemSpy.mockRestore();
       setItemSpy.mockRestore();
     }
+  });
+});
+
+describe("HomeTab home-section playback isolation (viewDate strip)", () => {
+  beforeEach(() => {
+    mocks.getRecentlyPlayedWithDates.mockResolvedValue([
+      {
+        track: {
+          id: "r-1",
+          title: "Recent Track",
+          artist: "Artist",
+          streamUrl: "",
+        },
+        createdAt: 111,
+      },
+      {
+        track: {
+          id: "r-2",
+          title: "Recent Track 2",
+          artist: "Artist",
+          streamUrl: "",
+        },
+        createdAt: 222,
+      },
+    ]);
+    mocks.getHeavyRotation.mockResolvedValue([]);
+    mocks.getRandomDiscoveries.mockResolvedValue([]);
+    mocks.getMostVisitedFolders.mockResolvedValue([]);
+    mocks.dbFilesToArray.mockResolvedValue([
+      mirrorRow({ id: "ra-0", name: "Track 0.mp3" }),
+      mirrorRow({ id: "ra-1", name: "Track 1.mp3" }),
+    ]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("strips viewDate from the played track and every context item in the quick-access (Recent Files) grid", async () => {
+    const onPlay = vi.fn();
+    render(<HomeTab {...baseProps({ onPlay })} />);
+    await screen.findByText("Recent Track");
+
+    const firstCard = screen.getAllByTestId("premium-card")[0];
+    if (firstCard === undefined) throw new Error("expected premium card");
+    fireEvent.click(firstCard);
+
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    const firstCall = onPlay.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected onPlay call");
+    const [played, context] = firstCall as [Track, Track[]];
+    // The view-only timestamp must never cross the playback boundary.
+    expect("viewDate" in played).toBe(false);
+    expect(context.every((item) => !("viewDate" in item))).toBe(true);
+    // Legit Track props survive.
+    expect(played.id).toBe("r-1");
+    expect(played.title).toBe("Recent Track");
+    expect(played.artist).toBe("Artist");
+    expect(played.streamUrl).toBe("");
+    // Queue covers the visible slice in display order.
+    expect(context.map((item) => item.id)).toEqual(["r-1", "r-2"]);
+    // The source RecentItem rows (display/prefetch layer) keep their
+    // viewDate — the strip is a playback boundary, not a data wipe.
+    expect(mocks.prefetchVisibleTracks).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "r-1", viewDate: 111 }),
+        expect.objectContaining({ id: "r-2", viewDate: 222 }),
+      ]),
+    );
+  });
+
+  it("strips viewDate from the played track and every context item in the Recently Added grid", async () => {
+    const onPlay = vi.fn();
+    render(<HomeTab {...baseProps({ onPlay })} />);
+    await screen.findByText("Track 0.mp3");
+
+    const cards = screen.getAllByTestId("premium-card");
+    const firstCard = cards[cards.length - 2];
+    if (firstCard === undefined) throw new Error("expected premium card");
+    fireEvent.click(firstCard);
+
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    const firstCall = onPlay.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected onPlay call");
+    const [played, context] = firstCall as [Track, Track[]];
+    expect("viewDate" in played).toBe(false);
+    expect(context.every((item) => !("viewDate" in item))).toBe(true);
+    expect(played.id).toBe("ra-0");
+    expect(context.map((item) => item.id)).toEqual(["ra-0", "ra-1"]);
   });
 });

@@ -253,6 +253,37 @@ describe("FullRecentView play context (P2-11-3)", () => {
     return card;
   };
 
+  it("strips viewDate from the played track, every queue item, and keeps the source RecentItem intact", () => {
+    const onPlay = vi.fn();
+    const withDate = { ...makeTrack("t1", "Alpha"), viewDate: 12345 };
+    const queueMate = { ...makeTrack("t2", "Bravo"), viewDate: 67890 };
+    const sourceSnapshot = JSON.stringify([withDate, queueMate]);
+    render(
+      <FullRecentView
+        recent={[withDate, queueMate]}
+        onBack={vi.fn()}
+        onPlay={onPlay}
+        token="tok"
+      />,
+    );
+
+    fireEvent.click(findCard("Alpha"));
+
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    const [played, queue] = onPlay.mock.calls[0] as [Track, Track[]];
+    // The view-only field must never cross the playback boundary.
+    expect("viewDate" in played).toBe(false);
+    expect(queue.every((item) => !("viewDate" in item))).toBe(true);
+    // Legit Track props survive the conversion. Queue order follows the
+    // default date-desc sort (queueMate's viewDate is newer, so it leads).
+    expect(played).toEqual(makeTrack("t1", "Alpha"));
+    expect(queue.map((item) => item.id)).toEqual(["t2", "t1"]);
+    // The source RecentItem objects are not mutated.
+    expect(JSON.stringify([withDate, queueMate])).toBe(sourceSnapshot);
+    expect(withDate.viewDate).toBe(12345);
+    expect(queueMate.viewDate).toBe(67890);
+  });
+
   it("builds the queue from the CURRENT filtered list after a search narrows it", () => {
     const onPlay = vi.fn();
     render(

@@ -8,7 +8,11 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { SongCard } from "../../MainContent/components/SongCard";
 import { FileListHeader } from "../../MainContent/components/FileListHeader";
 import { matchesNormalized } from "../../../search/searchEngine";
-import type { RecentItem } from "../recentView";
+import {
+  recentDisplayName,
+  toPlaybackTrack,
+  type RecentItem,
+} from "../recentView";
 
 // Date column follows the My Drive convention (FileListHeader): desc =
 // newest-first, so the default "recent" order opens the Date column active.
@@ -46,20 +50,26 @@ export function sortRecentTracks(
   // already returns tracks newest-first, so desc = array order, asc = reverse.
   const indexByTrack = new Map<RecentItem, number>();
   result.forEach((track, index) => indexByTrack.set(track, index));
-  const hasAnyDate = result.some((track) => track.viewDate !== undefined);
+  // "Has a real date" = a finite epoch-ms number. NaN (an invalid parsed
+  // modifiedTime) counts as date-less — it must not trigger the recency
+  // proxy, which would reorder date-less tracks around it.
+  const hasValidDate = (track: RecentItem): boolean =>
+    typeof track.viewDate === "number" && Number.isFinite(track.viewDate);
+  const hasAnyDate = result.some(hasValidDate);
   // Direction-aware date comparator: dir=1 → oldest-first (asc), dir=-1 →
-  // newest-first (desc). Tracks without a date are pinned to the bottom in
-  // BOTH directions (the pin must NOT flip with the direction, so the
-  // direction multiplies only the date delta — arg-flipping the whole
-  // comparator would float date-less tracks to the top on desc).
+  // newest-first (desc). Tracks without a date (or with an invalid one) are
+  // pinned to the bottom in BOTH directions (the pin must NOT flip with the
+  // direction, so the direction multiplies only the date delta — arg-flipping
+  // the whole comparator would float date-less tracks to the top on desc).
   const byViewDateDir = (dir: 1 | -1) => (a: RecentItem, b: RecentItem) => {
-    const aDate = a.viewDate;
-    const bDate = b.viewDate;
-    // Date-less pairs (and equal dates) keep their relative (filter) order.
-    if (aDate === undefined && bDate === undefined) return 0;
-    if (aDate === undefined) return 1;
-    if (bDate === undefined) return -1;
-    return (aDate - bDate) * dir;
+    const aValid = hasValidDate(a);
+    const bValid = hasValidDate(b);
+    // Date-less/invalid pairs (and equal dates) keep their relative (filter)
+    // order.
+    if (!aValid && !bValid) return 0;
+    if (!aValid) return 1;
+    if (!bValid) return -1;
+    return ((a.viewDate as number) - (b.viewDate as number)) * dir;
   };
   // Recency proxy over the array order: 0 = oldest … N-1 = newest.
   const byRecencyAsc = (a: RecentItem, b: RecentItem) =>
@@ -67,10 +77,16 @@ export function sortRecentTracks(
 
   switch (sortOption) {
     case "name":
-      result.sort((a, b) => a.title.localeCompare(b.title));
+      // Sort by the displayed filename (originalName ?? title), not the ID3
+      // title — what the user reads in the row is what must order the list.
+      result.sort((a, b) =>
+        recentDisplayName(a).localeCompare(recentDisplayName(b)),
+      );
       break;
     case "name desc":
-      result.sort((a, b) => b.title.localeCompare(a.title));
+      result.sort((a, b) =>
+        recentDisplayName(b).localeCompare(recentDisplayName(a)),
+      );
       break;
     case "size":
       result.sort(compareSizeAsc);
@@ -103,6 +119,16 @@ export function sortRecentTracks(
       break;
   }
   return result;
+}
+
+// Only finite epoch-ms values reach the ISO transport — NaN/Infinity would
+// make toISOString throw (RangeError) and crash the whole view render.
+function toModifiedTimeIso(viewDate: number | undefined): string | undefined {
+  if (typeof viewDate !== "number" || !Number.isFinite(viewDate)) {
+    return undefined;
+  }
+  const date = new Date(viewDate);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 export function FullRecentView({
@@ -162,7 +188,9 @@ export function FullRecentView({
     const filtered = recent
       .filter((item) => !removedIds.includes(item.id))
       .filter(
-        (item) => !searchActive || matchesNormalized(item.title, searchQuery),
+        (item) =>
+          !searchActive ||
+          matchesNormalized(recentDisplayName(item), searchQuery),
       );
     return sortRecentTracks(filtered, sortOption);
   }, [recent, searchQuery, sortOption, removedIds]);
@@ -181,7 +209,11 @@ export function FullRecentView({
   const handleCardPlay = useCallback((track: Track) => {
     const { filteredItems: currentItems, onPlay: play } =
       playContextRef.current;
-    play(track, currentItems);
+    // Playback boundary: strip the view-only viewDate from BOTH the selected
+    // track and every queue item — all Recent playback paths funnel through
+    // here, so the timestamp can never leak into the persisted queue or the
+    // verbatim recentTracks/playCounts rows.
+    play(toPlaybackTrack(track), currentItems.map(toPlaybackTrack));
   }, []);
 
   // eslint-disable-next-line react-hooks/incompatible-library -- the react-hooks compiler cannot analyze @tanstack/react-virtual's internals; the options object is a plain data bag and the hook result is used normally below.
@@ -288,10 +320,7 @@ export function FullRecentView({
                 // formatModifiedDate(item.modifiedTime), so the viewDate
                 // (last-played for Recent Files, file mtime for Recently
                 // Added) rides the same field to reach the cell.
-                modifiedTime:
-                  track.viewDate !== undefined
-                    ? new Date(track.viewDate).toISOString()
-                    : undefined,
+                modifiedTime: toModifiedTimeIso(track.viewDate),
               };
               return (
                 <div

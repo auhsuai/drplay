@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Track } from "../../types";
 import type { UserProfile } from "../../types";
 import { Clock, Sparkles, Folder, Repeat, PlusCircle } from "lucide-react";
@@ -8,6 +8,7 @@ import { PremiumGrid } from "./components/PremiumGrid";
 import { FullRecentView } from "./components/FullRecentView";
 import { RecentFolderCard } from "./RecentFolderCard";
 import { useHomeData } from "./useHomeData";
+import { toPlaybackTrack } from "./recentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
 import {
   Skeleton,
@@ -91,6 +92,20 @@ export function HomeTab({
 
   const visibleCount = useResponsiveItems();
 
+  // Playback boundary for the home grids: quickAccess/recentlyAddedItems are
+  // RecentItems (viewDate = last-played / modifiedTime), but PremiumGrid hands
+  // the raw objects to onPlay — the strip must happen HERE (HomeTab owns the
+  // onPlay prop; PremiumGrid/PremiumCard are shared components that also
+  // serve non-Recent items). Same contract as FullRecentView's
+  // handleCardPlay: strip viewDate from BOTH the selected track and every
+  // context item, without mutating the display/prefetch data.
+  const handleHomeSectionPlay = useCallback(
+    (track: Track, contextQueue?: Track[]) => {
+      onPlay(toPlaybackTrack(track), contextQueue?.map(toPlaybackTrack));
+    },
+    [onPlay],
+  );
+
   if (showFullRecent) {
     return (
       <FullRecentView
@@ -166,7 +181,7 @@ export function HomeTab({
           >
             <PremiumGrid
               items={quickAccess}
-              onPlay={onPlay}
+              onPlay={handleHomeSectionPlay}
               token={token}
               isOverlay={(_track, index) =>
                 index === visibleCount - 1 && recent.length > visibleCount
@@ -199,7 +214,7 @@ export function HomeTab({
                 unbounded local history slice. */}
             <PremiumGrid
               items={recentlyAddedItems}
-              onPlay={onPlay}
+              onPlay={handleHomeSectionPlay}
               token={token}
               isOverlay={(_track, index) =>
                 index === visibleCount - 1 &&

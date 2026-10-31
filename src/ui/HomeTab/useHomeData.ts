@@ -202,19 +202,26 @@ export function useHomeData(token: string | null) {
                 return a.id.localeCompare(b.id);
               })
               .slice(0, RECENTLY_ADDED_LIMIT)
-              .map((row) => ({
-                id: row.id,
-                title: row.name,
-                artist: "",
-                streamUrl: "",
-                originalName: row.name,
-                size: row.size,
-                // Real Drive modifiedTime (ISO) as the view date (epoch ms) —
-                // feeds FullRecentView's date column and real-date sorting.
-                viewDate: row.modifiedTime
+              .map((row) => {
+                // Invalid/missing modifiedTime → undefined (NOT NaN): a NaN
+                // viewDate would crash the Date cell transport
+                // (toISOString) and pollute date sorting.
+                const parsed = row.modifiedTime
                   ? new Date(row.modifiedTime).getTime()
-                  : undefined,
-              })),
+                  : Number.NaN;
+                return {
+                  id: row.id,
+                  title: row.name,
+                  artist: "",
+                  streamUrl: "",
+                  originalName: row.name,
+                  size: row.size,
+                  // Real Drive modifiedTime (ISO) as the view date (epoch ms) —
+                  // feeds FullRecentView's date column and real-date sorting.
+                  // Invalid → undefined = "no date" (cell renders "—").
+                  viewDate: Number.isFinite(parsed) ? parsed : undefined,
+                };
+              }),
           );
         })
         .catch((err: unknown) => {

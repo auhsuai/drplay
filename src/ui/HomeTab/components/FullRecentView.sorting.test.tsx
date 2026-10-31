@@ -286,6 +286,240 @@ describe("sortRecentTracks", () => {
   });
 });
 
+describe("filename-based name sort and search (recentDisplayName)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Title order (Alpha < Bravo < Charlie) is the REVERSE of filename order
+  // (song_c < song_b < song_a), so any pass proves filename-based sorting.
+  function makeFile(
+    id: string,
+    originalName: string,
+    title: string,
+    viewDate?: number,
+  ): RecentItem {
+    return {
+      id,
+      title,
+      artist: "",
+      streamUrl: "",
+      originalName,
+      viewDate,
+    };
+  }
+
+  it('sorts by originalName A-Z for "name" (extension included)', () => {
+    const input = [
+      makeFile("a", "song_c.mp3", "Alpha"),
+      makeFile("b", "song_b.wav", "Bravo"),
+      makeFile("c", "song_a.flac", "Charlie"),
+    ];
+    expect(sortRecentTracks(input, "name").map((t) => t.id)).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+  });
+
+  it('sorts by originalName Z-A for "name desc"', () => {
+    const input = [
+      makeFile("a", "song_c.mp3", "Alpha"),
+      makeFile("b", "song_b.wav", "Bravo"),
+      makeFile("c", "song_a.flac", "Charlie"),
+    ];
+    expect(sortRecentTracks(input, "name desc").map((t) => t.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("falls back to title when originalName is absent", () => {
+    const input = [
+      { id: "x", title: "Alpha", artist: "", streamUrl: "" },
+      makeFile("a", "song_z.mp3", "Zeta"),
+    ];
+    expect(sortRecentTracks(input, "name").map((t) => t.id)).toEqual([
+      "x",
+      "a",
+    ]);
+  });
+
+  it("falls back to title when originalName is an empty string", () => {
+    const input = [
+      makeFile("x", "", "Alpha"),
+      makeFile("a", "song_z.mp3", "Zeta"),
+    ];
+    expect(sortRecentTracks(input, "name").map((t) => t.id)).toEqual([
+      "x",
+      "a",
+    ]);
+  });
+
+  it("sort order matches the filename displayed in the row (render check)", async () => {
+    const { container } = render(
+      <FullRecentView
+        recent={[
+          makeFile("a", "song_z.mp3", "Alpha"),
+          makeFile("b", "song_a.mp3", "Zeta"),
+        ]}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="token"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Name" }));
+    const ids = Array.from(
+      container.querySelectorAll("[data-testid='song-card']"),
+    ).map((el) => el.getAttribute("data-item-id"));
+    expect(ids).toEqual(["b", "a"]);
+  });
+
+  it("searches by filename with extension", async () => {
+    render(
+      <FullRecentView
+        recent={[
+          makeFile("a", "song_a.flac", "Alpha"),
+          makeFile("b", "song_b.wav", "Bravo"),
+        ]}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="token"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText("Search..."), ".flac");
+    const ids = screen
+      .getAllByTestId("song-card")
+      .map((el) => el.getAttribute("data-item-id"));
+    expect(ids).toEqual(["a"]);
+  });
+
+  it("searches by filename when it differs from the ID3 title", async () => {
+    render(
+      <FullRecentView
+        recent={[
+          makeFile("a", "Nỗi Buồn Mai.mp3", "Completely Different Tag"),
+          makeFile("b", "other.wav", "Bravo"),
+        ]}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="token"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText("Search..."), "nỗi buồn");
+    const ids = screen
+      .getAllByTestId("song-card")
+      .map((el) => el.getAttribute("data-item-id"));
+    expect(ids).toEqual(["a"]);
+  });
+
+  it("search stays diacritics-insensitive on filenames", async () => {
+    render(
+      <FullRecentView
+        recent={[
+          makeFile("a", "Nỗi Buồn Mai.mp3", "Tag"),
+          makeFile("b", "other.wav", "Bravo"),
+        ]}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="token"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText("Search..."), "noi buon");
+    const ids = screen
+      .getAllByTestId("song-card")
+      .map((el) => el.getAttribute("data-item-id"));
+    expect(ids).toEqual(["a"]);
+  });
+
+  it("keeps relative order for duplicate filenames", () => {
+    const input = [
+      makeFile("x1", "same.mp3", "One"),
+      makeFile("m", "middle.wav", "Mid"),
+      makeFile("x3", "same.mp3", "Two"),
+    ];
+    const out = sortRecentTracks(input, "name").map((t) => t.id);
+    expect(out.indexOf("x1")).toBeLessThan(out.indexOf("x3"));
+  });
+});
+
+describe("invalid viewDate handling (NaN/invalid = missing)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  // NaN viewDate = the invalid-string modifiedTime leak from useHomeData
+  // (pre-B3). Every behavior below treats it exactly like "no date".
+  const withNan = (id: string, title: string): RecentItem => ({
+    id,
+    title,
+    artist: "",
+    streamUrl: "",
+    viewDate: Number.NaN,
+  });
+
+  it("treats NaN like a missing date when sorting (both directions)", () => {
+    const input = [
+      withNan("nan", "Broken"),
+      makeDated("new", "Newest", 300),
+      makeDated("old", "Oldest", 100),
+      makeDated("none", "No Date"),
+    ];
+    const asc = sortRecentTracks(input, "modifiedTime").map((t) => t.id);
+    expect(asc.slice(0, 2)).toEqual(["old", "new"]);
+    expect(asc.slice(2).sort()).toEqual(["nan", "none"]);
+    const desc = sortRecentTracks(input, "modifiedTime desc").map((t) => t.id);
+    expect(desc.slice(0, 2)).toEqual(["new", "old"]);
+    expect(desc.slice(2).sort()).toEqual(["nan", "none"]);
+  });
+
+  it("all-invalid dates fall back to the recency proxy (valid-only hasAnyDate)", () => {
+    const input = [withNan("n1", "One"), withNan("n2", "Two")];
+    // No VALID date anywhere → the array-order recency proxy applies
+    // (desc = newest-first proxy = array order; asc = its reverse) — the
+    // same fallback as tracks with a missing date, not a crash.
+    const desc = sortRecentTracks(input, "modifiedTime desc").map((t) => t.id);
+    expect(desc).toEqual(["n1", "n2"]);
+    const asc = sortRecentTracks(input, "modifiedTime").map((t) => t.id);
+    expect(asc).toEqual(["n2", "n1"]);
+  });
+
+  it("invalid dates pin to the bottom alongside date-less ones when valid dates exist", () => {
+    const input = [
+      withNan("nan", "Broken"),
+      makeDated("none", "No Date"),
+      makeDated("new", "Newest", 300),
+    ];
+    const desc = sortRecentTracks(input, "modifiedTime desc").map((t) => t.id);
+    expect(desc[0]).toBe("new");
+    expect(desc.slice(1).sort()).toEqual(["nan", "none"]);
+    const asc = sortRecentTracks(input, "modifiedTime").map((t) => t.id);
+    expect(asc[0]).toBe("new");
+    expect(asc.slice(1).sort()).toEqual(["nan", "none"]);
+  });
+
+  it("renders NaN/undefined viewDate rows without crashing; Date cell shows em-dash", () => {
+    render(
+      <FullRecentView
+        recent={[withNan("n1", "Broken"), makeDated("n2", "No Date")]}
+        onBack={vi.fn()}
+        onPlay={vi.fn()}
+        token="token"
+      />,
+    );
+    expect(screen.getAllByTestId("song-card")).toHaveLength(2);
+    const dateCells = screen
+      .getAllByTestId("card-date")
+      .map((el) => el.textContent);
+    expect(dateCells).toEqual(["—", "—"]);
+  });
+});
+
 describe("FullRecentView sort UI (FileListHeader columns)", () => {
   afterEach(() => {
     cleanup();
