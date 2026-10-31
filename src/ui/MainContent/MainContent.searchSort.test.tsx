@@ -643,3 +643,85 @@ describe("MainContent Ctrl+D toggles search scope", () => {
     expect(explorer.setSearchMode).not.toHaveBeenCalled();
   });
 });
+
+// Selection mode is scoped to one result set: flipping the search scope there
+// would leave selectedIds pointing at items the next result set no longer
+// shows, so a follow-up bulk delete/move would address invisible ids. The
+// chord is swallowed (no bookmark dialog) but the scope must not move.
+describe("MainContent Ctrl+D stands down while selection mode is active", () => {
+  beforeEach(() => {
+    baseProps.onSortChange = vi.fn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("Ctrl+D in selection mode: no toggle, browser default prevented, selection untouched", () => {
+    const setSelectedIds = vi.fn();
+    const setIsSelectionMode = vi.fn();
+    const explorer = makeExplorerState({
+      searchQuery: "song",
+      isSelectionMode: true,
+      selectedIds: new Set(["id0"]),
+      setSelectedIds,
+      setIsSelectionMode,
+    });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    const notCancelled = fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+
+    expect(notCancelled).toBe(false);
+    expect(explorer.setSearchMode).not.toHaveBeenCalled();
+    expect(setSelectedIds).not.toHaveBeenCalled();
+    expect(setIsSelectionMode).not.toHaveBeenCalled();
+  });
+
+  it("Cmd+D in selection mode: also a no-op with preventDefault", () => {
+    const explorer = makeExplorerState({
+      searchQuery: "song",
+      isSelectionMode: true,
+      selectedIds: new Set(["id0"]),
+    });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    const notCancelled = fireEvent.keyDown(window, { key: "d", metaKey: true });
+
+    expect(notCancelled).toBe(false);
+    expect(explorer.setSearchMode).not.toHaveBeenCalled();
+  });
+
+  it("selection off (regression): Ctrl+D still toggles the scope", () => {
+    const explorer = makeExplorerState({ searchQuery: "song" });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+
+    fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+
+    expect(explorer.setSearchMode).toHaveBeenCalledWith("recursive");
+  });
+
+  it("selection mode guard also stands down when focus sits on a toolbar button", () => {
+    const explorer = makeExplorerState({
+      searchQuery: "song",
+      isSelectionMode: true,
+      selectedIds: new Set(["id0"]),
+    });
+    useDriveExplorerMock.mockReturnValue(explorer);
+    render(<MainContent {...baseProps} />);
+    // Selection mode replaces the toolbar with the selection bar, so the
+    // focused control there is the exit button (not editable).
+    screen.getByRole("button", { name: "common.exit_selection" }).focus();
+
+    const notCancelled = fireEvent.keyDown(window, {
+      key: "d",
+      ctrlKey: true,
+    });
+
+    expect(notCancelled).toBe(false);
+    expect(explorer.setSearchMode).not.toHaveBeenCalled();
+  });
+});

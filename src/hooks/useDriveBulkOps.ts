@@ -29,10 +29,17 @@ function prepareBulkSelection(selectedIds: Set<string>): string[] | null {
   return ids.length === 0 ? null : ids;
 }
 
+// Ids in the selection that are NOT part of the caller's current filtered
+// result set. An empty array means the whole selection is still addressable.
+function findStaleIds(ids: string[], validIds: ReadonlySet<string>): string[] {
+  return ids.filter((id) => !validIds.has(id));
+}
+
 export function useDriveBulkOps({
   token,
   currentFolderId,
   selectedIds,
+  validIds,
   onRemoveItem,
   onRefresh,
   setSelectedIds,
@@ -41,6 +48,13 @@ export function useDriveBulkOps({
   token: string | null;
   currentFolderId: string;
   selectedIds: Set<string>;
+  /**
+   * Every id in the CURRENT filtered result set (not the page slice). A
+   * selection holding an id outside it is stale — the item left the view via
+   * delta sync, a root/account change or a re-ranked search — so the batch is
+   * rejected wholesale instead of acting on rows the user cannot see.
+   */
+  validIds: ReadonlySet<string>;
   onRemoveItem?: ((id: string) => void) | undefined;
   onRefresh: () => void;
   setSelectedIds: Dispatch<SetStateAction<Set<string>>>;
@@ -60,6 +74,30 @@ export function useDriveBulkOps({
 } {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isBulkOperating, setIsBulkOperating] = useState(false);
+
+  // Boundary validation shared by both bulk handlers. A selection can outlive
+  // the result set that produced it (delta sync, root/account change, a
+  // re-ranked search) even with the explorer's content-based reset key — the
+  // ids are a state snapshot and the batch runs in the background. Acting on
+  // a stale id would delete/move an invisible file, and acting on only the
+  // still-visible half would silently drop the rest, so the WHOLE batch is
+  // rejected. Returns true when the caller must abort.
+  const rejectStaleSelection = (
+    ids: string[],
+    operation: "bulk-delete" | "bulk-move",
+  ): boolean => {
+    const stale = findStaleIds(ids, validIds);
+    if (stale.length === 0) return false;
+    void captureError({
+      level: "warn",
+      source: "useDriveBulkOps",
+      message: `bulk-stale-selection:${operation} count=${String(stale.length)}`,
+    });
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
+    showErrorToast(t("drive.selection_expired"));
+    return true;
+  };
 
   const handleCreateFolder = async (
     folderName: string,
@@ -137,6 +175,7 @@ export function useDriveBulkOps({
 
     const itemsToDelete = prepareBulkSelection(selectedIds);
     if (itemsToDelete === null) return;
+    if (rejectStaleSelection(itemsToDelete, "bulk-delete")) return;
 
     setSelectedIds(new Set());
     setIsSelectionMode(false);
@@ -232,6 +271,7 @@ export function useDriveBulkOps({
 
     const itemsToMove = prepareBulkSelection(selectedIds);
     if (itemsToMove === null) return;
+    if (rejectStaleSelection(itemsToMove, "bulk-move")) return;
 
     setSelectedIds(new Set());
     setIsSelectionMode(false);

@@ -92,6 +92,14 @@ export function useMainContentKeyboard({
       if (isEditableTarget(active) && active !== searchInputRef.current) {
         return;
       }
+      // Selection mode is scoped to one result set. Switching the scope there
+      // would leave selectedIds pointing at items the next result set no
+      // longer shows, and a follow-up bulk delete/move would address invisible
+      // ids. Swallow the chord (no browser bookmark dialog) but do not toggle.
+      if (isSelectionMode) {
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
       setSearchMode(searchMode === "global" ? "recursive" : "global");
       return;

@@ -55,20 +55,29 @@ function renderBulkOps(
   ids: string[],
   onRemoveItem?: (id: string) => void,
   currentFolderId = "folder-1",
+  validIds: Set<string> = new Set(ids),
 ) {
   const removeItem = onRemoveItem ?? vi.fn();
+  const setSelectedIds = vi.fn();
+  const setIsSelectionMode = vi.fn();
   const { result } = renderHook(() =>
     useDriveBulkOps({
       token: "tok",
       currentFolderId,
       selectedIds: new Set(ids),
+      validIds,
       onRemoveItem: removeItem,
       onRefresh: vi.fn(),
-      setSelectedIds: vi.fn(),
-      setIsSelectionMode: vi.fn(),
+      setSelectedIds,
+      setIsSelectionMode,
     }),
   );
-  return { result, onRemoveItem: removeItem };
+  return {
+    result,
+    onRemoveItem: removeItem,
+    setSelectedIds,
+    setIsSelectionMode,
+  };
 }
 
 beforeEach(async () => {
@@ -329,5 +338,78 @@ describe("useDriveBulkOps virtual root guard (defensive)", () => {
         }),
       );
     }
+  });
+});
+
+// A selection can outlive the result set it came from (delta sync, root edits,
+// account switch, engine re-rank) even with the explorer's content-based reset
+// key: the ids are snapshotted in state and bulk ops run in the background.
+// Any id that is no longer part of the CURRENT filtered set makes the whole
+// batch unsafe — partially deleting/moving would silently drop the other half.
+describe("useDriveBulkOps stale-selection rejection (Phase A)", () => {
+  it("bulk delete with a stale id: no Drive call, selection cleared, mode exited, toast", async () => {
+    const { result, setSelectedIds, setIsSelectionMode } = renderBulkOps(
+      ["live-1", "gone-1"],
+      undefined,
+      "folder-1",
+      new Set(["live-1"]),
+    );
+
+    await act(async () => {
+      await result.current.handleBulkDelete(vi.fn());
+    });
+
+    expect(deleteFileMock).not.toHaveBeenCalled();
+    expect(setSelectedIds).toHaveBeenCalledWith(new Set());
+    expect(setIsSelectionMode).toHaveBeenCalledWith(false);
+    expect(showErrorToastMock).toHaveBeenCalledWith("drive.selection_expired");
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "useDriveBulkOps",
+        message: "bulk-stale-selection:bulk-delete count=1",
+      }),
+    );
+  });
+
+  it("bulk move with a stale id: no Drive call, selection cleared, mode exited, toast", async () => {
+    const { result, setSelectedIds, setIsSelectionMode } = renderBulkOps(
+      ["live-1", "gone-1"],
+      undefined,
+      "folder-1",
+      new Set(["live-1"]),
+    );
+
+    await act(async () => {
+      await result.current.handleBulkMove("dest-1", vi.fn());
+    });
+
+    expect(moveFileMock).not.toHaveBeenCalled();
+    expect(setSelectedIds).toHaveBeenCalledWith(new Set());
+    expect(setIsSelectionMode).toHaveBeenCalledWith(false);
+    expect(showErrorToastMock).toHaveBeenCalledWith("drive.selection_expired");
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "useDriveBulkOps",
+        message: "bulk-stale-selection:bulk-move count=1",
+      }),
+    );
+  });
+
+  it("valid selection (regression): delete and move still run normally", async () => {
+    const del = renderBulkOps(["ok1", "ok2"]);
+    await act(async () => {
+      await del.result.current.handleBulkDelete(vi.fn());
+    });
+    expect(deleteFileMock).toHaveBeenCalledTimes(2);
+
+    vi.clearAllMocks();
+    const mov = renderBulkOps(["ok3", "ok4"]);
+    await act(async () => {
+      await mov.result.current.handleBulkMove("dest-1", vi.fn());
+    });
+    expect(moveFileMock).toHaveBeenCalledTimes(2);
+    expect(showErrorToastMock).not.toHaveBeenCalled();
   });
 });

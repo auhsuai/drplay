@@ -99,6 +99,7 @@
     "move_item_desc": "Chọn thư mục đích cho",
     "delete_error": "Không chuyển mục vào Thùng rác được. Thử lại.",
     "move_error": "Không di chuyển được mục. Thử lại.",
+    "selection_expired": "Lựa chọn đã lỗi thời. Không có gì bị xóa hoặc di chuyển.",
     "confirm_delete": "Chuyển vào Thùng rác?",
     "delete": "Xóa",
     "select_all": "Chọn tất cả",

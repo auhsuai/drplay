@@ -3,6 +3,9 @@ import { useDriveListing } from "./useDriveListing";
 import { useDriveOnDemandFetch } from "./useDriveOnDemandFetch";
 import { useDriveSearch } from "./useDriveSearch";
 import { useDriveBulkOps } from "./useDriveBulkOps";
+import { useDriveStore } from "../store/driveStore";
+import { useAuthStore } from "../store/authStore";
+import { getCurrentUserEmail } from "../utils/storageKeys";
 import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
 
 export const ITEMS_PER_PAGE = 50;
@@ -64,6 +67,19 @@ export function useDriveExplorer(
     sortOption,
   });
   useDriveOnDemandFetch({ currentFolderId, token });
+
+  // Derived before the bulk-ops hook so it can validate the selection against
+  // the CURRENT result set. Content-based on purpose: a new `items` array with
+  // the same ids must not invalidate a selection during pagination.
+  // Whitespace-only queries count as empty: the worker answers [] for them,
+  // and the listing must stay visible (matches the old full-list behavior for
+  // a " " query, whose token list was empty and matched everything).
+  const filteredItems = searchQuery.trim() !== "" ? globalSearchItems : items;
+  const validIds = useMemo(
+    () => new Set(filteredItems.map((i) => i.id)),
+    [filteredItems],
+  );
+
   const {
     isCreatingFolder,
     isBulkOperating,
@@ -74,46 +90,84 @@ export function useDriveExplorer(
     token,
     currentFolderId,
     selectedIds,
+    validIds,
     onRemoveItem,
     onRefresh,
     setSelectedIds,
     setIsSelectionMode,
   });
 
-  // Reset page when folder, search, or sort changes — and reset search on
-  // folder change. Done during render (React 19 "adjusting state when props
-  // change" pattern) instead of in an effect, which would cascade renders.
+  // Reset page when anything that changes the RESULT SET changes — folder,
+  // query, listing sort, search mode, configured roots, account or search
+  // sort — and reset search on folder change. All fields are content-based
+  // values (ids joined, field|dir), never object references, so an identical
+  // re-render does not reset. Done during render (React 19 "adjusting state
+  // when props change" pattern) instead of in an effect, which would cascade
+  // renders.
+  const rootFolders = useDriveStore((s) => s.rootFolders);
+  const rootsKey = useMemo(
+    () =>
+      rootFolders
+        .map((r) => r.id)
+        .sort()
+        .join("|"),
+    [rootFolders],
+  );
+  // Reactive owner (same source as useSearchWorker): the auth store is live,
+  // localStorage is only the pre-hydration fallback.
+  const storeEmail = useAuthStore((s) => s.userProfile?.email ?? "");
+  const accountEmail = storeEmail !== "" ? storeEmail : getCurrentUserEmail();
+  const searchSortKey = `${searchSort.field}|${searchSort.dir}`;
+
   const [prevResetKey, setPrevResetKey] = useState<{
     folder: string;
     search: string;
     sort: string;
-  }>({ folder: currentFolderId, search: searchQuery, sort: sortOption });
+    mode: string;
+    roots: string;
+    account: string;
+    searchSort: string;
+  }>({
+    folder: currentFolderId,
+    search: searchQuery,
+    sort: sortOption,
+    mode: searchMode,
+    roots: rootsKey,
+    account: accountEmail,
+    searchSort: searchSortKey,
+  });
   if (
     prevResetKey.folder !== currentFolderId ||
     prevResetKey.search !== searchQuery ||
-    prevResetKey.sort !== sortOption
+    prevResetKey.sort !== sortOption ||
+    prevResetKey.mode !== searchMode ||
+    prevResetKey.roots !== rootsKey ||
+    prevResetKey.account !== accountEmail ||
+    prevResetKey.searchSort !== searchSortKey
   ) {
     setPrevResetKey({
       folder: currentFolderId,
       search: searchQuery,
       sort: sortOption,
+      mode: searchMode,
+      roots: rootsKey,
+      account: accountEmail,
+      searchSort: searchSortKey,
     });
     if (prevResetKey.folder !== currentFolderId) {
       setSearchQuery("");
     }
     setCurrentPage(1);
-    // Selection is folder-scoped UI state: bulk ops run on raw selectedIds
-    // with no per-folder validation, so a stale set surviving navigation would
-    // delete/move folder A's files while the user views folder B. Clear it on
-    // every reset trigger (folder/search/sort), same key as the page reset.
+    // Selection is scoped to the result set that produced it: bulk ops run on
+    // raw selectedIds, so a stale set surviving a scope change would
+    // delete/move items that are no longer visible. Clear it on every reset
+    // trigger, same key as the page reset. Preferences (searchMode,
+    // searchSort, sortOption) are deliberately NOT reset — only the selection
+    // and the page position are.
     setSelectedIds(new Set());
     setIsSelectionMode(false);
   }
 
-  // Whitespace-only queries count as empty: the worker answers [] for them,
-  // and the listing must stay visible (matches the old full-list behavior for
-  // a " " query, whose token list was empty and matched everything).
-  const filteredItems = searchQuery.trim() !== "" ? globalSearchItems : items;
   const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);
 
   // Clamp when the list shrinks below the current page (e.g. bulk delete

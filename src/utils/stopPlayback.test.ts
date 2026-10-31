@@ -143,6 +143,7 @@ describe("useDriveBulkOps.handleBulkDelete with stopPlayback", () => {
         token: "tok",
         currentFolderId: "folder-1",
         selectedIds: new Set(selectedIds),
+        validIds: new Set(selectedIds),
         onRemoveItem,
         onRefresh: vi.fn(),
         setSelectedIds: vi.fn(),

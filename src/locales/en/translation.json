@@ -99,6 +99,7 @@
     "move_item_desc": "Choose a destination for",
     "delete_error": "Couldn't move the item to Trash. Try again.",
     "move_error": "Couldn't move the item. Try again.",
+    "selection_expired": "Your selection is out of date. Nothing was deleted or moved.",
     "confirm_delete": "Move to Trash?",
     "delete": "Delete",
     "select_all": "Select all",
