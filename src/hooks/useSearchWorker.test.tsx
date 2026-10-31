@@ -290,7 +290,7 @@ describe("useSearchWorker", () => {
     expect(fake.posted).toHaveLength(0);
   });
 
-  it("16. error response logs via captureError and keeps last-good hits", async () => {
+  it("16. error response for the current request clears the hits and logs", async () => {
     const fake = createFakeExecutor();
     setSearchExecutorFactoryForTests(() => fake);
     const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
@@ -310,7 +310,9 @@ describe("useSearchWorker", () => {
         message: "rebuild-failed: index boom",
       });
     });
-    expect(view.result.current.hits).toEqual([hitA]); // last-good kept
+    // A failed current request exposes NO hits: the previous ones do not prove
+    // anything about the query that just failed.
+    expect(view.result.current.hits).toEqual([]);
     expect(vi.mocked(captureError)).toHaveBeenCalledWith(
       expect.objectContaining({ level: "warn", source: "useSearchWorker" }),
     );
@@ -867,5 +869,237 @@ describe("useSearchWorker", () => {
     expect(view2.result.current.hits).toEqual([]);
     view.unmount();
     view2.unmount();
+  });
+
+  // ---- Result lifecycle: no resurrection, failure clears (Phase 2) --------
+
+  it("33. clear then retype the SAME query: old hits never resurrect", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200); // requestId 1 sent
+    const hitA = makeHit("a", "song-a.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitA] });
+    });
+    expect(view.result.current.hits).toEqual([hitA]);
+
+    act(() => {
+      view.rerender({ q: "" });
+    });
+    expect(view.result.current.hits).toEqual([]);
+    await flush(200); // empty query never posts
+    expect(fake.posted).toHaveLength(1);
+
+    act(() => {
+      view.rerender({ q: "song" }); // identical query + scope as the first one
+    });
+    // Same identity string as the stored result, but a NEW epoch: the old
+    // hits must not be exposed while the new request is still pending.
+    expect(view.result.current.hits).toEqual([]);
+    await flush(200); // requestId 3 sent
+    expect(fake.posted).toHaveLength(2);
+
+    const hitB = makeHit("b", "song-b.mp3", 3);
+    act(() => {
+      respond(fake, { type: "results", requestId: 3, hits: [hitB] });
+    });
+    expect(view.result.current.hits).toEqual([hitB]);
+    view.unmount();
+  });
+
+  it("34. global -> recursive -> global: hits stay [] until the returning request resolves", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: { q: "song", ctx: makeContext({ mode: "global" }) },
+    });
+    await flush(200);
+    const hitGlobal = makeHit("g", "global.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitGlobal] });
+    });
+    expect(view.result.current.hits).toEqual([hitGlobal]);
+
+    act(() => {
+      view.rerender({
+        q: "song",
+        ctx: makeContext({ mode: "recursive", currentFolderId: "folder-A" }),
+      });
+    });
+    expect(view.result.current.hits).toEqual([]);
+    await flush(200); // requestId 2 (recursive) sent
+
+    act(() => {
+      view.rerender({ q: "song", ctx: makeContext({ mode: "global" }) });
+    });
+    // Back to the FIRST identity: still [] (epoch moved on), no resurrection.
+    expect(view.result.current.hits).toEqual([]);
+    await flush(200); // requestId 3 (global again) sent
+
+    const hitGlobalNew = makeHit("g2", "global-new.mp3", 4);
+    act(() => {
+      respond(fake, { type: "results", requestId: 3, hits: [hitGlobalNew] });
+    });
+    expect(view.result.current.hits).toEqual([hitGlobalNew]);
+    view.unmount();
+  });
+
+  it("35. context change and return: old hits do not resurrect on return", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q, ctx }) => useSearchWorker(q, 10, ctx), {
+      initialProps: { q: "song", ctx: makeContext({ rootIds: ["root"] }) },
+    });
+    await flush(200);
+    const hitOld = makeHit("old", "old.mp3", 1);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+    });
+    expect(view.result.current.hits).toEqual([hitOld]);
+
+    act(() => {
+      view.rerender({ q: "song", ctx: makeContext({ rootIds: ["other"] }) });
+    });
+    expect(view.result.current.hits).toEqual([]);
+
+    act(() => {
+      view.rerender({ q: "song", ctx: makeContext({ rootIds: ["root"] }) });
+    });
+    expect(view.result.current.hits).toEqual([]);
+    await flush(200);
+    expect(fake.posted).toHaveLength(2);
+
+    const hitFresh = makeHit("fresh", "fresh.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 3, hits: [hitFresh] });
+    });
+    expect(view.result.current.hits).toEqual([hitFresh]);
+    view.unmount();
+  });
+
+  it("36. a failing CURRENT request clears the hits and still logs", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "song" },
+    });
+    await flush(200);
+    const hitOld = makeHit("old", "old.mp3", 1);
+    act(() => {
+      respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+    });
+    expect(view.result.current.hits).toEqual([hitOld]);
+
+    // New query resolves first, THEN the same request fails (e.g. a retried
+    // rebuild): the hits that query produced must not survive its failure.
+    act(() => {
+      view.rerender({ q: "song rebuild" });
+    });
+    await flush(200); // requestId 2 sent
+    const hitB = makeHit("b", "b.mp3", 3);
+    act(() => {
+      respond(fake, { type: "results", requestId: 2, hits: [hitB] });
+    });
+    expect(view.result.current.hits).toEqual([hitB]);
+
+    act(() => {
+      respond(fake, {
+        type: "error",
+        requestId: 2,
+        message: "rebuild-failed: index boom",
+      });
+    });
+    expect(view.result.current.hits).toEqual([]);
+    expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "useSearchWorker",
+        message: expect.stringContaining("index boom") as unknown as string,
+      }),
+    );
+
+    // A requestId-less error (worker crash) is a safe clear as well: the
+    // survivor results prove it is not just "[] because identity changed".
+    act(() => {
+      view.rerender({ q: "song after crash" });
+    });
+    await flush(200); // requestId 3 sent
+    act(() => {
+      respond(fake, {
+        type: "results",
+        requestId: 3,
+        hits: [makeHit("c", "c.mp3", 4)],
+      });
+    });
+    expect(view.result.current.hits).toHaveLength(1);
+    act(() => {
+      respond(fake, { type: "error", message: "worker-crashed" });
+    });
+    expect(view.result.current.hits).toEqual([]);
+    view.unmount();
+  });
+
+  it("37. an obsolete request failing after B succeeded keeps B's hits and logs nothing", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "a" },
+    });
+    await flush(200); // requestId 1 (A) in flight
+    act(() => {
+      view.rerender({ q: "b" });
+    });
+    await flush(200); // requestId 2 (B) in flight
+
+    const hitB = makeHit("b", "b.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 2, hits: [hitB] });
+    });
+    expect(view.result.current.hits).toEqual([hitB]);
+
+    vi.mocked(captureError).mockClear();
+    act(() => {
+      respond(fake, {
+        type: "error",
+        requestId: 1,
+        message: "rebuild-failed: obsolete A",
+      });
+    });
+    // Obsolete failure: neither clears B's hits nor logs.
+    expect(view.result.current.hits).toEqual([hitB]);
+    expect(vi.mocked(captureError)).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("38. an obsolete success after B succeeded does not replace B's hits", async () => {
+    const fake = createFakeExecutor();
+    setSearchExecutorFactoryForTests(() => fake);
+    const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+      initialProps: { q: "a" },
+    });
+    await flush(200); // requestId 1 (A) in flight
+    act(() => {
+      view.rerender({ q: "b" });
+    });
+    await flush(200); // requestId 2 (B) in flight
+
+    const hitB = makeHit("b", "b.mp3", 2);
+    act(() => {
+      respond(fake, { type: "results", requestId: 2, hits: [hitB] });
+    });
+    expect(view.result.current.hits).toEqual([hitB]);
+
+    act(() => {
+      respond(fake, {
+        type: "results",
+        requestId: 1,
+        hits: [makeHit("a", "a.mp3", 1)],
+      });
+    });
+    expect(view.result.current.hits).toEqual([hitB]);
+    view.unmount();
   });
 });

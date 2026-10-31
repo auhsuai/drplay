@@ -28,6 +28,25 @@ const PRO_SYNC_PROGRESS_EVENT = SYNC_EVENT_NAMES.progress;
 const PRO_SYNC_COMPLETE_EVENT = SYNC_EVENT_NAMES.complete;
 const ERROR_SOURCE = "useSearchWorker";
 
+// A result is only ever exposed for the exact (identity, epoch) lifecycle that
+// produced it. The epoch — not just the identity — is what stops a value-based
+// identity from resurrecting old hits when the user returns to a previous
+// query/scope.
+interface StoredResult {
+  identity: string;
+  epoch: number;
+  hits: SearchHit[];
+}
+
+// The lifecycle captured at dispatch time, so a response is bound to the
+// request it answers instead of whatever identity happens to be current when
+// the message lands.
+interface InFlightRequest {
+  requestId: number;
+  identity: string;
+  epoch: number;
+}
+
 // Narrow transport between the hook and the search engine. Worker mode
 // wraps a real Worker; inline mode runs the worker's own message handler
 // in-process (vitest jsdom has no Worker), so both paths share ONE pipeline
@@ -177,16 +196,34 @@ export function useSearchWorker(
   context: SearchQueryContext,
 ): { hits: SearchHit[] } {
   // Request identity = everything a result depends on. Results are only ever
-  // exposed when their identity matches the CURRENT one, so a scope/account/
-  // sort switch hides stale hits in the same render instead of waiting for
-  // the debounce + a round-trip.
-  const [result, setResult] = useState<{
+  // exposed when their identity AND lifecycle epoch match the CURRENT ones, so
+  // a scope/account/sort switch hides stale hits in the same render instead of
+  // waiting for the debounce + a round-trip.
+  //
+  // The epoch is what defeats resurrection: identity is value-based, so
+  // returning to a previous query/scope (clear -> retype, global -> recursive
+  // -> global) rebuilds the SAME identity string. Matching identity alone
+  // would re-expose the old hits; a bumped epoch does not.
+  const [result, setResult] = useState<StoredResult | null>(null);
+  // Lifecycle = the identity currently being rendered plus a monotonic epoch
+  // that moves every time that identity changes. Kept as STATE, not a ref, so
+  // the render can compare it directly (React "adjusting state during render"
+  // pattern, same one SeekBar/useNowPlayingMetadata use) — an effect would be
+  // too late: the previous hits would stay visible for one commit.
+  const [lifecycle, setLifecycle] = useState<{
     identity: string;
-    hits: SearchHit[];
-  } | null>(null);
+    epoch: number;
+  }>({ identity: "", epoch: 0 });
   const executorRef = useRef<SearchExecutor | null>(null);
   const latestRequestIdRef = useRef(0);
-  const inFlightIdentityRef = useRef("");
+  const inFlightRef = useRef<InFlightRequest | null>(null);
+  // Async callbacks (debounce timer, response listener) read the lifecycle
+  // through this ref; it is synced by an effect declared BEFORE the dispatch
+  // effect, so it is always current by the time a response can arrive.
+  const lifecycleRef = useRef<{ identity: string; epoch: number }>({
+    identity: "",
+    epoch: 0,
+  });
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -223,6 +260,20 @@ export function useSearchWorker(
     ],
   );
 
+  // React "adjusting state during render" pattern (same one SeekBar and
+  // useNowPlayingMetadata use). Comparing against the previous identity kept
+  // in STATE (never a ref: refs must not be read during render) moves the
+  // epoch in the SAME render, so the previous hits disappear immediately. The
+  // comparison is against a value that is stable for a given identity, so the
+  // update happens exactly once per identity change — no re-render loop.
+  const isSameLifecycle = lifecycle.identity === identity;
+  const epochForRender = isSameLifecycle
+    ? lifecycle.epoch
+    : lifecycle.epoch + 1;
+  if (!isSameLifecycle) {
+    setLifecycle({ identity, epoch: epochForRender });
+  }
+
   // One executor for the hook's lifetime, plus the freshness subscriptions:
   // main-thread Dexie hooks cover writes from upload/explorer/on-demand
   // fetch, while the pro-sync CustomEvents cover writes the proSync worker
@@ -236,33 +287,62 @@ export function useSearchWorker(
     const executor = executorFactory();
     executorRef.current = executor;
     executor.onResponse((response) => {
-      if (response.type === "results") {
-        // Two layers of staleness protection: the requestId check drops an
-        // older query resolving after a newer one (last-good hits stay until
-        // the newer result lands), and the identity stored at dispatch time
-        // keeps the result bound to the scope/account/sort it was produced
-        // for — a mismatched identity is never exposed (see `hits` below).
-        if (response.requestId !== latestRequestIdRef.current) return;
+      // Accept a response ONLY when it answers the newest dispatched request.
+      // Everything else is obsolete: an older query resolving late must not
+      // overwrite (or, for errors, clear) the newer request's result.
+      if (
+        response.type === "results" &&
+        response.requestId === latestRequestIdRef.current
+      ) {
+        const inFlight = inFlightRef.current;
+        if (inFlight === null) return; // no query was ever dispatched
+        // Bind the hits to the lifecycle captured at dispatch time: even a
+        // newest-id response is only exposed for the identity+epoch it was
+        // produced for.
         setResult({
-          identity: inFlightIdentityRef.current,
+          identity: inFlight.identity,
+          epoch: inFlight.epoch,
           hits: response.hits,
         });
         return;
       }
       if (response.type === "error") {
-        // Same requestId discipline as results: an error that belongs to an
-        // older identity/account must not be logged against the current one.
-        // Errors with no requestId (worker crash / synthetic) always log.
-        if (
-          response.requestId !== undefined &&
-          response.requestId !== latestRequestIdRef.current
-        ) {
+        const current = latestRequestIdRef.current;
+        if (response.requestId === undefined) {
+          // Worker crash / synthetic error: the request can never complete, so
+          // fail closed — keep the lifecycle it belonged to and drop its hits.
+          const inFlight = inFlightRef.current;
+          void captureError({
+            level: "warn",
+            source: ERROR_SOURCE,
+            message: `search-error: ${response.message}`,
+          });
+          setResult({
+            identity: inFlight?.identity ?? lifecycleRef.current.identity,
+            epoch: inFlight?.epoch ?? lifecycleRef.current.epoch,
+            hits: [],
+          });
           return;
         }
+        if (response.requestId !== current) {
+          // Obsolete request failure: it must neither log nor clear the
+          // result of the request that superseded it.
+          return;
+        }
+        const inFlight = inFlightRef.current;
+        if (inFlight === null) return;
+        // The CURRENT request failed: the previous hits do not prove anything
+        // about this query, so the failure clears them (fail closed) while the
+        // error is still reported.
         void captureError({
           level: "warn",
           source: ERROR_SOURCE,
           message: `search-error: ${response.message}`,
+        });
+        setResult({
+          identity: inFlight.identity,
+          epoch: inFlight.epoch,
+          hits: [],
         });
       }
     });
@@ -361,6 +441,13 @@ export function useSearchWorker(
     ],
   );
 
+  // Keep the async-facing mirror of the lifecycle current. Declared BEFORE the
+  // dispatch effect so it commits first: by the time the debounce timer can
+  // post a frame, the ref already carries the lifecycle of this render.
+  useEffect(() => {
+    lifecycleRef.current = { identity, epoch: epochForRender };
+  }, [identity, epochForRender]);
+
   // Debounced query dispatch. Empty queries short-circuit: nothing reaches
   // the executor, and the returned hits derive to [] (normal listing) — the
   // requestId bump drops any still-in-flight response from a previous query.
@@ -379,24 +466,39 @@ export function useSearchWorker(
     }
     latestRequestIdRef.current += 1;
     if (dispatchFrame.query.trim() === "") return;
-    const scheduledIdentity = identity;
+    const requestId = latestRequestIdRef.current;
+    // Snapshot the lifecycle at dispatch time: the response must be bound to
+    // the identity+epoch it was produced for, not to whatever is current when
+    // the message happens to arrive.
+    const scheduledIdentity = lifecycleRef.current.identity;
+    const scheduledEpoch = lifecycleRef.current.epoch;
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
       const executor = executorRef.current;
       if (executor === null) return; // unmounted before the debounce elapsed
-      inFlightIdentityRef.current = scheduledIdentity;
+      inFlightRef.current = {
+        requestId,
+        identity: scheduledIdentity,
+        epoch: scheduledEpoch,
+      };
       executor.post({
         type: "query",
-        requestId: latestRequestIdRef.current,
+        requestId,
         ...dispatchFrame,
       });
     }, DEBOUNCE_MS);
   }, [identity, dispatchFrame]);
 
-  // Render-derived exposure rule: a result is only visible while it belongs
-  // to the identity being rendered. An identity switch therefore clears the
-  // visible hits in the SAME render — no effect, no debounce, no round-trip.
+  // Render-derived exposure rule: a result is only visible while it belongs to
+  // BOTH the identity and the epoch being rendered. Returning to an earlier
+  // identity (clear -> retype, scope round-trip) yields a fresh epoch, so the
+  // old hits stay hidden until the new request answers — no effect, no
+  // debounce, no round-trip.
   const hits =
-    result !== null && result.identity === identity ? result.hits : [];
+    result !== null &&
+    result.identity === identity &&
+    result.epoch === epochForRender
+      ? result.hits
+      : [];
   return { hits: query.trim() === "" ? [] : hits };
 }

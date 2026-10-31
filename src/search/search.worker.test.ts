@@ -880,6 +880,89 @@ describe("search.worker", () => {
     expect(searchWorkerState.stale).toBe(false);
   });
 
+  it("A2. stale existing index + rebuild blocked on Dexie + second invalidation → intermediate snapshot never published, retry serves latest", async () => {
+    const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
+
+    // 1. Prime a REAL index (f1) so the code under test starts from
+    // index !== null — unlike test 10 (index === null) this exercises the
+    // fast-path predicate being FALSIFIED while an index already exists.
+    await handleSearchWorkerMessage(queryFrame(60, "anh"), deps);
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["f1"]);
+    expect(searchWorkerState.index).not.toBeNull();
+    expect(deps.buildSpy).toHaveBeenCalledTimes(1);
+
+    // 2. Invalidation #1 while the index EXISTS: mark stale so the next query
+    // must not take ensureFreshIndex's fast path.
+    await handleSearchWorkerMessage({ type: "invalidate" }, deps);
+    expect(searchWorkerState.stale).toBe(true);
+
+    // 3+4. The next rebuild's Dexie read parks on gate1. readStarted is
+    // resolved from INSIDE the fake toArray, which is the deterministic proof
+    // that the rebuild is genuinely in flight (no sleep / setTimeout).
+    const gate1 = deferred<DriveFile[]>();
+    const readStarted = deferred<null>();
+    let fileReads = 0;
+    deps.db.files.toArray = () => {
+      fileReads += 1;
+      if (fileReads === 1) {
+        readStarted.resolve(null);
+        return gate1.promise;
+      }
+      // 7. Every later read resolves immediately with the FINAL snapshot.
+      return Promise.resolve([makeFile("f3", "Anh.mp3")]);
+    };
+
+    // 4. Post the query; it rebuilds because the index is stale.
+    const interrupted = handleSearchWorkerMessage(queryFrame(61, "anh"), deps);
+    await readStarted.promise;
+    // Rebuild is parked on the unresolved gate1 at this point.
+    expect(deps.buildSpy).toHaveBeenCalledTimes(1);
+
+    // 5. Invalidation #2 lands INSIDE the blocked DB-read window, i.e. after
+    // the rebuild captured its generation/owner but before it publishes.
+    await handleSearchWorkerMessage({ type: "invalidate" }, deps);
+    expect(searchWorkerState.stale).toBe(true);
+
+    // 6. Release the INTERMEDIATE snapshot (f2): it is already obsolete, so
+    // performRebuild's generation guard must abort it without publishing.
+    gate1.resolve([makeFile("f2", "Anh.mp3")]);
+    await interrupted;
+
+    // 8/9. The retry after the abort reads the FINAL snapshot and serves it.
+    const finalHits = deps.posts.filter(
+      (p): p is Extract<SearchWorkerResponse, { type: "results" }> =>
+        p.type === "results" && p.requestId === 61,
+    );
+    expect(finalHits).toHaveLength(1);
+    expect(finalHits[0]?.hits.map((h) => h.id)).toEqual(["f3"]);
+
+    // The interrupted request itself never exposed the intermediate or the
+    // old data (the earlier prime request legitimately served f1, so the
+    // scope here is requestId 61 only).
+    const interruptedIds = finalHits.flatMap((p) => p.hits.map((h) => h.id));
+    expect(interruptedIds).not.toContain("f2");
+    expect(interruptedIds).not.toContain("f1");
+
+    // One build for the prime + one for the retry: the aborted attempt never
+    // reached deps.build, which is exactly the "intermediate never published"
+    // guarantee.
+    expect(deps.buildSpy).toHaveBeenCalledTimes(2);
+    const builtIds = deps.buildSpy.mock.calls.map((call) =>
+      (call[0] as DriveFile[]).map((f) => f.id),
+    );
+    expect(builtIds).toEqual([["f1"], ["f3"]]);
+
+    // Reads are bounded: the blocked read plus exactly one retry read.
+    expect(fileReads).toBe(2);
+
+    // The published retry index is usable again (no extra rebuild).
+    expect(searchWorkerState.stale).toBe(false);
+    expect(searchWorkerState.indexOwnerEmail).toBe("default");
+    await handleSearchWorkerMessage(queryFrame(62, "anh"), deps);
+    expect(deps.buildSpy).toHaveBeenCalledTimes(2);
+    expect(hitsOf(deps.posts).map((h) => h.id)).toEqual(["f3"]);
+  });
+
   it("B. repeated invalidations never publish obsolete data and bound the retry", async () => {
     const deps = makeDeps({ files: [makeFile("f1", "Anh.mp3")] });
     const gates: Array<(v: DriveFile[]) => void> = [];
