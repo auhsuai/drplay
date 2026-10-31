@@ -1997,6 +1997,196 @@ describe("delta-sync unsupported-change cleanup (Group B)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Delta-sync classification precondition (Group F).
+//
+// DriveFile.mimeType is optional, so a change can arrive WITHOUT the field.
+// Classification (folder/playable/unsupported) needs it: an absent type plus a
+// non-playable name used to fall into the unsupported branch, which DELETES
+// the mirror row — destroying a real entry on metadata that cannot establish
+// the file kind. These tests pin the guard: unusable mimeType => unapplied
+// (no delete, no upsert, no checkpoint advance), while complete metadata keeps
+// the existing delete/upsert behaviour.
+// ---------------------------------------------------------------------------
+describe("delta-sync classification requires a usable mimeType (Group F)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  it("F1: a change with NO mimeType keeps the existing row and blocks the checkpoint", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const seeded = seedTokenRow("f1", "song.mp3", DELTA_OWNER);
+    await db.files.put(seeded);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [
+              {
+                fileId: "f1",
+                file: { id: "f1", name: "song-renamed.txt", parents: ["root"] },
+              },
+            ],
+            newStartPageToken: "start-f1",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-f1");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    // The row was NOT deleted and NOT overwritten.
+    expect(await db.files.get([DELTA_OWNER, "f1"])).toEqual(seeded);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+
+  it("F2: a change with an EMPTY mimeType keeps the existing row and blocks the checkpoint", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const seeded = seedTokenRow("f2", "song.mp3", DELTA_OWNER);
+    await db.files.put(seeded);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("f2", "song-renamed.txt", "")],
+            newStartPageToken: "start-f2",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-f2");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(await db.files.get([DELTA_OWNER, "f2"])).toEqual(seeded);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+
+  it("F3: a WHITESPACE-ONLY mimeType is not usable — row kept, checkpoint blocked", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const seeded = seedTokenRow("f3", "song.mp3", DELTA_OWNER);
+    await db.files.put(seeded);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("f3", "song-renamed.txt", "   ")],
+            newStartPageToken: "start-f3",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-f3");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(await db.files.get([DELTA_OWNER, "f3"])).toEqual(seeded);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-old" }),
+    );
+  });
+
+  it("F4: complete metadata for an unsupported file still removes only the synced account's row", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    await db.files.bulkPut([
+      seedTokenRow("f4", "song.mp3", DELTA_OWNER),
+      seedTokenRow("f4", "song.mp3", OTHER_DELTA_OWNER),
+    ]);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFileChange("f4", "song.txt", "text/plain")],
+            newStartPageToken: "start-f4",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-f4");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    expect(await db.files.get([DELTA_OWNER, "f4"])).toBeUndefined();
+    expect(await db.files.get([OTHER_DELTA_OWNER, "f4"])).toBeDefined();
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-f4" }),
+    );
+  });
+
+  it("F5: a folder change with no media extension is still upserted, never deleted", async () => {
+    await resetSyncTables();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-old",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            changes: [deltaFolderChange("f5", "Album Folder")],
+            newStartPageToken: "start-f5",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    await primeWorkerToken("tok-f5");
+    await performDeltaSync("start-old", DELTA_OWNER);
+
+    const row = await db.files.get([DELTA_OWNER, "f5"]);
+    expect(row).toBeDefined();
+    expect(row?.isFolder).toBe(true);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+  });
+});
+
 describe("checkpoint persistence is part of success (Groups C and D)", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();

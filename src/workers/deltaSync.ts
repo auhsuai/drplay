@@ -156,6 +156,32 @@ export async function performDeltaSync(
               );
               continue;
             }
+            // `mimeType` is optional on DriveFile: a change can arrive without
+            // it. Classification (folder / playable / unsupported) rests on it,
+            // and the unsupported branch DELETES the mirror row — so an absent
+            // type plus a non-playable name would drop a real entry on metadata
+            // that cannot establish the kind. Treat it as unapplied instead.
+            // This is a delta-only precondition: Full Sync's page path keeps
+            // isValidDriveFile/partitionValidFiles untouched (a full page is
+            // authoritative for what exists, a delta must not infer absence).
+            if (
+              typeof file.mimeType !== "string" ||
+              file.mimeType.trim().length === 0
+            ) {
+              changesFailed = true;
+              unappliedChanges += 1;
+              logWorkerError(
+                "proSync/delta-sync",
+                {
+                  phase: "applyChange",
+                  kind: "missing-mime",
+                  fileId: file.id,
+                },
+                new Error("change file has no usable mimeType"),
+                "error",
+              );
+              continue;
+            }
             const isFolder = file.mimeType === FOLDER_MIME;
 
             // Phase A: the mirror holds BOTH kinds (the full-sync query is the

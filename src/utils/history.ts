@@ -75,11 +75,30 @@ export async function recordPlay(track: Track) {
         if (existing) {
           await db.recentTracks.delete([email, track.id]);
         }
+        // Monotonic per-user timestamp: two plays in the same millisecond would
+        // otherwise tie, and the read path's `b.createdAt - a.createdAt` sort
+        // leaves ties in arbitrary IndexedDB order (newest-first broke). The
+        // newest existing row is one cheap reversed index lookup, read inside
+        // this same transaction so concurrent plays cannot both reuse a stamp.
+        // A failing lookup must not lose the play: fall back to the clock only
+        // (same behaviour as before this fix) and log with context.
+        let latestCreatedAt = 0;
+        try {
+          const latest = await db.recentTracks
+            .where("[userEmail+createdAt]")
+            .between([email, Dexie.minKey], [email, Dexie.maxKey])
+            .reverse()
+            .first();
+          latestCreatedAt = latest?.createdAt ?? 0;
+        } catch (e: unknown) {
+          await logHistoryError("recentTracks-latest-failed", e);
+        }
+        const createdAt = Math.max(Date.now(), latestCreatedAt + 1);
         await db.recentTracks.put({
           id: track.id,
           track,
           userEmail: email,
-          createdAt: Date.now(),
+          createdAt,
         });
         await pruneRecentTracks(email);
 
@@ -149,7 +168,9 @@ async function pruneRecentTracks(email: string): Promise<void> {
     const cutoff = await range.offset(excess).first();
     if (!cutoff) return;
     // Exclusive upper bound: rows sharing the cutoff's exact timestamp are as
-    // recent as the cutoff row (incl. the just-written play) and must survive.
+    // recent as the cutoff row and must survive. recordPlay now stamps each
+    // play strictly newer than the user's previous one, so an equal-timestamp
+    // group can only be legacy rows written before that guarantee existed.
     await db.recentTracks
       .where("[userEmail+createdAt]")
       .between([email, Dexie.minKey], [email, cutoff.createdAt], false, false)

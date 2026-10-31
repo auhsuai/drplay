@@ -86,6 +86,36 @@ describe("history (Dexie-backed)", () => {
     expect(recents.map((t) => t.id)).toEqual(["t1", "t2"]);
   });
 
+  it("recordPlay keeps newest first when Date.now() is frozen (strictly increasing createdAt)", async () => {
+    const fixed = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(fixed);
+    try {
+      await recordPlay(TRACK);
+      await recordPlay(TRACK2);
+
+      const rows = await db.recentTracks
+        .where("userEmail")
+        .equals("default")
+        .toArray();
+      expect(rows).toHaveLength(2);
+      const first = rows.find((r) => r.id === TRACK.id);
+      const second = rows.find((r) => r.id === TRACK2.id);
+      if (!first || !second) throw new Error("expected both recent rows");
+      expect(second.createdAt).toBe(fixed + 1);
+      expect(second.createdAt).toBeGreaterThan(first.createdAt);
+
+      expect((await getRecentlyPlayed()).map((t) => t.id)).toEqual([
+        "t2",
+        "t1",
+      ]);
+      expect(
+        (await getRecentlyPlayedWithDates()).map((e) => e.track.id),
+      ).toEqual(["t2", "t1"]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("getRecentlyPlayedWithDates keeps per-track createdAt, newest first, deduped", async () => {
     await recordPlay(TRACK); // t1, createdAt ~ now
     await recordPlay(TRACK2); // t2, newer
