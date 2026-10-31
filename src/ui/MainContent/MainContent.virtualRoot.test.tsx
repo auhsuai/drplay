@@ -54,10 +54,12 @@ vi.mock("./components/SongCard", () => ({
   SongCard: ({
     item,
     hideMenu,
+    hideColumns,
     onOpenFolder,
   }: {
     item: DriveItem;
     hideMenu?: boolean;
+    hideColumns?: boolean;
     onOpenFolder: (id: string, name: string, parentId?: string) => void;
   }) => (
     <button
@@ -65,6 +67,7 @@ vi.mock("./components/SongCard", () => ({
       data-testid="song-card"
       data-item-id={item.id}
       data-hide-menu={String(hideMenu)}
+      data-hide-columns={String(hideColumns)}
       onClick={() => {
         onOpenFolder(item.id, item.title, item.parentId);
       }}
@@ -154,7 +157,7 @@ describe("MainContent virtual root (multi-root)", () => {
     cleanup();
   });
 
-  it("hides New Folder + selection UI and row menus, but keeps root rows clickable", () => {
+  it("hides New Folder + selection UI, row menus and the Date/Size columns, but keeps root rows clickable", () => {
     useDriveExplorerMock.mockReturnValue(
       makeExplorerState(makeRootItems(), true),
     );
@@ -174,6 +177,9 @@ describe("MainContent virtual root (multi-root)", () => {
     expect(cards).toHaveLength(2);
     for (const card of cards) {
       expect(card.getAttribute("data-hide-menu")).toBe("true");
+      // Root rows have no real date/size and the header is hidden here, so the
+      // two "—" column placeholders must be suppressed too.
+      expect(card.getAttribute("data-hide-columns")).toBe("true");
     }
 
     fireEvent.click(cards[0] as HTMLElement);
@@ -194,7 +200,7 @@ describe("MainContent normal folder (virtual root off)", () => {
     cleanup();
   });
 
-  it("keeps the New Folder button and row menus for a real folder", () => {
+  it("keeps the New Folder button and row menus (and columns) for a real folder", () => {
     useDriveExplorerMock.mockReturnValue(
       makeExplorerState(makeFileItems(), false),
     );
@@ -204,5 +210,6 @@ describe("MainContent normal folder (virtual root off)", () => {
     expect(screen.getByText("drive.new_folder")).toBeTruthy();
     const card = screen.getByTestId("song-card");
     expect(card.getAttribute("data-hide-menu")).toBe("false");
+    expect(card.getAttribute("data-hide-columns")).toBe("false");
   });
 });

@@ -11,7 +11,6 @@ import {
 const SONG_CARD_MODULE = "SongCard";
 
 type SongCardMeta = {
-  title: string;
   artist: string | null;
   duration: number;
   durationEstimated: boolean;
@@ -38,12 +37,11 @@ export function useSongCardMetadata({
   clearCover: () => void;
 } {
   // loaded=true only after getTrackMetadata resolves, so the duration span
-  // appears only for real metadata. (Size used to ride along here with a
-  // fallback chain to item.trackInfo?.size — it moved to the dedicated Size
-  // column in SongCard, which reads item.size directly, so this hook no
-  // longer tracks it.)
+  // appears only for real metadata. (Size and title used to ride along here —
+  // size moved to the dedicated Size column in SongCard, and the displayed
+  // name is now the Drive filename (trackInfo.originalName), so the ID3 title
+  // no longer drives the h3 and this hook no longer tracks it.)
   const [meta, setMeta] = useState<SongCardMeta>({
-    title: item.title,
     artist: null,
     duration: 0,
     durationEstimated: false,
@@ -53,7 +51,6 @@ export function useSongCardMetadata({
   const onMetadata = useCallback(
     (metadata: CachedMetadata) => {
       const newMeta: SongCardMeta = {
-        title: metadata.title || item.title,
         artist: metadata.artist || null,
         duration: metadata.duration || 0,
         durationEstimated: metadata.durationEstimated,
@@ -61,7 +58,6 @@ export function useSongCardMetadata({
       };
       setMeta((prev) => {
         if (
-          newMeta.title === prev.title &&
           newMeta.artist === prev.artist &&
           newMeta.duration === prev.duration &&
           newMeta.durationEstimated === prev.durationEstimated &&
@@ -72,7 +68,9 @@ export function useSongCardMetadata({
         return newMeta;
       });
     },
-    [item.title],
+    // Deliberately no [item.title]: nothing in this hook reads the title
+    // anymore, and SongCard's display name comes from the listing item.
+    [],
   );
 
   const onError = useCallback(

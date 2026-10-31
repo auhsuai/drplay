@@ -351,6 +351,7 @@ export const MainContent = React.memo(function MainContent({
               onBulkMoveClick={handleBulkMoveClick}
               onBulkDeleteClick={handleBulkDeleteClick}
               hideRowMenus={isVirtualRoot}
+              hideRowColumns={isVirtualRoot}
             />
 
             <div

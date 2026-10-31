@@ -40,6 +40,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   onBulkMoveClick,
   onBulkDeleteClick,
   hideRowMenus = false,
+  hideRowColumns = false,
   ref,
 }: {
   items: DriveItem[];
@@ -64,6 +65,10 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   // Hides each row's MoreMenu + context menu (virtual root: root rows are
   // navigation targets, never delete/move targets).
   hideRowMenus?: boolean;
+  // Hides each row's Date/Size cells (virtual root: root rows carry no real
+  // date/size, and the column header is hidden there — two "—" placeholders
+  // would float with nothing above them).
+  hideRowColumns?: boolean;
   ref?: React.Ref<VirtualizedSongListHandle>;
 }) {
   const { t } = useTranslation();
@@ -323,6 +328,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
                 onBulkMoveClick={onBulkMoveClick}
                 onBulkDeleteClick={onBulkDeleteClick}
                 hideMenu={hideRowMenus}
+                hideColumns={hideRowColumns}
               />
             </div>
           </div>

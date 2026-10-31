@@ -45,6 +45,11 @@ interface SongCardProps {
   onToggleSelection?: (id: string) => void;
   onEnableSelectionMode?: (id: string) => void;
   hideMenu?: boolean;
+  // Virtual root ("Root Folders") rows are navigation targets with no real
+  // date/size, and the column header is hidden there — so the two "—"
+  // placeholders would float with no header above them. When true, both
+  // column cells are omitted; everything else renders unchanged.
+  hideColumns?: boolean;
   menuVariant?: MoreMenuVariant;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
@@ -145,6 +150,7 @@ export const SongCard = React.memo(
     onToggleSelection,
     onEnableSelectionMode,
     hideMenu,
+    hideColumns = false,
     menuVariant,
     onBulkMoveClick,
     onBulkDeleteClick,
@@ -170,27 +176,38 @@ export const SongCard = React.memo(
     } | null>(null);
     const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isFlashOn || isPlaying ? "text-brand-text!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-text`;
 
+    // Full Drive filename (extension included) for files; folders have no
+    // trackInfo and keep the listing title. The ID3 title from the async
+    // metadata deliberately does NOT replace the displayed name — the user
+    // wants rows to read exactly like the Drive filename (Trash parity).
+    const displayName = item.isFolder
+      ? item.title
+      : (item.trackInfo?.originalName ?? item.title);
+
     const handleCardActivate = () => {
       if (isSelectionMode) {
         onToggleSelection?.(item.id);
         return;
       }
       if (item.isFolder) {
-        // meta.title is the async-resolved display name (not item.title) —
-        // only the parentId plumbing is new here. Two-arg call when the
-        // parent is unknown preserves the drill-down path exactly.
+        // Folders keep the breadcrumb name from the listing; only the
+        // parentId plumbing is special here. Two-arg call when the parent is
+        // unknown preserves the drill-down path exactly.
         if (item.parentId !== undefined) {
-          onOpenFolder(item.id, meta.title, item.parentId);
+          onOpenFolder(item.id, item.title, item.parentId);
         } else {
-          onOpenFolder(item.id, meta.title);
+          onOpenFolder(item.id, item.title);
         }
         return;
       }
       const track = item.trackInfo;
       if (!track) return;
+      // The queue entry keeps the full filename as its display title so the
+      // player bar reads like the Drive row it was started from; ID3 only
+      // fills the artist.
       onPlay({
         ...track,
-        title: meta.title || track.title,
+        title: track.originalName || track.title,
         artist: meta.artist || track.artist,
       });
     };
@@ -238,7 +255,7 @@ export const SongCard = React.memo(
                 <img
                   ref={imgRef}
                   src={coverUrl}
-                  alt={meta.title}
+                  alt={displayName}
                   loading="lazy"
                   decoding="async"
                   width={48}
@@ -258,7 +275,7 @@ export const SongCard = React.memo(
               )}
             </div>
             <div className="overflow-hidden flex-1 flex flex-col justify-center">
-              <h3 className={titleClass}>{meta.title}</h3>
+              <h3 className={titleClass}>{displayName}</h3>
               <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
                 {item.isFolder ? (
                   <span className="truncate">{t("drive.folders")}</span>
@@ -288,17 +305,23 @@ export const SongCard = React.memo(
                 shared column grid (listColumnLayout.ts) so this row and the
                 FileListHeader stay pixel-aligned. Data renders straight from
                 the listing — no metadata-load gate — so every row shows its
-                date/size immediately. */}
-            <span
-              className={`${LIST_DATE_TRACK} text-sm font-medium text-gray-700 dark:text-gray-300 tabular-nums`}
-            >
-              {formatModifiedDate(item.modifiedTime)}
-            </span>
-            <span
-              className={`${LIST_SIZE_TRACK} text-sm font-medium text-gray-700 dark:text-gray-300 tabular-nums`}
-            >
-              {formatSize(item.size)}
-            </span>
+                date/size immediately. Hidden entirely on virtual-root rows
+                (hideColumns), where the header is hidden and the values are
+                meaningless placeholders. */}
+            {!hideColumns && (
+              <>
+                <span
+                  className={`${LIST_DATE_TRACK} text-sm font-medium text-gray-700 dark:text-gray-300 tabular-nums`}
+                >
+                  {formatModifiedDate(item.modifiedTime)}
+                </span>
+                <span
+                  className={`${LIST_SIZE_TRACK} text-sm font-medium text-gray-700 dark:text-gray-300 tabular-nums`}
+                >
+                  {formatSize(item.size)}
+                </span>
+              </>
+            )}
             {!hideMenu && (
               // Same fixed actions box as the header's trailing spacer (36px);
               // the parent gap-4 provides the spacing, so no ml-2 here.
@@ -344,6 +367,10 @@ export const SongCard = React.memo(
       prev.item.parentId === next.item.parentId &&
       prev.item.trackInfo?.id === next.item.trackInfo?.id &&
       prev.item.trackInfo?.queueItemId === next.item.trackInfo?.queueItemId &&
+      // The h3 renders trackInfo.originalName (full filename with extension).
+      // Without this check a rename that keeps the extension-stripped title
+      // identical (e.g. extension case change) would leave the stale name.
+      prev.item.trackInfo?.originalName === next.item.trackInfo?.originalName &&
       prev.item.size === next.item.size &&
       // The Date column renders modifiedTime — without this check a
       // delta-sync update that changes it re-sorts the list but leaves the

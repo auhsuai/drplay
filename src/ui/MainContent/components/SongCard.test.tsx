@@ -97,14 +97,38 @@ describe("SongCard metadata fetch", () => {
       "my song.mp3",
       expect.any(Object),
     );
-    await screen.findByText("Fetched Title");
+    // The displayed name is the full Drive filename (with extension) — the
+    // ID3 title must never replace it.
+    await screen.findByText("my song.mp3");
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".lucide-music")).not.toBeNull();
   });
 
+  it("extension is visible: renders the full originalName, not the stripped title", () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    expect(screen.getByText("my song.mp3")).not.toBeNull();
+    expect(screen.queryByText("My Song")).toBeNull();
+  });
+
+  it("metadata load updates artist/duration but keeps the filename as the title", async () => {
+    render(<SongCard {...baseProps} item={makeItem()} />);
+    // The filename title renders synchronously; waiting on the debounced
+    // metadata fetch proves the no-ID3-takeover assertion runs AFTER load.
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+    // No ID3-title takeover, before or after the async load.
+    expect(screen.queryByText("Fetched Title")).toBeNull();
+    expect(screen.getByText("my song.mp3")).not.toBeNull();
+  });
+
   it("re-fetches metadata on remount (no cross-mount cover cache)", async () => {
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByText("Fetched Title");
+    // The filename renders synchronously, so the async signal here is the
+    // debounced fetch itself (the old await on the ID3 title was the proxy).
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
 
     unmount();
     cleanup();
@@ -113,7 +137,9 @@ describe("SongCard metadata fetch", () => {
     const { container: container2 } = render(
       <SongCard {...baseProps} item={makeItem()} />,
     );
-    await screen.findByText("Fetched Title");
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     expect(container2.querySelector("img")).toBeNull();
   });
@@ -241,7 +267,7 @@ describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
 
   it("renders the cover from a blob URL built with the picture bytes (lazy + async decoding, fixed 48px slot)", async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    const img = await screen.findByAltText("Fetched Title");
+    const img = await screen.findByAltText("my song.mp3");
 
     expect(img.getAttribute("src")).toMatch(/^blob:/);
     expect(img.getAttribute("loading")).toBe("lazy");
@@ -256,7 +282,7 @@ describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
 
   it("drops to the Music icon when the blob image errors (corrupt bytes — no retry chain)", async () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    const img = await screen.findByAltText("Fetched Title");
+    const img = await screen.findByAltText("my song.mp3");
     expect(img.getAttribute("src")).toBe("blob:mock-songcard-cover");
 
     expect(() => fireEvent.error(img)).not.toThrow();
@@ -276,7 +302,8 @@ describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
       pictureFormat: undefined,
     } as never);
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    await screen.findByText("Fetched Title");
+    // Metadata resolution is async; the filename is the title either way.
+    await screen.findByText("my song.mp3");
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".lucide-music")).not.toBeNull();
@@ -294,7 +321,7 @@ describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
       pictureFormat: "image/jpeg",
     } as never);
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    const img = await screen.findByAltText("Fetched Title");
+    const img = await screen.findByAltText("my song.mp3");
 
     expect(img.getAttribute("src")).toMatch(/^blob:/);
     // The blob must be built from the FULL bytes (8), not the thumb (4) —
@@ -318,7 +345,7 @@ describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
       pictureFormat: "image/png",
     } as never);
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
-    const img = await screen.findByAltText("Fetched Title");
+    const img = await screen.findByAltText("my song.mp3");
 
     expect(img.getAttribute("src")).toMatch(/^blob:/);
     const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
@@ -330,7 +357,7 @@ describe("SongCard blob cover URL (picture bytes, no drplay://)", () => {
 
   it("creates exactly one blob URL from the picture bytes and revokes it on unmount", async () => {
     const { unmount } = render(<SongCard {...baseProps} item={makeItem()} />);
-    const img = await screen.findByAltText("Fetched Title");
+    const img = await screen.findByAltText("my song.mp3");
     expect(img.getAttribute("src")).toBe("blob:mock-songcard-cover");
     const blobArg = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
     expect(blobArg).toBeInstanceOf(Blob);
@@ -999,9 +1026,13 @@ describe("SongCard video icon (film, Trash parity)", () => {
         })}
       />,
     );
-    await screen.findByAltText("Fetched Title");
+    await screen.findByAltText("movie.mkv");
     expect(container.querySelector("svg.lucide-film")).toBeNull();
     expect(container.querySelector("img")).not.toBeNull();
+    // The full filename (with .mkv) is the displayed title, and the ID3
+    // title still does not replace it.
+    expect(screen.getByText("movie.mkv")).not.toBeNull();
+    expect(screen.queryByText("Fetched Title")).toBeNull();
   });
 });
 
@@ -1207,5 +1238,76 @@ describe("SongCard size column", () => {
     // The duration-only subtitle must not grow a size segment next to it.
     // ("4 KB" appears exactly once — in the dedicated Size column.)
     expect(screen.getAllByText("4 KB")).toHaveLength(1);
+  });
+});
+
+// Virtual root ("Root Folders") rows are folder navigation targets with no
+// date/size — the header is already hidden there, so the two "—" placeholders
+// would float with no header above them. hideColumns drops both cells and
+// nothing else.
+describe("SongCard hideColumns (virtual root rows)", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({
+      title: "Fetched Title",
+      artist: null,
+      duration: 0,
+      size: 0,
+      pictureData: null,
+      pictureFormat: undefined,
+    } as never);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("omits the date and size cells (no — placeholders) while keeping title and subtitle", () => {
+    const { container } = render(
+      <SongCard
+        {...baseProps}
+        item={makeItem({
+          title: "My Root",
+          isFolder: true,
+          trackInfo: undefined,
+        })}
+        hideColumns
+      />,
+    );
+
+    // Both column tracks are gone.
+    const dateWidth = LIST_DATE_TRACK.split(" ")[1] ?? "";
+    const sizeWidth = LIST_SIZE_TRACK.split(" ")[0] ?? "";
+    const cells = Array.from(container.querySelectorAll("span"));
+    expect(cells.filter((el) => el.className.includes(dateWidth))).toHaveLength(
+      0,
+    );
+    expect(
+      cells.filter(
+        (el) =>
+          el.className.includes(sizeWidth) &&
+          el.className.includes("text-right"),
+      ),
+    ).toHaveLength(0);
+    // No dash placeholders anywhere in the row.
+    expect(screen.queryAllByText("—")).toHaveLength(0);
+
+    // The row still renders its identity + folder subtitle.
+    expect(screen.getByText("My Root")).not.toBeNull();
+    expect(screen.getByText("drive.folders")).not.toBeNull();
+  });
+
+  it("still renders both columns by default (hideColumns omitted)", () => {
+    const { container } = render(
+      <SongCard {...baseProps} item={makeItem({ modifiedTime: undefined })} />,
+    );
+    const dateWidth = LIST_DATE_TRACK.split(" ")[1] ?? "";
+    expect(
+      Array.from(container.querySelectorAll("span")).filter((el) =>
+        el.className.includes(dateWidth),
+      ),
+    ).toHaveLength(1);
+    // Missing date/size → the two placeholders are present again.
+    expect(screen.getAllByText("—")).toHaveLength(2);
   });
 });
