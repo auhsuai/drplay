@@ -16,6 +16,13 @@ import { syncRetryDeps } from "./tokenRefresh";
 import { syncRetry } from "./syncState";
 import { performDeltaSync } from "./deltaSync";
 import { performFullSync } from "./fullSync";
+import { partitionClassifiableFiles } from "./driveMapping";
+import {
+  buildParentToChildren,
+  buildSearchIndex,
+  computeRootMembership,
+  loadRealMetadata,
+} from "../search/searchEngine";
 import { DEFAULT_USER_EMAIL } from "../utils/storageKeys";
 
 vi.mock("../utils/errorLog", async (importOriginal) => ({
@@ -942,6 +949,156 @@ describe("sync storage invariant (no root fallback for unverified parents)", () 
       await db.files.get([FIXTURE_EMAIL, "delta-with-parent"]),
     ).toBeDefined();
     expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+  });
+});
+
+// S-07 (intentional-skip policy): a parentless row is NOT written and is NOT a
+// failure — the checkpoint must still advance and SYNC_COMPLETE must still be
+// posted (pending-retry would livelock on a deterministically parentless file).
+// The fix is telemetry: the batch that skipped rows reports it as its own
+// machine-readable kind instead of leaving "consumed" indistinguishable from
+// "written".
+describe("parentless-skip telemetry (intentional skip, not a failure)", () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await resetSyncTables();
+  });
+
+  function parentlessSkipLogs(): Array<{ message: string }> {
+    return vi
+      .mocked(captureError)
+      .mock.calls.map((call) => call[0])
+      .filter((entry) => entry.message.includes("kind=parentless-skip"));
+  }
+
+  it("delta: emits ONE parentless-skip telemetry line, posts SYNC_COMPLETE and still advances the checkpoint", async () => {
+    await resetSyncTables();
+    vi.mocked(captureError).mockClear();
+    await db.syncState.put({
+      key: START_PAGE_TOKEN_KEY_LOCAL,
+      value: "start-s07",
+    });
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          changes: [
+            {
+              fileId: "s07-orphan",
+              file: {
+                id: "s07-orphan",
+                name: "orphan.mp3",
+                mimeType: "audio/mpeg",
+              },
+            },
+            {
+              fileId: "s07-parented",
+              file: {
+                id: "s07-parented",
+                name: "parented.mp3",
+                mimeType: "audio/mpeg",
+                parents: ["root"],
+              },
+            },
+          ],
+          newStartPageToken: "start-s07-next",
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-s07", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    // The parentless row stays out of db.files (no fake parent, no root
+    // fallback) — and it is deliberately NOT reported as a sync failure.
+    expect(await db.files.get([FIXTURE_EMAIL, "s07-orphan"])).toBeUndefined();
+    expect(await db.files.get([FIXTURE_EMAIL, "s07-parented"])).toBeDefined();
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(posted).not.toContainEqual({ type: "SYNC_ERROR" });
+    // Livelock guard: the cursor still steps past the window.
+    expect(await db.syncState.get(START_PAGE_TOKEN_KEY_LOCAL)).toEqual(
+      expect.objectContaining({ value: "start-s07-next" }),
+    );
+
+    const logs = parentlessSkipLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.message).toContain("skippedParentlessCount=1");
+  });
+
+  it("full-sync: emits ONE parentless-skip telemetry line per page and still completes", async () => {
+    await resetSyncTables();
+    vi.mocked(captureError).mockClear();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-s07-fs" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: "s07-fs-orphan",
+                name: "fs-orphan.mp3",
+                mimeType: "audio/mpeg",
+              },
+              audioFileRow("s07-fs-parented"),
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-s07-fs", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(
+      await db.files.get([FIXTURE_EMAIL, "s07-fs-orphan"]),
+    ).toBeUndefined();
+    expect(
+      await db.files.get([FIXTURE_EMAIL, "s07-fs-parented"]),
+    ).toBeDefined();
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+
+    const logs = parentlessSkipLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.message).toContain("skippedParentlessCount=1");
+  });
+
+  it("emits NO parentless-skip line when every row has a provable parent", async () => {
+    await resetSyncTables();
+    vi.mocked(captureError).mockClear();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startPageToken: "start-s07-ok" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ files: [audioFileRow("s07-ok")] }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleWorkerMessage({
+      data: { type: "sync", token: "tok-s07-ok", userEmail: FIXTURE_EMAIL },
+    } as MessageEvent);
+
+    expect(await db.files.get([FIXTURE_EMAIL, "s07-ok"])).toBeDefined();
+    expect(posted).toContainEqual({ type: "SYNC_COMPLETE" });
+    expect(parentlessSkipLogs()).toHaveLength(0);
   });
 });
 
@@ -2426,5 +2583,214 @@ describe("terminal-signal contracts (Group E)", () => {
     expect(postedCount(posted, "SYNC_COMPLETE")).toBe(0);
     expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S-02: full-sync page classification precondition.
+//
+// fullSync used to build every id-valid page item as
+// `buildOwnerRow(f, f.mimeType === FOLDER_MIME, ownerEmail)`, so a folder whose
+// mimeType is absent / "" / "   " became `isFolder: false` and the completion
+// sweep then deleted it as "unsupported media" (its name has no media
+// extension) — taking the whole subtree out of root membership. A row with no
+// `name` made the sweep predicate itself throw, and the pass-wide catch
+// silently no-opped the ENTIRE sweep.
+//
+// These tests pin the classification precondition, the sweep exclusion for ids
+// seen as unclassifiable in this pass, and the sweep's survival of a malformed
+// name. Unclassifiable rows are never a sync failure (full sync keeps no
+// cursor to protect; failing every pass would unindex the library for good).
+// ---------------------------------------------------------------------------
+describe("full-sync classification precondition (S-02)", () => {
+  const S02_OWNER = "s02-owner@example.com";
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    await resetSyncTables();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Full-sync pass with one files page: the start-page token, then the page.
+  function stubFullSyncPages(files: Array<Record<string, unknown>>): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("startPageToken")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ startPageToken: "start-s02" }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ files }), { status: 200 }),
+        );
+      }),
+    );
+  }
+
+  // The legacy shape a pre-fix pass wrote for a folder whose mimeType was
+  // missing: a non-folder row with a non-playable name and a proven parent.
+  function legacyMalformedFolderRow(id: string, name: string) {
+    return {
+      id,
+      name,
+      mimeType: "audio/x-wavpack",
+      parentId: "root",
+      size: 1,
+      trashed: false,
+      isFolder: false,
+      userEmail: S02_OWNER,
+    };
+  }
+
+  const unclassifiablePageShapes: Array<{
+    label: string;
+    mimeType: string | undefined;
+  }> = [
+    { label: "ABSENT", mimeType: undefined },
+    { label: "EMPTY", mimeType: "" },
+    { label: "WHITESPACE-ONLY", mimeType: "   " },
+  ];
+
+  for (const { label, mimeType } of unclassifiablePageShapes) {
+    it(`keeps a ${label} mimeType folder row out of the sweep and its subtree in root membership`, async () => {
+      await resetSyncTables();
+      const seeded = legacyMalformedFolderRow("s02-folder", "Album");
+      await db.files.put(seeded);
+      const posted = stubSelfWithTokenReply("fresh-token");
+      stubFullSyncPages([
+        {
+          id: "s02-folder",
+          name: "Album",
+          ...(mimeType !== undefined ? { mimeType } : {}),
+          parents: ["root"],
+        },
+        {
+          id: "s02-child",
+          name: "child.flac",
+          mimeType: "audio/flac",
+          parents: ["s02-folder"],
+        },
+      ]);
+
+      await primeWorkerToken("tok-s02");
+      await performFullSync(S02_OWNER);
+
+      // Not written: the stored row is byte-identical to the seeded one (the
+      // page's own mimeType never reaches the DB) ...
+      expect(await db.files.get([S02_OWNER, "s02-folder"])).toEqual(seeded);
+      // ... and not swept: the id was seen as unclassifiable in this pass.
+      const stored = await db.files.get([S02_OWNER, "s02-folder"]);
+      expect(stored).toBeDefined();
+      expect(await db.files.get([S02_OWNER, "s02-child"])).toBeDefined();
+
+      // The subtree stays reachable from the configured root.
+      const rows = await db.files
+        .where("userEmail")
+        .equals(S02_OWNER)
+        .toArray();
+      const index = buildSearchIndex(rows, loadRealMetadata([]));
+      const membership = computeRootMembership(
+        index,
+        buildParentToChildren(index),
+        ["root"],
+      );
+      expect(membership.has("s02-folder")).toBe(true);
+      expect(membership.has("s02-child")).toBe(true);
+
+      // Not a failure, not a silent drop: exactly one completion signal and
+      // one aggregate warn line for the unclassifiable bucket.
+      expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+      expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+      expect(unclassifiableLogCount()).toBe(1);
+    });
+  }
+
+  it("never writes a row for an unclassifiable file with no prior row (absent mimeType)", async () => {
+    await resetSyncTables();
+    const posted = stubSelfWithTokenReply("fresh-token");
+    stubFullSyncPages([
+      { id: "s02-ghost", name: "Ghost Folder", parents: ["root"] },
+    ]);
+
+    await primeWorkerToken("tok-s02-ghost");
+    await performFullSync(S02_OWNER);
+
+    expect(await db.files.get([S02_OWNER, "s02-ghost"])).toBeUndefined();
+    // Nothing was built: no row upserted => no progress event for this page.
+    expect(postedCount(posted, "SYNC_PROGRESS")).toBe(0);
+    expect(unclassifiableLogCount()).toBe(1);
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+  });
+
+  it("does not abort the cleanup sweep when a page file omits its name", async () => {
+    await resetSyncTables();
+    await db.files.bulkPut([
+      {
+        id: "s02-stale",
+        name: "stale.wvx",
+        mimeType: "audio/x-wavpack",
+        parentId: "root",
+        size: 1,
+        trashed: false,
+        isFolder: false,
+        userEmail: S02_OWNER,
+      },
+    ]);
+    const posted = stubSelfWithTokenReply("fresh-token");
+    stubFullSyncPages([
+      { id: "s02-nameless", mimeType: "audio/mpeg", parents: ["root"] },
+      {
+        id: "s02-playable",
+        name: "ok.flac",
+        mimeType: "audio/flac",
+        parents: ["root"],
+      },
+    ]);
+
+    await primeWorkerToken("tok-s02-name");
+    await performFullSync(S02_OWNER);
+
+    // The nameless file was never written ...
+    expect(await db.files.get([S02_OWNER, "s02-nameless"])).toBeUndefined();
+    // ... so the sweep predicate never met a non-string name and STILL ran.
+    expect(await db.files.get([S02_OWNER, "s02-stale"])).toBeUndefined();
+    expect(await db.files.get([S02_OWNER, "s02-playable"])).toBeDefined();
+    expect(postedCount(posted, "SYNC_COMPLETE")).toBe(1);
+    expect(postedCount(posted, "SYNC_ERROR")).toBe(0);
+  });
+
+  function unclassifiableLogCount(): number {
+    return vi
+      .mocked(captureError)
+      .mock.calls.filter((call) => call[0].message.includes("unclassifiable"))
+      .length;
+  }
+
+  it("partitionClassifiableFiles splits classifiable rows, missing ids and unclassifiable rows", () => {
+    const files = [
+      { id: "a", name: "a.mp3", mimeType: "audio/mpeg" },
+      { id: "b", name: "Album", mimeType: "" },
+      { id: "c", name: "Album", mimeType: "   " },
+      { id: "d", name: "Album" },
+      { id: "e", mimeType: "audio/mpeg" },
+      { name: "no-id.mp3", mimeType: "audio/mpeg" },
+    ];
+    const { valid, skippedCount, unclassifiable, unclassifiableIds } =
+      partitionClassifiableFiles(files);
+    expect(skippedCount).toBe(1);
+    expect(valid.map((f) => f.id)).toEqual(["a"]);
+    expect(unclassifiable.map((f) => f.id)).toEqual(["b", "c", "d", "e"]);
+    expect([...unclassifiableIds].sort()).toEqual(["b", "c", "d", "e"]);
+    // No usability claim leaks into the id-only contract.
+    expect(partitionValidFiles(files).valid).toHaveLength(5);
   });
 });

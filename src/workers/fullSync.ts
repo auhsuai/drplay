@@ -5,7 +5,7 @@ import { isPlayableMediaFile } from "../utils/mediaKind";
 import { FOLDER_MIME } from "../utils/driveApi";
 import { parseDriveJson } from "./driveFetch";
 import type { DriveFile as DriveFileItem } from "./driveMapping";
-import { partitionValidFiles } from "./driveMapping";
+import { partitionClassifiableFiles } from "./driveMapping";
 import { logWorkerError, WorkerAbortError } from "./workerError";
 import {
   buildOwnerRow,
@@ -65,6 +65,13 @@ export async function performFullSync(ownerEmail: string) {
   // as complete AND permanently skip the unsynced pages (the next run would
   // delta-sync from the advanced token).
   let filesFailed = false;
+  // Ids seen on this pass whose name/mimeType could not classify the item
+  // (missing id-valid resource metadata). They are never written, and the
+  // cleanup sweep below must not delete them either: a malformed folder whose
+  // row was previously mislabeled `isFolder:false` has no playable extension,
+  // so a sweep that ignored this set would delete a real folder and orphan its
+  // whole subtree (search is fail-closed on orphans).
+  const unclassifiableIds = new Set<string>();
   try {
     do {
       const url = new URL(DRIVE_FILES_URL);
@@ -105,7 +112,17 @@ export async function performFullSync(ownerEmail: string) {
       }>("files", res);
 
       const rawFiles = data.files || [];
-      const { valid: validFiles, skippedCount } = partitionValidFiles(rawFiles);
+      // Classification precondition: a row is only ever built from a resource
+      // whose name AND mimeType are usable. Without this, an absent/blank
+      // mimeType defaults `isFolder` to false and the completion sweep deletes
+      // the row as unsupported media (its name has no playable extension).
+      // `skippedCount` keeps its historical "missing id" meaning so the log
+      // below stays accurate.
+      const {
+        valid: validFiles,
+        skippedCount,
+        unclassifiable,
+      } = partitionClassifiableFiles(rawFiles);
       // A page with unpersistable files is not a failure of this sync pass,
       // but dropping them silently hides data-loss from the user; emit one
       // summary line per page instead of spamming one line per file.
@@ -118,16 +135,58 @@ export async function performFullSync(ownerEmail: string) {
         );
       }
 
+      // One aggregate line per page for the unclassifiable bucket. NOT a
+      // failure: full sync keeps no cursor that could be protected (the next
+      // pass re-lists everything), and failing every pass would leave the
+      // library permanently unindexed. The ids are remembered so the sweep
+      // below never deletes one of these rows.
+      if (unclassifiable.length > 0) {
+        for (const f of unclassifiable) unclassifiableIds.add(f.id);
+        logWorkerError(
+          "proSync/full-sync/files",
+          {
+            kind: "unclassifiable",
+            count: unclassifiable.length,
+            total: rawFiles.length,
+          },
+          new Error(
+            `${String(unclassifiable.length)} file(s) skipped: unusable name/mimeType`,
+          ),
+          "warn",
+        );
+      }
+
       // Canonical-parent rule: parentId is derived INSIDE upsertFileRows
       // from parents[0] of this very response; buildOwnerRow stamps
-      // ownerEmail authoritatively.
+      // ownerEmail authoritatively. Only classifiable resources reach this
+      // map, so `isFolder` is never defaulted from a missing mimeType.
       const filesToUpsert = validFiles.map((f) =>
         buildOwnerRow(f, f.mimeType === FOLDER_MIME, ownerEmail),
       );
 
       if (filesToUpsert.length > 0) {
         try {
-          await upsertFileRows(filesToUpsert, ownerEmail);
+          const { skippedParentlessCount } = await upsertFileRows(
+            filesToUpsert,
+            ownerEmail,
+          );
+          // Telemetry only: a parentless row is an intentional skip (it stays
+          // out of db.files and therefore out of search), never a page failure.
+          // The next pass re-lists with parents, so this self-heals.
+          if (skippedParentlessCount > 0) {
+            logWorkerError(
+              "proSync/full-sync/files",
+              {
+                kind: "parentless-skip",
+                skippedParentlessCount,
+                total: filesToUpsert.length,
+              },
+              new Error(
+                `${String(skippedParentlessCount)} file(s) skipped: no provable parent (not indexed)`,
+              ),
+              "warn",
+            );
+          }
           self.postMessage({ type: "SYNC_PROGRESS" });
         } catch (err) {
           logWorkerError(
@@ -203,11 +262,19 @@ export async function performFullSync(ownerEmail: string) {
   // userEmail are deliberately KEPT (undefined never equals ownerEmail):
   // safer to leave an unknown-owner legacy row than to mass-delete rows whose
   // ownership cannot be proven.
+  //
+  // S-02: ids this pass could not classify are excluded. Such a file has no
+  // trustworthy `isFolder`, so a row already stored for it (e.g. a folder
+  // written before the classification precondition existed) is exempt: its
+  // name has no playable extension, so the sweep would delete a real folder
+  // and orphan its whole subtree. A cleanup failure must not fake a successful
+  // sweep — the catch below still logs it (unchanged).
   try {
     await db.files
       .filter(
         (f) =>
           f.userEmail === ownerEmail &&
+          !unclassifiableIds.has(f.id) &&
           !f.isFolder &&
           !isPlayableMediaFile(f.name),
       )

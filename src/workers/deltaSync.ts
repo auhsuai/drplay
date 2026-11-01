@@ -27,6 +27,14 @@ export async function performDeltaSync(
   // Files skipped because they lack a usable id, accumulated across all pages
   // of this delta run and reported as one summary line at the end.
   let skippedDeltaFiles = 0;
+  // Changes whose row was DELIBERATELY not written because no source proved its
+  // parent (see fileRows.canonicalParent — no fake parent, no root fallback).
+  // This is an intentional skip, NOT a failure: it must not set changesFailed,
+  // because a parentless change is deterministically parentless, so replaying
+  // the window would re-deliver the same file and the cursor would never
+  // advance (a permanent delta stall). It IS reported, once per run, so a
+  // consumed-but-unwritten change is never invisible.
+  let skippedParentlessChanges = 0;
   // Set when at least one change of this run could NOT be applied to the
   // mirror (malformed removal, file missing a usable name, or a Dexie
   // failure). The cursor must never advance past such a change: a failed run
@@ -193,10 +201,13 @@ export async function performDeltaSync(
               // Per-change helper call keeps the one-bad-change isolation of
               // the previous per-change put (a batched page-wide upsert would
               // let one poisoned row abort its valid siblings).
-              await upsertFileRows(
+              // The result is inspected only for telemetry: the change IS
+              // consumed either way, so hasValidChanges stays true below.
+              const { skippedParentlessCount } = await upsertFileRows(
                 [buildOwnerRow(file, isFolder, ownerEmail)],
                 ownerEmail,
               );
+              skippedParentlessChanges += skippedParentlessCount;
               hasValidChanges = true;
             } else {
               // Unsupported (non-folder, non-playable) — e.g. an mp3 renamed
@@ -242,6 +253,24 @@ export async function performDeltaSync(
         "proSync/delta-sync/changes",
         { kind: "skip", skippedCount: skippedDeltaFiles },
         new Error(`${String(skippedDeltaFiles)} file(s) skipped: missing id`),
+        "warn",
+      );
+    }
+
+    // One aggregate line per run for the intentional parentless skip. Level
+    // warn, not error: the run SUCCEEDS (checkpoint below still advances and
+    // SYNC_COMPLETE is still posted) — the marker exists so "consumed" can
+    // never be read as "indexed". Counts only, no ids or tokens.
+    if (skippedParentlessChanges > 0) {
+      logWorkerError(
+        "proSync/delta-sync/changes",
+        {
+          kind: "parentless-skip",
+          skippedParentlessCount: skippedParentlessChanges,
+        },
+        new Error(
+          `${String(skippedParentlessChanges)} change(s) skipped: no provable parent (not indexed)`,
+        ),
         "warn",
       );
     }

@@ -26,6 +26,21 @@ export type UpsertableFileRow = Omit<DriveFile, "parentId"> & {
   parents?: readonly string[];
 };
 
+/**
+ * Machine-readable outcome of a write call. A caller that awaits
+ * upsertFileRows can no longer mistake "the change was consumed" for "the row
+ * was written": `skippedParentlessCount` names rows that were deliberately
+ * kept out of `db.files` because no source proved their parent.
+ *
+ * A parentless row is NOT an error and NOT an upsert success — it is an
+ * intentional skip (out of Search scope). Keeping it distinguishable is the
+ * whole point of this shape: writers report it, they never retry it.
+ */
+export interface UpsertFileRowsResult {
+  writtenCount: number;
+  skippedParentlessCount: number;
+}
+
 // Stored rows carry the owning account so per-user scoping can never mix two
 // accounts' mirrors. Declared here because DriveFile itself only gains
 // `userEmail` in the schema migration that follows this helper.
@@ -51,12 +66,15 @@ type OwnedDriveFile = DriveFile & { userEmail: string };
  * Error contract: only parentless rows are dropped (non-fatal). Dexie failures
  * (quota, aborted transaction, invalid key) propagate to the caller — each
  * writer owns its own error path (worker SYNC_ERROR vs UI error surface).
+ *
+ * Returns the per-call counts so a caller can tell a written row from an
+ * intentionally skipped one (see UpsertFileRowsResult).
  */
 export async function upsertFileRows(
   rows: readonly UpsertableFileRow[],
   ownerEmail: string,
   knownParents?: readonly string[],
-): Promise<void> {
+): Promise<UpsertFileRowsResult> {
   if (typeof ownerEmail !== "string" || ownerEmail.trim().length === 0) {
     throw new TypeError(
       `Expected upsertFileRows ownerEmail to be a non-empty account email identifying the row owner, got \`${ownerEmail}\``,
@@ -96,7 +114,12 @@ export async function upsertFileRows(
       message: `parentless-rows-skipped: skippedCount=${String(skippedCount)} total=${String(rows.length)}`,
     });
   }
-  if (ownedRows.length === 0) return;
+  // Same object on BOTH paths: nothing-to-write is a successful zero-write
+  // call, not a missing result. The Dexie rejection below deliberately
+  // propagates instead of resolving with a partial count.
+  if (ownedRows.length === 0) {
+    return { writtenCount: 0, skippedParentlessCount: skippedCount };
+  }
 
   // Metadata is app-local state (e.g. the streamUnplayable flag the metadata
   // fetch pipeline persists via db.files.update — see fetchPipeline.ts): it
@@ -123,6 +146,11 @@ export async function upsertFileRows(
 
     await db.files.bulkPut(ownedRows);
   });
+
+  return {
+    writtenCount: ownedRows.length,
+    skippedParentlessCount: skippedCount,
+  };
 }
 
 /**

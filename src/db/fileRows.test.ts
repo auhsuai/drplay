@@ -383,6 +383,85 @@ describe("upsertFileRows", () => {
   });
 });
 
+// S-07 contract: the writer must REPORT what it actually did, so a caller can
+// tell "consumed the change" apart from "wrote the row". A parentless row stays
+// an intentional skip (not written, not an error), but it can no longer be
+// mistaken for a successful upsert by a caller that never inspects the result.
+describe("upsertFileRows result contract (written vs parentless-skipped)", () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await db.files.clear();
+  });
+
+  it("reports writtenCount and skippedParentlessCount for a mixed batch", async () => {
+    const result = await upsertFileRows(
+      [
+        makeRow({ id: "w1", parents: ["folder-X"] }),
+        makeRow({ id: "orphan-1" }),
+        makeRow({ id: "orphan-2", parents: [] }),
+        makeRow({ id: "w2", parents: ["folder-Y"] }),
+      ],
+      "user@example.com",
+    );
+
+    expect(result).toEqual({ writtenCount: 2, skippedParentlessCount: 2 });
+    expect(await db.files.get(["user@example.com", "w1"])).toBeDefined();
+    expect(await db.files.get(["user@example.com", "w2"])).toBeDefined();
+    expect(
+      await db.files.get(["user@example.com", "orphan-1"]),
+    ).toBeUndefined();
+  });
+
+  it("reports the skip count when EVERY row is parentless (empty write path)", async () => {
+    const result = await upsertFileRows(
+      [makeRow({ id: "orphan-3" }), makeRow({ id: "orphan-4", parents: [""] })],
+      "user@example.com",
+    );
+
+    expect(result).toEqual({ writtenCount: 0, skippedParentlessCount: 2 });
+    expect(await db.files.count()).toBe(0);
+  });
+
+  it("reports zero counts for an empty input (nothing-to-write early return)", async () => {
+    await expect(upsertFileRows([], "user@example.com")).resolves.toEqual({
+      writtenCount: 0,
+      skippedParentlessCount: 0,
+    });
+  });
+
+  it("counts a row saved through knownParents as written, not skipped", async () => {
+    const result = await upsertFileRows(
+      [makeRow({ id: "up-known" })],
+      "user@example.com",
+      ["folder-Q"],
+    );
+
+    expect(result).toEqual({ writtenCount: 1, skippedParentlessCount: 0 });
+    expect(
+      (await db.files.get(["user@example.com", "up-known"]))?.parentId,
+    ).toBe("folder-Q");
+  });
+
+  it("still reports the skip count while a Dexie write failure propagates", async () => {
+    vi.spyOn(db.files, "bulkPut").mockRejectedValueOnce(
+      new Error("simulated quota failure"),
+    );
+
+    const attempt = upsertFileRows(
+      [
+        makeRow({ id: "fail-write", parents: ["folder-X"] }),
+        makeRow({ id: "o5" }),
+      ],
+      "user@example.com",
+    );
+
+    await expect(attempt).rejects.toThrow(/simulated quota failure/);
+    expect(
+      await db.files.get(["user@example.com", "fail-write"]),
+    ).toBeUndefined();
+  });
+});
+
 // Logout account-boundary wipe (schema v10): filesV2 rows are keyed
 // [userEmail+id], so a logout wipes ONLY the logged-out account's mirror by
 // ranging over the compound primary key. Contract mirrors
