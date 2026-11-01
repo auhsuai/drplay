@@ -304,10 +304,7 @@ export const MainContent = React.memo(function MainContent({
               setShowBulkMoveScreen(false);
             });
           }}
-          title={t(
-            "folder_selection.bulk_move_title",
-            "Choose destination folder",
-          )}
+          title={t("folder_selection.bulk_move_title")}
         />
       )}
 

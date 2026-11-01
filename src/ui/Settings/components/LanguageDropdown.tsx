@@ -9,10 +9,10 @@ export function LanguageDropdown() {
   const languages = [
     { value: "en", label: t("settings.english") },
     { value: "vi", label: t("settings.vietnamese") },
-  ];
+  ] as const;
 
-  const currentLang = languages.find((l) => l.value === i18n.language) ??
-    languages[0] ?? { value: "en", label: "English" };
+  const currentLang =
+    languages.find((l) => l.value === i18n.language) ?? languages[0];
 
   const handleSelect = (code: string) => {
     void i18n.changeLanguage(code);

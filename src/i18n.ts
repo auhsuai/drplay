@@ -1,5 +1,6 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 
 import enTranslation from "./locales/en/translation.json";
 import viTranslation from "./locales/vi/translation.json";
@@ -49,6 +50,32 @@ const syncDocumentLang = (lng: string) => {
 };
 
 i18n.on("languageChanged", syncDocumentLang);
+
+// Keep the native tray popup in the app language. Same single-listener contract
+// as above: i18next emits 'languageChanged' synchronously inside init() (bundled
+// resources) as well as on every changeLanguage(), and main.tsx imports this
+// module before rendering — so the tray is already labelled correctly for the
+// first frame, and there is no separate boot path to keep in sync.
+// The labels are translated here, not in Rust: the locale catalogs stay the one
+// source of truth. Fire-and-forget — a failed invoke must never block boot.
+const syncTrayLabels = () => {
+  // Guards browser dev + jsdom (i18n.test.ts imports this real module there):
+  // outside Tauri the invoke bridge does not exist at all.
+  if (!isTauri()) return;
+  void invoke("set_tray_labels", {
+    show: i18n.t("tray.show"),
+    quit: i18n.t("tray.quit"),
+  }).catch(
+    (err: unknown) =>
+      void captureError({
+        level: "warn",
+        source: "i18n",
+        message: `tray-label-sync-failed: ${err instanceof Error ? err.message : String(err)}`,
+      }),
+  );
+};
+
+i18n.on("languageChanged", syncTrayLabels);
 
 // Missing-key tracking is dev-only: each miss fires a handler call, and the
 // log noise is pointless in production where keys are frozen at build time

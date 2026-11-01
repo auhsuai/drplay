@@ -308,6 +308,10 @@
       "output": "Đầu ra video",
       "bitrate": "Bitrate",
       "tracks": "Luồng"
+    },
+    "track": {
+      "forced": " (bắt buộc)",
+      "default": " (mặc định)"
     }
   },
   "queue": {
@@ -484,6 +488,10 @@
       "status_not_installed": "Chưa cài · tùy chọn",
       "status_installed": "Đã cài"
     }
+  },
+  "tray": {
+    "show": "Hiện DrPlay",
+    "quit": "Thoát"
   },
   "sort": {
     "name": "A-Z",

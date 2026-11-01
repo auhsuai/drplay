@@ -19,10 +19,6 @@ const HIGHLIGHT_DURATION_MS = 5000;
 const DRIVE_ID_PREFIX = "drive_";
 const EVENT_LOCATE_FILE = "locate-file";
 const STORAGE_KEY_ROOT = ROOT_FOLDER_KEY;
-// Kept as the fallback for t('drive.unknown_folder'): the breadcrumb name is
-// computed inside an async event handler, and the English default guarantees a
-// readable label even if a locale key is missing.
-const UNKNOWN_FOLDER = "Unknown Folder";
 
 // localStorage can throw (privacy mode / disabled storage) — a failed root
 // read must never crash the locate flow; fall back to the Drive root.
@@ -161,7 +157,7 @@ export function useLocateFile(
               const parentName = await getFileName(accessToken, pId, signal);
               newHistory.unshift({
                 id: pId,
-                name: parentName ?? t("drive.unknown_folder", UNKNOWN_FOLDER),
+                name: parentName ?? t("drive.unknown_folder"),
               });
             } catch (e: unknown) {
               if (isCallerAborted(e)) throw e;
@@ -172,7 +168,7 @@ export function useLocateFile(
               });
               newHistory.unshift({
                 id: pId,
-                name: t("drive.unknown_folder", UNKNOWN_FOLDER),
+                name: t("drive.unknown_folder"),
               });
             }
           } else {
@@ -204,7 +200,7 @@ export function useLocateFile(
 
       try {
         let parentId: string | null = null;
-        let folderName = t("drive.unknown_folder", UNKNOWN_FOLDER);
+        let folderName = t("drive.unknown_folder");
 
         try {
           const parents = await getFileParents(accessToken, fileId, signal);
@@ -255,7 +251,7 @@ export function useLocateFile(
             folderName = parentInfo.name;
           } else {
             // F4: a cosmetic name lookup must not kill the whole locate —
-            // mirror rebuildHistory's degrade contract (warn + Unknown Folder
+            // mirror rebuildHistory's degrade contract (warn + unknown_folder
             // fallback), so navigation still completes.
             try {
               const fetchedName = await getFileName(

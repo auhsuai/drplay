@@ -11,14 +11,14 @@ export function ThemeDropdown({
 }) {
   const { t } = useTranslation();
 
-  const themes: { value: ThemeType; label: string }[] = [
+  const themes = [
     { value: "light", label: t("settings.light_mode") },
     { value: "dark", label: t("settings.dark_mode") },
     { value: "system", label: t("settings.system_mode") },
-  ];
+  ] as const satisfies readonly { value: ThemeType; label: string }[];
 
-  const currentOption = themes.find((tm) => tm.value === currentTheme) ??
-    themes[2] ?? { value: "system", label: "System Default" };
+  const currentOption =
+    themes.find((tm) => tm.value === currentTheme) ?? themes[2];
 
   return (
     <OptionDropdown

@@ -44,7 +44,7 @@ use path_scope::path_starts_with_ci;
 #[cfg(windows)]
 use mpv::{mpv_command, mpv_get_property, mpv_kill_sync_best_effort, mpv_shutdown, mpv_spawn};
 use protocol::cover::{clear_local_cache, clear_thumbnail_dir, get_cache_info};
-use tray::{setup_tray, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY, restore_main_window};
+use tray::{setup_tray, set_tray_labels, update_minimize_to_tray, IS_QUITTING, MINIMIZE_TO_TRAY, restore_main_window};
 #[cfg(windows)]
 use video_host::{video_host_acquire, video_host_first_frame_presented, video_host_set_rect, video_host_set_visible};
 
@@ -318,6 +318,7 @@ pub fn run() {
             refresh_google_token,
             register_download_path,
             update_minimize_to_tray,
+            set_tray_labels,
             clear_local_cache,
             get_cache_info,
             clear_thumbnail_dir,

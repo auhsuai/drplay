@@ -308,6 +308,10 @@
       "output": "Video output",
       "bitrate": "Bitrate",
       "tracks": "Tracks"
+    },
+    "track": {
+      "forced": " (forced)",
+      "default": " (default)"
     }
   },
   "queue": {
@@ -484,6 +488,10 @@
       "status_not_installed": "Not installed · optional",
       "status_installed": "Installed"
     }
+  },
+  "tray": {
+    "show": "Show DrPlay",
+    "quit": "Quit"
   },
   "sort": {
     "name": "A-Z",

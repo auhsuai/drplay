@@ -272,7 +272,7 @@ export function ErrorLogSection() {
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gray-200 dark:bg-[#333] text-gray-600 dark:text-gray-300">
                   {t("settings.error_log_count", {
                     count: group.entries.length,
-                  }) || `${String(group.entries.length)} errors`}
+                  })}
                 </span>
               </button>
             ))}

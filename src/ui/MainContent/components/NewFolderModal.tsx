@@ -78,10 +78,7 @@ export function NewFolderModal({
     if (!name) return;
     // Reject characters that are invalid in Drive/folder names before calling the API.
     if (/[\\/:*?"<>|]/.test(name)) {
-      showErrorToast(
-        t("drive.folder_name_invalid") ||
-          "Folder name contains invalid characters",
-      );
+      showErrorToast(t("drive.folder_name_invalid"));
       return;
     }
     // Fire-and-forget: the parent owns the outcome (closes the modal on

@@ -381,7 +381,7 @@ describe("useLocateFile — F4/F5 regressions", () => {
     )?.signal;
   }
 
-  it("F4: keeps locating with Unknown Folder when the main-path parent-name fetch fails", async () => {
+  it("F4: keeps locating with the unknown-folder label when the main-path parent-name fetch fails", async () => {
     seedDb({ fc: { id: "fc", name: "File C", parentId: "parent-c" } });
     mockedFetch
       .mockResolvedValueOnce(apiResp({ parents: ["parent-c"] }))
@@ -403,7 +403,9 @@ describe("useLocateFile — F4/F5 regressions", () => {
 
     expect(captureErrorLevels()).not.toContain("error");
     expect(setters.setCurrentFolderId).toHaveBeenCalledWith("parent-c");
-    expect(setters.setCurrentFolderName).toHaveBeenCalledWith("Unknown Folder");
+    expect(setters.setCurrentFolderName).toHaveBeenCalledWith(
+      "drive.unknown_folder",
+    );
     expect(setters.setFolderHistory).toHaveBeenCalledWith([
       { id: "root", name: "My Drive" },
     ]);

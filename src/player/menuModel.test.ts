@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import i18next from "i18next";
 import en from "../locales/en/translation.json";
+import viLocale from "../locales/vi/translation.json";
 import type { Track } from "../types";
 import {
   PLAYER_COMMAND_IDS,
@@ -35,8 +36,10 @@ vi.mock("../lib/AudioController", () => ({
 
 import {
   MENU_IDS,
+  MENU_LABEL_MAX_LENGTH,
   MENU_PREFIXES,
   buildContextMenuModel,
+  formatTrackLabel,
   queueMenuSlice,
   runMenuEntry,
   takeVideoMenuSnapshot,
@@ -45,13 +48,14 @@ import {
 import type { NativeMenuEntry, NativeMenuItem } from "../lib/nativeMenu";
 
 // ---------------------------------------------------------------------------
-// i18n: the REAL i18next with the REAL en locale — a missing key would leave
-// the raw key in the label, which the assertions catch.
+// i18n: the REAL i18next with the REAL en+vi locales — a missing key would
+// leave the raw key in the label, which the assertions catch. vi is present so
+// the localized track suffixes can be asserted; tests that need en switch back.
 // ---------------------------------------------------------------------------
 beforeAll(async () => {
   await i18next.init({
     lng: "en",
-    resources: { en: { translation: en } },
+    resources: { en: { translation: en }, vi: { translation: viLocale } },
     interpolation: { escapeValue: false },
   });
 });
@@ -359,13 +363,101 @@ describe("buildContextMenuModel — audio section", () => {
       en.player.menu.audio_track,
     );
     expect(item(children, `${MENU_PREFIXES.audio}3`).label).toBe(
-      "Commentary — en (forced)",
+      `Commentary — en${en.player.track.forced}`,
     );
     expect(item(children, `${MENU_PREFIXES.audio}3`).checked).toBe(true);
     expect(item(children, `${MENU_PREFIXES.audio}4`).label).toBe(
-      `${i18next.t("player.menu.audio_track_n", { n: 2 })} (default)`,
+      `${i18next.t("player.menu.audio_track_n", { n: 2 })}${en.player.track.default}`,
     );
     expect(item(children, `${MENU_PREFIXES.audio}4`).checked).toBe(false);
+  });
+
+  it("track labels localize the forced/default suffixes per language", () => {
+    // The suffixes come from the resource files, resolved per call — never a
+    // module-level t(), which would be undefined before init().
+    expect(
+      formatTrackLabel(audioTrack(1, { title: "Eng", lang: "en" }), "x"),
+    ).toBe("Eng — en");
+    expect(
+      formatTrackLabel(
+        audioTrack(1, { title: "Eng", lang: "en", forced: true }),
+        "x",
+      ),
+    ).toBe(`Eng — en${en.player.track.forced}`);
+    expect(
+      formatTrackLabel(
+        audioTrack(1, { title: "Eng", lang: "en", isDefault: true }),
+        "x",
+      ),
+    ).toBe(`Eng — en${en.player.track.default}`);
+    expect(
+      formatTrackLabel(
+        audioTrack(1, {
+          title: "Eng",
+          lang: "en",
+          forced: true,
+          isDefault: true,
+        }),
+        "x",
+      ),
+    ).toBe(`Eng — en${en.player.track.forced}${en.player.track.default}`);
+    // Empty title AND lang → the caller-supplied fallback base.
+    expect(
+      formatTrackLabel(
+        audioTrack(1, { title: "", lang: "", forced: true, isDefault: true }),
+        "Audio Track 2",
+      ),
+    ).toBe(`Audio Track 2${en.player.track.forced}${en.player.track.default}`);
+  });
+
+  it("track label suffixes follow changeLanguage('vi') and restore en", async () => {
+    const forcedOnly = audioTrack(1, {
+      title: "Eng",
+      lang: "en",
+      forced: true,
+    });
+    const defaultOnly = audioTrack(2, {
+      title: "Eng",
+      lang: "en",
+      isDefault: true,
+    });
+    try {
+      await i18next.changeLanguage("vi");
+      expect(formatTrackLabel(forcedOnly, "x")).toBe(
+        `Eng — en${viLocale.player.track.forced}`,
+      );
+      expect(formatTrackLabel(defaultOnly, "x")).toBe(
+        `Eng — en${viLocale.player.track.default}`,
+      );
+      expect(viLocale.player.track.forced).toBe(" (bắt buộc)");
+      expect(viLocale.player.track.default).toBe(" (mặc định)");
+    } finally {
+      await i18next.changeLanguage("en");
+    }
+    expect(formatTrackLabel(forcedOnly, "x")).toBe(
+      `Eng — en${en.player.track.forced}`,
+    );
+  });
+
+  it("track label truncation keeps the suffix inside the 60-char budget", () => {
+    // Documents current behavior: base+suffix is truncated together, so the
+    // suffix is clipped for long bases (it is NOT appended after the cut).
+    const longTitle = "B".repeat(80);
+    const both = audioTrack(1, {
+      title: longTitle,
+      lang: "en",
+      forced: true,
+      isDefault: true,
+    });
+    const label = formatTrackLabel(both, "x");
+
+    expect(label.length).toBe(MENU_LABEL_MAX_LENGTH);
+    expect(label.endsWith("…")).toBe(true);
+    expect(label.startsWith("B".repeat(MENU_LABEL_MAX_LENGTH - 1))).toBe(true);
+    // The suffix is inside the budget: a short label is untouched.
+    expect(
+      formatTrackLabel(audioTrack(1, { title: "Eng", forced: true }), "x"),
+    ).toBe(`Eng${en.player.track.forced}`);
   });
 
   it("'no audio' is a real clickable choice, checked when no track is selected", () => {
