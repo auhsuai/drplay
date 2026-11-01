@@ -218,6 +218,31 @@ export const MainContent = React.memo(function MainContent({
   const searchSort = explorer.searchSort as SearchSort | undefined;
   const isSearchActive =
     explorer.searchQuery.trim() !== "" && searchSort !== undefined;
+  // S-03: a request in flight must not claim "no results" while the debounce
+  // and the worker round-trip are still running. Runtime guards (`===`-style
+  // comparisons, `??`) keep mocked explorers that predate these fields on
+  // today's behavior.
+  const isSearchPending = explorer.searchStatus === "pending";
+  // S-04: the empty-state label must use the SAME trimmed condition the data
+  // selection uses — a whitespace-only query is not a search. The cast matches
+  // the `searchSort` precedent above: typed always-present, sometimes absent
+  // on mocked explorers, so the fallback keeps them on today's behavior.
+  const hasSearchQueryField = explorer.hasSearchQuery as boolean | undefined;
+  const hasSearchQuery =
+    hasSearchQueryField ?? explorer.searchQuery.trim() !== "";
+  // S-05: the result cap is deliberate, so the UI must ADMIT that the list is
+  // partial instead of presenting the derived page count as everything. Both
+  // members are runtime-guarded (`as boolean | undefined`) so mocked explorers
+  // that predate them render exactly as today.
+  const searchTruncatedField = explorer.searchTruncated as boolean | undefined;
+  const searchTotalMatchesField = explorer.searchTotalMatches;
+  // The notice only makes sense for an ACTIVE search with a known total: a
+  // missing total means the frame did not report one, and inventing a number
+  // would be worse than saying nothing.
+  const isSearchTruncated =
+    hasSearchQuery &&
+    searchTruncatedField === true &&
+    typeof searchTotalMatchesField === "number";
   const headerSortOption = isSearchActive
     ? searchSortToString(searchSort)
     : sortOption;
@@ -397,14 +422,41 @@ export const MainContent = React.memo(function MainContent({
           <div role="status" aria-label={t("loading")}>
             <SkeletonRowList rows={skeletonRows} />
           </div>
+        ) : isSearchPending ? (
+          // In-flight search: the result set is unknown yet, so neither
+          // "no results" nor "no audio" is truthful (S-03). Mirrors the
+          // skeleton's role="status" precedent.
+          <div
+            role="status"
+            aria-label={t("drive.searching")}
+            className="text-gray-500 py-10 text-center"
+          >
+            {t("drive.searching")}
+          </div>
         ) : explorer.filteredItems.length === 0 ? (
           <div className="text-gray-500 py-10 text-center">
-            {explorer.searchQuery
+            {hasSearchQuery
               ? t("drive.no_search_results")
               : t("drive.no_audio")}
           </div>
         ) : (
           <>
+            {isSearchTruncated ? (
+              // S-05: the cap is deliberate (perf), so the counter above is NOT
+              // a total. Say so explicitly instead of letting "10 pages" read
+              // as "everything". `filteredItems.length` is the number of hits
+              // that actually arrived (the capped set).
+              <div
+                data-testid="search-truncated-notice"
+                role="status"
+                className="text-gray-500 pb-3 text-center text-sm"
+              >
+                {t("drive.results_truncated", {
+                  shown: explorer.filteredItems.length,
+                  total: searchTotalMatchesField,
+                })}
+              </div>
+            ) : null}
             <VirtualizedSongList
               ref={virtualizedListRef}
               scrollElementRef={mainRef}

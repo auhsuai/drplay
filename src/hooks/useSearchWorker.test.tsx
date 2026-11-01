@@ -427,7 +427,15 @@ describe("useSearchWorker", () => {
       });
 
       await flush(250);
-      expect(responses).toEqual([{ type: "results", requestId: 1, hits: [] }]);
+      // S-05 added `totalMatches`/`truncated` to real result frames, so the
+      // assertion pins the frame's MEANING (a correlated empty answer) rather
+      // than its exact key set.
+      expect(responses).toHaveLength(1);
+      expect(responses[0]).toMatchObject({
+        type: "results",
+        requestId: 1,
+        hits: [],
+      });
       expect(WorkerCtor).toHaveBeenCalledTimes(1);
       executor.terminate();
     });
@@ -1710,5 +1718,404 @@ describe("useSearchWorker", () => {
     });
     expect(view.result.current.hits).toEqual([hitB]);
     view.unmount();
+  });
+
+  // ---- S-03: explicit search status (idle / pending / success / error) ----
+  //
+  // `hits` alone cannot tell "request in flight" from "settled with zero
+  // hits", so the render would show a false "no results" during the debounce +
+  // worker round-trip. The status is explicit state written ONLY from a
+  // correlated response, bound to the DISPATCH-time identity+epoch, and
+  // derived at render through the same exposure predicate as `hits` — a stale
+  // answer therefore cannot clear a newer request's pending state.
+
+  describe("search status (S-03)", () => {
+    it("57. pending during the debounce window and while the posted frame is unanswered", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "a" },
+      });
+      act(() => {
+        view.rerender({ q: "ab" });
+      });
+      await flush(100); // debounce (150ms) not elapsed yet
+      expect(view.result.current.status).toBe("pending");
+      expect(view.result.current.hits).toEqual([]);
+
+      await flush(200); // frame posted, no answer yet
+      expect(fake.posted).toHaveLength(1);
+      expect(view.result.current.status).toBe("pending");
+      view.unmount();
+    });
+
+    it("58. a settled zero-hit answer is success, not pending", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "zzz" },
+      });
+      await flush(200);
+      act(() => {
+        respond(fake, { type: "results", requestId: 1, hits: [] });
+      });
+      expect(view.result.current.status).toBe("success");
+      expect(view.result.current.hits).toEqual([]);
+      view.unmount();
+    });
+
+    it("59. a settled answer with hits is success and exposes them", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "song" },
+      });
+      await flush(200);
+      const hit = makeHit("a", "song.mp3", 1);
+      act(() => {
+        respond(fake, { type: "results", requestId: 1, hits: [hit] });
+      });
+      expect(view.result.current.status).toBe("success");
+      expect(view.result.current.hits).toEqual([hit]);
+      view.unmount();
+    });
+
+    it("60. a correlated error is its own status (never 'success', never stuck pending)", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "boom" },
+      });
+      await flush(200);
+      act(() => {
+        respond(fake, {
+          type: "error",
+          requestId: 1,
+          message: "rebuild-failed: boom",
+        });
+      });
+      expect(view.result.current.status).toBe("error");
+      expect(view.result.current.hits).toEqual([]);
+      expect(vi.mocked(captureError)).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "useSearchWorker" }),
+      );
+      view.unmount();
+    });
+
+    it("61. a stale success cannot move a newer request off pending", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "a" },
+      });
+      await flush(200); // requestId 1 (a)
+      act(() => {
+        view.rerender({ q: "b" });
+      });
+      await flush(200); // requestId 2 (b)
+      expect(view.result.current.status).toBe("pending");
+
+      act(() => {
+        respond(fake, {
+          type: "results",
+          requestId: 1,
+          hits: [makeHit("a", "a.mp3", 1)],
+        });
+      });
+      expect(view.result.current.status).toBe("pending");
+      expect(view.result.current.hits).toEqual([]);
+
+      const hitB = makeHit("b", "b.mp3", 2);
+      act(() => {
+        respond(fake, { type: "results", requestId: 2, hits: [hitB] });
+      });
+      expect(view.result.current.status).toBe("success");
+      expect(view.result.current.hits).toEqual([hitB]);
+      view.unmount();
+    });
+
+    it("62. a stale error cannot clear a newer request's pending state", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "a" },
+      });
+      await flush(200); // requestId 1
+      act(() => {
+        view.rerender({ q: "b" });
+      });
+      await flush(200); // requestId 2
+
+      act(() => {
+        respond(fake, {
+          type: "error",
+          requestId: 1,
+          message: "rebuild-failed: stale",
+        });
+      });
+      expect(view.result.current.status).toBe("pending");
+      expect(vi.mocked(captureError)).not.toHaveBeenCalled();
+
+      act(() => {
+        respond(fake, {
+          type: "error",
+          requestId: 2,
+          message: "rebuild-failed: current",
+        });
+      });
+      expect(view.result.current.status).toBe("error");
+      expect(vi.mocked(captureError)).toHaveBeenCalledTimes(1);
+      view.unmount();
+    });
+
+    it("63. clearing the query returns to idle", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "song" },
+      });
+      await flush(200);
+      act(() => {
+        respond(fake, { type: "results", requestId: 1, hits: [] });
+      });
+      expect(view.result.current.status).toBe("success");
+
+      act(() => {
+        view.rerender({ q: "" });
+      });
+      expect(view.result.current.status).toBe("idle");
+      expect(view.result.current.hits).toEqual([]);
+      view.unmount();
+    });
+
+    it("64. a whitespace-only query is idle and posts nothing", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "   " },
+      });
+      expect(view.result.current.status).toBe("idle");
+      await flush(200);
+      expect(view.result.current.status).toBe("idle");
+      expect(fake.posted).toHaveLength(0);
+      view.unmount();
+    });
+
+    it("65. a refresh for the SAME identity never flips success back to pending", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "song" },
+      });
+      await flush(200);
+      const hitOld = makeHit("old", "song-old.mp3", 1);
+      act(() => {
+        respond(fake, { type: "results", requestId: 1, hits: [hitOld] });
+      });
+      expect(view.result.current.status).toBe("success");
+
+      await db.files.put(makeFile("f-refresh", "song refresh.mp3"));
+      await flushRefresh(); // refresh query (requestId 2) is in flight
+      expect(view.result.current.status).toBe("success");
+      expect(view.result.current.hits).toEqual([hitOld]);
+
+      const hitFresh = makeHit("fresh", "song-fresh.mp3", 2);
+      act(() => {
+        respond(fake, { type: "results", requestId: 2, hits: [hitFresh] });
+      });
+      expect(view.result.current.status).toBe("success");
+      expect(view.result.current.hits).toEqual([hitFresh]);
+      view.unmount();
+    });
+
+    it("66. an uncorrelated worker crash after a success does NOT stamp the identity with error", async () => {
+      const { instances } = installFakeWorker();
+      setSearchExecutorFactoryForTests(createSearchExecutor);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "song" },
+      });
+      await flush(200);
+      expect(instances[0]?.postMessage).toHaveBeenCalledTimes(1);
+      act(() => {
+        instances[0]?.onmessage?.({
+          data: {
+            type: "results",
+            requestId: 1,
+            hits: [makeHit("ok", "song.mp3", 1)],
+          },
+        } as MessageEvent);
+      });
+      expect(view.result.current.status).toBe("success");
+
+      // The crash error carries no requestId. The answered request must no
+      // longer be treated as in flight, otherwise the success would be
+      // overwritten with a visible "error" for a query that actually worked.
+      act(() => {
+        instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+      });
+      expect(view.result.current.status).toBe("success");
+      view.unmount();
+    });
+
+    it("67. an uncorrelated worker crash with no query in flight keeps status idle", async () => {
+      const { instances } = installFakeWorker();
+      setSearchExecutorFactoryForTests(createSearchExecutor);
+      const view = renderHook(({ q }) => useSearchWorker(q, 10, DEFAULT_CTX), {
+        initialProps: { q: "" },
+      });
+      await flush(200);
+      expect(view.result.current.status).toBe("idle");
+
+      act(() => {
+        instances[0]?.onerror?.({ message: "boom" } as ErrorEvent);
+      });
+      expect(view.result.current.status).toBe("idle");
+      view.unmount();
+    });
+  });
+
+  // S-05: truncation signalling rides the SAME identity+epoch exposure rule as
+  // hits/status. A stale frame's count must never surface, and an old frame
+  // without the field must read as "not truncated".
+  describe("truncation signalling (S-05)", () => {
+    it("68. a capped answer exposes totalMatches and truncated for the live request", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 5, DEFAULT_CTX), {
+        initialProps: { q: "song" },
+      });
+      await flush(200);
+      const hits = Array.from({ length: 5 }, (_, i) =>
+        makeHit(`h${String(i)}`, `song-${String(i)}.mp3`, 5 - i),
+      );
+      act(() => {
+        respond(fake, {
+          type: "results",
+          requestId: 1,
+          hits,
+          totalMatches: 900,
+          truncated: true,
+        });
+      });
+      expect(view.result.current.hits).toEqual(hits);
+      expect(view.result.current.totalMatches).toBe(900);
+      expect(view.result.current.truncated).toBe(true);
+      view.unmount();
+    });
+
+    it("69. an OLD frame without the field reads as not truncated", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 5, DEFAULT_CTX), {
+        initialProps: { q: "song" },
+      });
+      await flush(200);
+      act(() => {
+        respond(fake, {
+          type: "results",
+          requestId: 1,
+          hits: [makeHit("a", "song.mp3", 1)],
+        });
+      });
+      expect(view.result.current.truncated).toBe(false);
+      expect(view.result.current.totalMatches).toBeUndefined();
+      view.unmount();
+    });
+
+    it("70. a stale frame's counts never surface for the current lifecycle", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 5, DEFAULT_CTX), {
+        initialProps: { q: "a" },
+      });
+      await flush(200); // requestId 1
+      act(() => {
+        view.rerender({ q: "b" });
+      });
+      await flush(200); // requestId 2
+
+      act(() => {
+        respond(fake, {
+          type: "results",
+          requestId: 1,
+          hits: [makeHit("old", "old.mp3", 1)],
+          totalMatches: 4000,
+          truncated: true,
+        });
+      });
+      expect(view.result.current.hits).toEqual([]);
+      expect(view.result.current.truncated).toBe(false);
+      expect(view.result.current.totalMatches).toBeUndefined();
+
+      act(() => {
+        respond(fake, {
+          type: "results",
+          requestId: 2,
+          hits: [makeHit("new", "new.mp3", 2)],
+          totalMatches: 2,
+          truncated: false,
+        });
+      });
+      expect(view.result.current.truncated).toBe(false);
+      expect(view.result.current.totalMatches).toBe(2);
+      view.unmount();
+    });
+
+    it("71. a stale frame cannot resurrect counts after an identity round-trip", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 5, DEFAULT_CTX), {
+        initialProps: { q: "a" },
+      });
+      await flush(200); // requestId 1 (a)
+      act(() => {
+        respond(fake, {
+          type: "results",
+          requestId: 1,
+          hits: [makeHit("a", "a.mp3", 1)],
+          totalMatches: 900,
+          truncated: true,
+        });
+      });
+      expect(view.result.current.truncated).toBe(true);
+
+      act(() => {
+        view.rerender({ q: "" });
+      });
+      await flush(50);
+      expect(view.result.current.truncated).toBe(false);
+      expect(view.result.current.totalMatches).toBeUndefined();
+
+      // Returning to the SAME query gets a fresh epoch: the old count stays
+      // hidden until the new request answers.
+      act(() => {
+        view.rerender({ q: "a" });
+      });
+      await flush(200);
+      expect(view.result.current.truncated).toBe(false);
+      expect(view.result.current.totalMatches).toBeUndefined();
+      view.unmount();
+    });
+
+    it("72. a malformed count fails closed to 'not truncated'", async () => {
+      const fake = createFakeExecutor();
+      setSearchExecutorFactoryForTests(() => fake);
+      const view = renderHook(({ q }) => useSearchWorker(q, 5, DEFAULT_CTX), {
+        initialProps: { q: "song" },
+      });
+      await flush(200);
+      act(() => {
+        respond(fake, {
+          type: "results",
+          requestId: 1,
+          hits: [makeHit("a", "song.mp3", 1)],
+          totalMatches: -5,
+          truncated: true,
+        });
+      });
+      expect(view.result.current.truncated).toBe(false);
+      expect(view.result.current.totalMatches).toBeUndefined();
+      view.unmount();
+    });
   });
 });

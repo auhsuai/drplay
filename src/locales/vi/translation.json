@@ -90,6 +90,8 @@
     "no_folders": "Không có thư mục nào ở đây.",
     "no_audio": "Không có tệp âm thanh nào ở đây.",
     "no_search_results": "Không tìm thấy bài hát phù hợp.",
+    "searching": "Đang tìm…",
+    "results_truncated": "Chỉ hiển thị {{shown}} trong tổng số {{total}} kết quả phù hợp.",
     "folders": "Thư mục",
     "new_folder": "Thư mục mới",
     "new_folder_title": "Tạo thư mục mới",

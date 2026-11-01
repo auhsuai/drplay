@@ -56,6 +56,9 @@ export function useDriveExplorer(
     searchQuery,
     setSearchQuery,
     globalSearchItems,
+    searchStatus,
+    searchTotalMatches,
+    searchTruncated,
     searchMode,
     setSearchMode,
     searchSort,
@@ -74,7 +77,11 @@ export function useDriveExplorer(
   // Whitespace-only queries count as empty: the worker answers [] for them,
   // and the listing must stay visible (matches the old full-list behavior for
   // a " " query, whose token list was empty and matched everything).
-  const filteredItems = searchQuery.trim() !== "" ? globalSearchItems : items;
+  // ONE condition drives both the data selection and the empty-state label
+  // (S-04): exporting it keeps the view from re-deriving a RAW-truthy
+  // whitespace query and claiming "no results" for a listing.
+  const hasSearchQuery = searchQuery.trim() !== "";
+  const filteredItems = hasSearchQuery ? globalSearchItems : items;
   const validIds = useMemo(
     () => new Set(filteredItems.map((i) => i.id)),
     [filteredItems],
@@ -194,6 +201,14 @@ export function useDriveExplorer(
     isVirtualRoot,
     searchQuery,
     setSearchQuery,
+    // Search lifecycle (S-03) + trimmed-query flag (S-04) re-exported for the
+    // view's empty state.
+    searchStatus,
+    hasSearchQuery,
+    // Cap bookkeeping (S-05): the result cap is deliberate, so the view needs
+    // to say the list is partial instead of implying totalPages is everything.
+    searchTotalMatches,
+    searchTruncated,
     // Search mode/sort re-export (I2) for MainContent/TopNavigationBar (Phase B).
     searchMode,
     setSearchMode,

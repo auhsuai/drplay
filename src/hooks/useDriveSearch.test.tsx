@@ -283,6 +283,43 @@ describe("useDriveSearch phase A (mode/sort/roots)", () => {
     view.unmount();
   });
 
+  it("H11. searchStatus walks idle -> pending -> success (S-03)", async () => {
+    await db.files.bulkPut([
+      makeFile(FOLDER_A, "Root A", { isFolder: true, mimeType: FOLDER_MIME }),
+      makeFile("a1", "Song inside.mp3", { parentId: FOLDER_A }),
+    ]);
+    const view = renderHook(() => useDriveSearch(ROOT_ID));
+    expect(view.result.current.searchStatus).toBe("idle");
+
+    act(() => {
+      view.result.current.setSearchQuery("song");
+    });
+    // Debounce (150ms) has not elapsed: the request is in flight, which must
+    // be distinguishable from a settled zero-hit answer.
+    expect(view.result.current.searchStatus).toBe("pending");
+    expect(view.result.current.globalSearchItems).toEqual([]);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    expect(view.result.current.searchStatus).toBe("success");
+    view.unmount();
+  });
+
+  it("H12. an uncapped search passes the truncation signal through as false (S-05)", async () => {
+    await db.files.bulkPut([
+      makeFile(FOLDER_A, "Root A", { isFolder: true, mimeType: FOLDER_MIME }),
+      makeFile("a1", "Song inside.mp3", { parentId: FOLDER_A }),
+      makeFile("a2", "Song other.mp3", { parentId: FOLDER_A }),
+    ]);
+    const view = renderHook(() => useDriveSearch(ROOT_ID));
+    await settle(view, "song");
+    expect(view.result.current.globalSearchItems).toHaveLength(2);
+    expect(view.result.current.searchTruncated).toBe(false);
+    expect(view.result.current.searchTotalMatches).toBe(2);
+    view.unmount();
+  });
+
   it("H10. an ACTIVE query refreshes on its own when the store changes", async () => {
     await db.files.bulkPut([
       makeFile(FOLDER_A, "Root A", { isFolder: true, mimeType: FOLDER_MIME }),

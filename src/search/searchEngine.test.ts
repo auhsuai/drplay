@@ -3,6 +3,7 @@ import {
   buildSearchIndex,
   loadRealMetadata,
   queryIndex,
+  queryIndexWithStats,
   matchesNormalized,
   buildParentToChildren,
   computeRootMembership,
@@ -257,6 +258,64 @@ describe("searchEngine", () => {
     const scores = hits.map((h) => h.score);
     const sortedDesc = [...scores].sort((a, b) => b - a);
     expect(scores).toEqual(sortedDesc);
+  });
+
+  it("7b. reports the true pre-slice match count and truncation above the limit", () => {
+    const LIMIT = 500;
+    const DOCS = 600;
+    const files = Array.from({ length: DOCS }, (_, i) =>
+      makeFile(`cap-${String(i)}`, `cap-track-${String(i)}.mp3`),
+    );
+    const index = buildIndex(files);
+    const stats = queryIndexWithStats(index, "cap-track", LIMIT, GLOBAL_SCOPE);
+    expect(stats.hits.length).toBe(LIMIT);
+    expect(stats.totalMatches).toBe(DOCS);
+    expect(stats.truncated).toBe(true);
+    // The capped hits are exactly the ones the legacy wrapper returns.
+    expect(stats.hits).toEqual(ask(index, "cap-track", LIMIT));
+  });
+
+  it("7c. exact-limit matches are NOT truncated (totalMatches === hits.length)", () => {
+    const LIMIT = 500;
+    const files = Array.from({ length: LIMIT }, (_, i) =>
+      makeFile(`eq-${String(i)}`, `eq-track-${String(i)}.mp3`),
+    );
+    const index = buildIndex(files);
+    const stats = queryIndexWithStats(index, "eq-track", LIMIT, GLOBAL_SCOPE);
+    expect(stats.hits.length).toBe(LIMIT);
+    expect(stats.totalMatches).toBe(LIMIT);
+    expect(stats.truncated).toBe(false);
+  });
+
+  it("7d. under-limit matches are NOT truncated", () => {
+    const files = [
+      makeFile("u1", "under-track one.mp3"),
+      makeFile("u2", "under-track two.mp3"),
+    ];
+    const index = buildIndex(files);
+    const stats = queryIndexWithStats(index, "under-track", 500, GLOBAL_SCOPE);
+    expect(stats.hits.length).toBe(2);
+    expect(stats.totalMatches).toBe(2);
+    expect(stats.truncated).toBe(false);
+  });
+
+  it("7e. a fail-closed empty answer reports zero matches and no truncation", () => {
+    const index = buildIndex([makeFile("x1", "fail-track.mp3")]);
+    const noScope = queryIndexWithStats(index, "fail-track", 500);
+    expect(noScope.hits).toEqual([]);
+    expect(noScope.totalMatches).toBe(0);
+    expect(noScope.truncated).toBe(false);
+    const emptyRoots = queryIndexWithStats(index, "fail-track", 500, {
+      mode: "global",
+      rootIds: [],
+    });
+    expect(emptyRoots.hits).toEqual([]);
+    expect(emptyRoots.totalMatches).toBe(0);
+    expect(emptyRoots.truncated).toBe(false);
+    const blank = queryIndexWithStats(index, "   ", 500, GLOBAL_SCOPE);
+    expect(blank.hits).toEqual([]);
+    expect(blank.totalMatches).toBe(0);
+    expect(blank.truncated).toBe(false);
   });
 
   it("8. returns [] for empty or whitespace-only queries", () => {

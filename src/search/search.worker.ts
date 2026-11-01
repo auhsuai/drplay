@@ -7,7 +7,7 @@ import {
   buildParentToChildren,
   computeRootMembership,
   loadRealMetadata,
-  queryIndex,
+  queryIndexWithStats,
 } from "./searchEngine";
 import type { SearchDoc, SearchQueryScope, SearchHit } from "./searchEngine";
 
@@ -41,7 +41,19 @@ export type SearchWorkerRequest =
 
 export type SearchWorkerResponse =
   | { type: "ready" }
-  | { type: "results"; requestId: number; hits: SearchHit[] }
+  | {
+      type: "results";
+      requestId: number;
+      hits: SearchHit[];
+      /** Matches BEFORE the result cap was applied. Optional and ADDITIVE:
+       * pre-cap frames (and every fail-closed empty answer) omit it, and the
+       * wire guard keeps ignoring unknown/extra fields, so an old frame stays
+       * valid and a new consumer must treat `undefined` as "not truncated". */
+      totalMatches?: number;
+      /** True when the cap dropped matches the user cannot see. Optional for
+       * the same compatibility reason as `totalMatches`. */
+      truncated?: boolean;
+    }
   | { type: "error"; requestId?: number; message: string };
 
 // Injectable deps so unit tests drive the handler without a real Worker or
@@ -55,7 +67,10 @@ export interface SearchWorkerDeps {
     files: DriveFile[],
     meta: ReadonlyMap<string, CachedMetadata>,
   ) => MiniSearch<SearchDoc>;
-  query: typeof queryIndex;
+  /** The stats-returning query. `queryIndex` stays the hits-only wrapper for
+   * every other caller; the worker needs the cap bookkeeping to answer with
+   * it. Same arguments, so injected test doubles read identically. */
+  query: typeof queryIndexWithStats;
   post: (r: SearchWorkerResponse) => void;
 }
 
@@ -365,14 +380,24 @@ async function handleQuery(
       ...(membership ?? {}),
     };
     const sortSpec = { field: context.sortField, dir: context.sortDir };
-    const hits = deps.query(
+    const result = deps.query(
       searchWorkerState.index,
       msg.query,
       msg.limit,
       scope,
       sortSpec,
     );
-    deps.post({ type: "results", requestId: msg.requestId, hits });
+    // ADDITIVE wire field: `hits` keeps its meaning and order (the engine
+    // sorts before slicing), and the pre-slice count + truncation flag ride
+    // alongside so the UI can admit the list is capped. The fail-closed empty
+    // answers above still post the LEGACY shape, so old frames stay valid.
+    deps.post({
+      type: "results",
+      requestId: msg.requestId,
+      hits: result.hits,
+      totalMatches: result.totalMatches,
+      truncated: result.truncated,
+    });
   } catch (err) {
     deps.post({
       type: "error",
@@ -438,7 +463,7 @@ if (typeof self !== "undefined" && typeof window === "undefined") {
   const workerDeps: SearchWorkerDeps = {
     db,
     build: buildSearchIndex,
-    query: queryIndex,
+    query: queryIndexWithStats,
     post: (r) => {
       self.postMessage(r);
     },

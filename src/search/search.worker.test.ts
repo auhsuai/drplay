@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSearchIndex, queryIndex } from "./searchEngine";
+import { buildSearchIndex, queryIndexWithStats } from "./searchEngine";
 import type { SearchHit } from "./searchEngine";
 import {
   handleSearchWorkerMessage,
+  isSearchWorkerResponse,
   resetSearchWorkerState,
   searchWorkerState,
   type SearchQueryContext,
@@ -86,7 +87,7 @@ function makeDeps(
       ((files: DriveFile[], meta: ReadonlyMap<string, CachedMetadata>) =>
         buildSearchIndex(files, meta)),
   );
-  const querySpy = vi.fn(opts.queryImpl ?? queryIndex);
+  const querySpy = vi.fn(opts.queryImpl ?? queryIndexWithStats);
   return {
     db: {
       files: { toArray: () => Promise.resolve(opts.files ?? []) },
@@ -1111,5 +1112,119 @@ describe("search.worker", () => {
     if (last?.type === "results") {
       expect(last.hits.map((h) => h.id)).toEqual(["f1"]);
     }
+  });
+});
+
+// ---- Truncation signalling (S-05) -----------------------------------------
+// The result cap stays: a broad query answers at most `limit` hits. What is
+// new is that the frame also says how many matches existed BEFORE the slice,
+// so the UI can admit the list is truncated instead of presenting 500 hits as
+// the whole result set.
+describe("search.worker truncation signalling", () => {
+  beforeEach(() => {
+    resetSearchWorkerState();
+  });
+
+  it("S05-1. a capped query reports the pre-slice count and truncated=true", async () => {
+    const LIMIT = 5;
+    const DOCS = 12;
+    const deps = makeDeps({
+      files: Array.from({ length: DOCS }, (_, i) =>
+        makeFile(`trunc-${String(i)}`, `trunc-track-${String(i)}.mp3`),
+      ),
+    });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 301,
+        query: "trunc-track",
+        limit: LIMIT,
+        userEmail: "default",
+        context: defaultContext,
+      },
+      deps,
+    );
+    const r = firstResult(deps.posts);
+    expect(r.type).toBe("results");
+    if (r.type === "results") {
+      expect(r.hits).toHaveLength(LIMIT);
+      expect(r.totalMatches).toBe(DOCS);
+      expect(r.truncated).toBe(true);
+    }
+  });
+
+  it("S05-2. an uncapped query reports truncated=false and an equal count", async () => {
+    const deps = makeDeps({
+      files: Array.from({ length: 3 }, (_, i) =>
+        makeFile(`small-${String(i)}`, `small-track-${String(i)}.mp3`),
+      ),
+    });
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 302,
+        query: "small-track",
+        limit: 500,
+        userEmail: "default",
+        context: defaultContext,
+      },
+      deps,
+    );
+    const r = firstResult(deps.posts);
+    if (r.type !== "results") throw new Error("expected results");
+    expect(r.hits).toHaveLength(3);
+    expect(r.totalMatches).toBe(3);
+    expect(r.truncated).toBe(false);
+  });
+
+  it("S05-3. the fail-closed empty answer omits the field (old-shape frame still accepted)", async () => {
+    // An empty query never touches the index and answers the LEGACY shape:
+    // no totalMatches/truncated. Old frames must stay valid.
+    const deps = makeDeps();
+    await handleSearchWorkerMessage(
+      {
+        type: "query",
+        requestId: 303,
+        query: "   ",
+        limit: 500,
+        userEmail: "default",
+        context: defaultContext,
+      },
+      deps,
+    );
+    const r = firstResult(deps.posts);
+    if (r.type !== "results") throw new Error("expected results");
+    expect(r.hits).toEqual([]);
+    expect(r.totalMatches).toBeUndefined();
+    expect(r.truncated).toBeUndefined();
+  });
+
+  it("S05-4. the wire guard still accepts a frame carrying the extra fields", () => {
+    const frame = {
+      type: "results",
+      requestId: 7,
+      hits: [],
+      totalMatches: 900,
+      truncated: true,
+    };
+    expect(isSearchWorkerResponse(frame)).toBe(true);
+  });
+
+  it("S05-5. the wire guard still accepts an OLD frame without the fields", () => {
+    expect(
+      isSearchWorkerResponse({ type: "results", requestId: 8, hits: [] }),
+    ).toBe(true);
+  });
+
+  it("S05-6. a malformed extra field does not invalidate the frame (guard ignores it)", () => {
+    expect(
+      isSearchWorkerResponse({
+        type: "results",
+        requestId: 9,
+        hits: [],
+        totalMatches: "lots",
+        truncated: "yes",
+      }),
+    ).toBe(true);
   });
 });

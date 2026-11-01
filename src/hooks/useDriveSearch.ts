@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DriveItem } from "../types";
 import { useSearchWorker } from "./useSearchWorker";
+import type { SearchStatus } from "./useSearchWorker";
 import type { SearchHit } from "../search/searchEngine";
 import { useDriveStore } from "../store/driveStore";
 
@@ -57,6 +58,12 @@ export function useDriveSearch(currentFolderId?: string): {
   searchQuery: string;
   setSearchQuery: Dispatch<SetStateAction<string>>;
   globalSearchItems: DriveItem[];
+  searchStatus: SearchStatus;
+  /** Matches BEFORE the result cap, for the current search lifecycle only.
+   * `undefined` when the answering frame did not report it (old frame). */
+  searchTotalMatches: number | undefined;
+  /** True when the cap dropped matches the user cannot see (S-05). */
+  searchTruncated: boolean;
   searchMode: SearchMode;
   setSearchMode: (mode: SearchMode) => void;
   searchSort: SearchSort;
@@ -102,7 +109,11 @@ export function useDriveSearch(currentFolderId?: string): {
   // same render instead of keeping them visible while the next request runs.
   // Empty queries never reach the worker (return []), so the normal Drive
   // listing below wins.
-  const { hits } = useSearchWorker(searchQuery, GLOBAL_SEARCH_LIMIT, context);
+  const { hits, status, totalMatches, truncated } = useSearchWorker(
+    searchQuery,
+    GLOBAL_SEARCH_LIMIT,
+    context,
+  );
 
   // The engine sorts (folders-first + field/dir) BEFORE slicing to the
   // limit, so the hook maps hits in order — no hook-level re-sort (B3.5:
@@ -117,6 +128,13 @@ export function useDriveSearch(currentFolderId?: string): {
     searchQuery,
     setSearchQuery,
     globalSearchItems,
+    // Pass-through of the worker lifecycle so the view can tell an in-flight
+    // request apart from a settled zero-hit result (S-03).
+    searchStatus: status,
+    // Cap bookkeeping (S-05). The 500-row cap is deliberate; these let the
+    // view ADMIT the list is partial instead of presenting it as everything.
+    searchTotalMatches: totalMatches,
+    searchTruncated: truncated,
     searchMode,
     setSearchMode,
     searchSort,

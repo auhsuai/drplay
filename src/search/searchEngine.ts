@@ -37,6 +37,24 @@ export interface SearchHit {
   modifiedTime?: string;
 }
 
+// Result of a query INCLUDING the cap bookkeeping. The cap itself is unchanged
+// (sort-before-slice); `totalMatches` is the match count BEFORE the slice,
+// which MiniSearch already materializes (no `maxResults` is passed and the
+// full set is sorted anyway), so reporting it costs nothing.
+export interface SearchQueryResult {
+  hits: SearchHit[];
+  /** Matches that passed the scope filter, BEFORE the limit was applied. */
+  totalMatches: number;
+  /** True when the cap dropped matches the user cannot see. */
+  truncated: boolean;
+}
+
+const EMPTY_QUERY_RESULT: SearchQueryResult = {
+  hits: [],
+  totalMatches: 0,
+  truncated: false,
+};
+
 // Sentinel id of the synthetic "Root Folders" node (driveConstants). Repeated
 // here as a literal because the worker/engine must stay import-light (the
 // real constant imports nothing heavy, but the engine is hosted in a Worker
@@ -389,14 +407,27 @@ export function queryIndex(
   scope?: SearchQueryScope,
   sort?: SearchSortSpec,
 ): SearchHit[] {
+  return queryIndexWithStats(index, query, limit, scope, sort).hits;
+}
+
+// Same query as `queryIndex`, plus the cap bookkeeping the UI needs to admit
+// that its list is truncated. The cap semantics are untouched: the FULL match
+// set is sorted first, then sliced to `limit`.
+export function queryIndexWithStats(
+  index: MiniSearch<SearchDoc>,
+  query: string,
+  limit: number,
+  scope?: SearchQueryScope,
+  sort?: SearchSortSpec,
+): SearchQueryResult {
   const tokens = tokenizeQuery(query);
-  if (tokens.length === 0) return [];
+  if (tokens.length === 0) return EMPTY_QUERY_RESULT;
 
   // Root scope resolution (B1/B2): a scope is MANDATORY — there is no
   // unscoped global path left, so a caller that forgets it fails closed
   // instead of leaking the whole library. An EMPTY rootIds likewise fails
   // closed (present but zero valid roots).
-  if (scope === undefined) return [];
+  if (scope === undefined) return EMPTY_QUERY_RESULT;
   const parentToChildren =
     scope.parentToChildren ?? buildParentToChildren(index);
   const inRootIds =
@@ -404,7 +435,7 @@ export function queryIndex(
     (scope.rootIds.length === 0
       ? new Set<string>()
       : computeRootMembership(index, parentToChildren, scope.rootIds));
-  if (inRootIds.size === 0) return [];
+  if (inRootIds.size === 0) return EMPTY_QUERY_RESULT;
   let filterIds: Set<string> | null = null;
   if (scope.mode === "recursive") {
     // VIRTUAL_ROOT is the one recursive scope that intentionally means "every
@@ -418,13 +449,13 @@ export function queryIndex(
       // FAIL CLOSED: recursive mode without a folder id is a caller bug (a
       // frame lost its context). Degrading to the global root scope would
       // silently widen the user's search beyond the folder they are in.
-      return [];
+      return EMPTY_QUERY_RESULT;
     } else {
       // The current folder MUST itself be inside the configured roots (B3).
       // An ancestor that lives outside every root (but happens to contain a
       // configured root deeper down) must not resurrect scoped results: the
       // intersection of its subtree with the roots is not the user's scope.
-      if (!inRootIds.has(scope.currentFolderId)) return [];
+      if (!inRootIds.has(scope.currentFolderId)) return EMPTY_QUERY_RESULT;
       // Recursive mode narrows the root scope to the current folder's
       // subtree. The current folder itself is NOT part of the results — only
       // its descendants (the UI shows it as the container, not a hit).
@@ -434,7 +465,7 @@ export function queryIndex(
       );
       subtree.delete(scope.currentFolderId);
       filterIds = subtree;
-      if (filterIds.size === 0) return [];
+      if (filterIds.size === 0) return EMPTY_QUERY_RESULT;
     }
   }
 
@@ -460,35 +491,45 @@ export function queryIndex(
   // an explicit {field:"relevance"}, so the two paths can never diverge.
   const sorted = sortResults(results, index, sort ?? DEFAULT_RELEVANCE);
 
-  return sorted.slice(0, Math.max(0, limit)).map((result) => {
-    // MiniSearch types stored fields as Record<string, unknown> (v7.2.0), so
-    // the typed getter + typeof narrowing keeps this mapping strict-lint
-    // clean.
-    const stored = index.getStoredFields(result.id);
-    const name = typeof stored?.name === "string" ? stored.name : "";
-    const isFolder = stored?.isFolder === true;
-    const storedTitle =
-      typeof stored?.title === "string" ? stored.title : undefined;
-    const storedArtist =
-      typeof stored?.artist === "string" ? stored.artist : undefined;
+  // Pre-slice truth. MiniSearch received no maxResults, so `results` is the
+  // COMPLETE filtered match set and its length is the real total at zero extra
+  // cost. The cap itself is untouched: sort first, then slice.
+  const totalMatches = sorted.length;
+  const capped = sorted.slice(0, Math.max(0, limit));
 
-    const hit: SearchHit = {
-      id: String(result.id),
-      score: result.score,
-      name,
-      isFolder,
-      // Real title when present; else filename minus extension (folders keep
-      // their full name).
-      title: storedTitle ?? (isFolder ? name : stripExtension(name)),
-      artist: storedArtist ?? null,
-      parentId: typeof stored?.parentId === "string" ? stored.parentId : "",
-      mimeType: typeof stored?.mimeType === "string" ? stored.mimeType : "",
-    };
-    if (typeof stored?.size === "number") hit.size = stored.size;
-    if (typeof stored?.modifiedTime === "string")
-      hit.modifiedTime = stored.modifiedTime;
-    return hit;
-  });
+  return {
+    hits: capped.map((result) => {
+      // MiniSearch types stored fields as Record<string, unknown> (v7.2.0), so
+      // the typed getter + typeof narrowing keeps this mapping strict-lint
+      // clean.
+      const stored = index.getStoredFields(result.id);
+      const name = typeof stored?.name === "string" ? stored.name : "";
+      const isFolder = stored?.isFolder === true;
+      const storedTitle =
+        typeof stored?.title === "string" ? stored.title : undefined;
+      const storedArtist =
+        typeof stored?.artist === "string" ? stored.artist : undefined;
+
+      const hit: SearchHit = {
+        id: String(result.id),
+        score: result.score,
+        name,
+        isFolder,
+        // Real title when present; else filename minus extension (folders keep
+        // their full name).
+        title: storedTitle ?? (isFolder ? name : stripExtension(name)),
+        artist: storedArtist ?? null,
+        parentId: typeof stored?.parentId === "string" ? stored.parentId : "",
+        mimeType: typeof stored?.mimeType === "string" ? stored.mimeType : "",
+      };
+      if (typeof stored?.size === "number") hit.size = stored.size;
+      if (typeof stored?.modifiedTime === "string")
+        hit.modifiedTime = stored.modifiedTime;
+      return hit;
+    }),
+    totalMatches,
+    truncated: totalMatches > capped.length,
+  };
 }
 
 export function matchesNormalized(text: string, query: string): boolean {

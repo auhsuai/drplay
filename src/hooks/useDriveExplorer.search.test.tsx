@@ -290,4 +290,55 @@ describe("useDriveExplorer global search", () => {
     expect(view.result.current.filteredItems.map((i) => i.id)).toEqual(["f1"]);
     view.unmount();
   });
+
+  // S-04: the empty-state label must use the SAME trimmed condition the data
+  // selection uses. `hasSearchQuery` is the single source of truth exported
+  // for the view, so a whitespace-only query can never claim "no results".
+  it("an EMPTY folder with a whitespace-only query is not a search (S-04)", async () => {
+    const view = renderSearch();
+    act(() => {
+      view.result.current.setSearchQuery("   ");
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    expect(view.result.current.filteredItems).toEqual([]);
+    expect(view.result.current.hasSearchQuery).toBe(false);
+    expect(view.result.current.searchStatus).toBe("idle");
+    view.unmount();
+  });
+
+  it("a real no-hit query IS a search and settles as success with zero hits", async () => {
+    await db.files.bulkPut([makeFile("f1", "A.mp3")]);
+    const view = await search("zzz");
+    expect(view.result.current.filteredItems).toEqual([]);
+    expect(view.result.current.hasSearchQuery).toBe(true);
+    expect(view.result.current.searchStatus).toBe("success");
+    view.unmount();
+  });
+
+  it("an empty query keeps hasSearchQuery false (listing branch)", async () => {
+    await db.files.bulkPut([makeFile("f1", "A.mp3")]);
+    const view = renderSearch();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 350));
+    });
+    expect(view.result.current.hasSearchQuery).toBe(false);
+    expect(view.result.current.searchStatus).toBe("idle");
+    view.unmount();
+  });
+
+  // S-05: truncation signal reaches the explorer unchanged. Under the cap the
+  // signal must stay false so the view renders exactly as before.
+  it("re-exports the truncation signal as false under the cap (S-05)", async () => {
+    const rows = Array.from({ length: 120 }, (_, i) =>
+      makeFile(`tr-${String(i)}`, `tr-track-${String(i)}.mp3`),
+    );
+    await db.files.bulkPut(rows);
+    const view = await search("tr-track");
+    expect(view.result.current.filteredItems).toHaveLength(120);
+    expect(view.result.current.searchTruncated).toBe(false);
+    expect(view.result.current.searchTotalMatches).toBe(120);
+    view.unmount();
+  });
 });

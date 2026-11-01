@@ -4,7 +4,7 @@ import { captureError } from "../utils/errorLog";
 import { SYNC_EVENT_NAMES } from "../utils/proSyncManager";
 import { getCurrentUserEmail } from "../utils/storageKeys";
 import { useAuthStore } from "../store/authStore";
-import { buildSearchIndex, queryIndex } from "../search/searchEngine";
+import { buildSearchIndex, queryIndexWithStats } from "../search/searchEngine";
 import type { SearchHit } from "../search/searchEngine";
 import {
   handleSearchWorkerMessage,
@@ -39,6 +39,25 @@ interface StoredResult {
   identity: string;
   epoch: number;
   hits: SearchHit[];
+  /** Matches BEFORE the cap, when the frame reported it. Kept with the hits
+   * so the SAME identity+epoch predicate decides whether it is visible. */
+  totalMatches?: number;
+  /** Cap bookkeeping from the answering frame. Absent = not truncated. */
+  truncated?: boolean;
+}
+
+// Render-visible lifecycle outcome. `hits` alone cannot tell "request in
+// flight" from "settled with zero hits" (both are []), so the VIEW needs an
+// explicit status. Only terminal outcomes are stored (`success`/`error`):
+// `idle` and `pending` are derived at render from the query and the exposure
+// predicate, which is what makes a stale response structurally unable to end a
+// newer request's pending state.
+export type SearchStatus = "idle" | "pending" | "success" | "error";
+
+interface StoredSettlement {
+  identity: string;
+  epoch: number;
+  status: "success" | "error";
 }
 
 // The lifecycle captured at dispatch time, so a response is bound to the
@@ -61,6 +80,29 @@ export interface SearchExecutor {
 }
 
 const WORKER_CRASHED_MESSAGE = "worker-crashed";
+
+// Cap bookkeeping off the wire, validated here so a malformed frame can never
+// reach the view. Fail closed: an absent, wrong-typed, non-finite or negative
+// `totalMatches` is DROPPED (treated as "unknown"), and `truncated` is only
+// ever true when the frame explicitly said so for a usable count. Old frames
+// therefore read exactly like "not truncated" instead of throwing.
+function readTruncation(response: {
+  totalMatches?: unknown;
+  truncated?: unknown;
+}): { totalMatches: number | undefined; truncated: boolean } {
+  const raw = response.totalMatches;
+  const totalMatches =
+    typeof raw === "number" &&
+    Number.isFinite(raw) &&
+    raw >= 0 &&
+    Number.isInteger(raw)
+      ? raw
+      : undefined;
+  return {
+    totalMatches,
+    truncated: totalMatches !== undefined && response.truncated === true,
+  };
+}
 
 // `new Worker` can throw synchronously (WHATWG HTML: SyntaxError on a bad URL,
 // SecurityError on a blocked script) — log and let the caller fall back to the
@@ -171,7 +213,7 @@ function createInlineExecutor(): SearchExecutor {
       metadataCache: db.metadataCache,
     },
     build: buildSearchIndex,
-    query: queryIndex,
+    query: queryIndexWithStats,
     post: (r) => {
       for (const listener of listeners) listener(r);
     },
@@ -211,7 +253,18 @@ export function useSearchWorker(
   query: string,
   limit: number,
   context: SearchQueryContext,
-): { hits: SearchHit[] } {
+): {
+  hits: SearchHit[];
+  status: SearchStatus;
+  /** Matches BEFORE the cap, for the CURRENT lifecycle only. `undefined`
+   * means "the answering frame did not report it" (old frame) — never a
+   * fabricated total. */
+  totalMatches: number | undefined;
+  /** True only when the answering frame said matches were dropped by the cap
+   * that the user cannot see. Absent/malformed reads as false (fail closed:
+   * the UI shows no notice rather than claiming truncation). */
+  truncated: boolean;
+} {
   // Request identity = everything a result depends on. Results are only ever
   // exposed when their identity AND lifecycle epoch match the CURRENT ones, so
   // a scope/account/sort switch hides stale hits in the same render instead of
@@ -222,6 +275,12 @@ export function useSearchWorker(
   // -> global) rebuilds the SAME identity string. Matching identity alone
   // would re-expose the old hits; a bumped epoch does not.
   const [result, setResult] = useState<StoredResult | null>(null);
+  // Terminal outcome of the request that produced `result`. Written ONLY from
+  // a correlated response, always bound to the same dispatch-time
+  // identity+epoch `setResult` uses, and read at render through the same
+  // exposure predicate — so an obsolete answer can never end a newer request's
+  // pending state. Kept as STATE for the same reason `lifecycle` is.
+  const [settled, setSettled] = useState<StoredSettlement | null>(null);
   // Lifecycle = the identity currently being rendered plus a monotonic epoch
   // that moves every time that identity changes. Kept as STATE, not a ref, so
   // the render can compare it directly (React "adjusting state during render"
@@ -234,6 +293,13 @@ export function useSearchWorker(
   const executorRef = useRef<SearchExecutor | null>(null);
   const latestRequestIdRef = useRef(0);
   const inFlightRef = useRef<InFlightRequest | null>(null);
+  // Binding of the last request whose response was ALREADY consumed. The
+  // pinned contract lets a late failure for that same requestId (a retried
+  // rebuild) still clear the hits it produced, and lets a worker crash drop
+  // them — but neither may start a NEW request's story. Keeping the binding
+  // here is what allows `inFlightRef` to be cleared on consumption without
+  // regressing those guarantees.
+  const lastAnsweredRef = useRef<InFlightRequest | null>(null);
   // Async callbacks (debounce timer, response listener) read the lifecycle
   // through this ref; it is synced by an effect declared BEFORE the dispatch
   // effect, so it is always current by the time a response can arrive.
@@ -326,32 +392,65 @@ export function useSearchWorker(
       ) {
         const inFlight = inFlightRef.current;
         if (inFlight === null) return; // no query was ever dispatched
-        // Bind the hits to the lifecycle captured at dispatch time: even a
-        // newest-id response is only exposed for the identity+epoch it was
-        // produced for.
+        // Bind the hits AND the cap bookkeeping to the lifecycle captured at
+        // dispatch time: even a newest-id response is only exposed for the
+        // identity+epoch it was produced for, so a stale count can never leak
+        // into the current lifecycle.
+        const truncation = readTruncation(response);
         setResult({
           identity: inFlight.identity,
           epoch: inFlight.epoch,
           hits: response.hits,
+          ...(truncation.totalMatches !== undefined
+            ? { totalMatches: truncation.totalMatches }
+            : {}),
+          truncated: truncation.truncated,
         });
+        setSettled({
+          identity: inFlight.identity,
+          epoch: inFlight.epoch,
+          status: "success",
+        });
+        // The request is answered: it is no longer in flight. Leaving a stale
+        // entry here would let a later UNCORRELATED worker crash stamp this
+        // (already settled) identity with a visible error.
+        lastAnsweredRef.current = inFlight;
+        inFlightRef.current = null;
         return;
       }
       if (response.type === "error") {
         const current = latestRequestIdRef.current;
         if (response.requestId === undefined) {
-          // Worker crash / synthetic error: the request can never complete, so
-          // fail closed — keep the lifecycle it belonged to and drop its hits.
+          // Worker crash / synthetic error. It carries no requestId, so it can
+          // only be attributed to a request that is genuinely open (or, for
+          // the fail-closed hits contract, the last one already answered).
           const inFlight = inFlightRef.current;
+          const target = inFlight ?? lastAnsweredRef.current;
           void captureError({
             level: "warn",
             source: ERROR_SOURCE,
             message: `search-error: ${response.message}`,
           });
+          if (target === null) return; // nothing was ever dispatched
           setResult({
-            identity: inFlight?.identity ?? lifecycleRef.current.identity,
-            epoch: inFlight?.epoch ?? lifecycleRef.current.epoch,
+            identity: target.identity,
+            epoch: target.epoch,
             hits: [],
+            // The previous answer proved nothing about this query, so its cap
+            // bookkeeping goes with the hits (no stale "truncated" notice).
+            truncated: false,
           });
+          // Status is stamped ONLY while a request is actually open: a crash
+          // that lands after a success must not turn a correct answer into a
+          // visible "error" (the answered request is gone from inFlightRef).
+          if (inFlight !== null) {
+            setSettled({
+              identity: target.identity,
+              epoch: target.epoch,
+              status: "error",
+            });
+            inFlightRef.current = null;
+          }
           return;
         }
         if (response.requestId !== current) {
@@ -359,21 +458,38 @@ export function useSearchWorker(
           // result of the request that superseded it.
           return;
         }
+        // The CURRENT request failed. A failure may follow its own results
+        // (a retried rebuild), so the target is the open request or — once
+        // consumed — the binding of that same requestId.
         const inFlight = inFlightRef.current;
-        if (inFlight === null) return;
-        // The CURRENT request failed: the previous hits do not prove anything
-        // about this query, so the failure clears them (fail closed) while the
-        // error is still reported.
+        const target =
+          inFlight ??
+          (lastAnsweredRef.current?.requestId === current
+            ? lastAnsweredRef.current
+            : null);
+        if (target === null) return;
+        // The previous hits do not prove anything about this query, so the
+        // failure clears them (fail closed) while the error is still reported.
         void captureError({
           level: "warn",
           source: ERROR_SOURCE,
           message: `search-error: ${response.message}`,
         });
         setResult({
-          identity: inFlight.identity,
-          epoch: inFlight.epoch,
+          identity: target.identity,
+          epoch: target.epoch,
           hits: [],
+          // Same fail-closed wipe for the cap bookkeeping.
+          truncated: false,
         });
+        // Terminal: the UI must show the failure, not a permanent "searching…".
+        setSettled({
+          identity: target.identity,
+          epoch: target.epoch,
+          status: "error",
+        });
+        lastAnsweredRef.current = target;
+        inFlightRef.current = null;
       }
     });
 
@@ -568,11 +684,37 @@ export function useSearchWorker(
   // identity (clear -> retype, scope round-trip) yields a fresh epoch, so the
   // old hits stay hidden until the new request answers — no effect, no
   // debounce, no round-trip.
-  const hits =
+  // ONE exposure predicate for hits AND cap bookkeeping: a stored result is
+  // visible only while it belongs to BOTH the identity and the epoch being
+  // rendered, so a stale frame's counts are structurally unable to reach the
+  // view.
+  const exposed =
     result !== null &&
     result.identity === identity &&
     result.epoch === epochForRender
-      ? result.hits
-      : [];
-  return { hits: query.trim() === "" ? [] : hits };
+      ? result
+      : null;
+  const hits = exposed?.hits ?? [];
+  // An empty query has no result set at all, so it reports no cap bookkeeping
+  // either (the normal listing is not a search result).
+  const totalMatches = query.trim() === "" ? undefined : exposed?.totalMatches;
+  const truncated = query.trim() === "" ? false : exposed?.truncated === true;
+  // Status uses the SAME identity+epoch exposure predicate as `hits`: a
+  // settlement only counts for the lifecycle being rendered, so a response
+  // that answers an older request can never end the current one's pending
+  // state. A non-empty query with no matching settlement reads "pending".
+  const status: SearchStatus =
+    query.trim() === ""
+      ? "idle"
+      : settled !== null &&
+          settled.identity === identity &&
+          settled.epoch === epochForRender
+        ? settled.status
+        : "pending";
+  return {
+    hits: query.trim() === "" ? [] : hits,
+    status,
+    totalMatches,
+    truncated,
+  };
 }

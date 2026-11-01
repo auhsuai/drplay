@@ -90,6 +90,8 @@
     "no_folders": "No folders here.",
     "no_audio": "No audio files here.",
     "no_search_results": "No matching songs found.",
+    "searching": "Searching…",
+    "results_truncated": "Showing the first {{shown}} of {{total}} matching results.",
     "folders": "Folders",
     "new_folder": "New Folder",
     "new_folder_title": "Create New Folder",
