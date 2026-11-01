@@ -9,6 +9,7 @@ import { getCurrentUserEmail } from "../utils/storageKeys";
 import { VIRTUAL_ROOT_ID } from "../utils/driveConstants";
 import { SORT_COLLATOR } from "../utils/naturalSortCollator";
 import { useDriveStore } from "../store/driveStore";
+import { useAuthStore } from "../store/authStore";
 
 // Map.get carries the true nullability (CachedMetadata | undefined) so the
 // optional chain below is checked by the compiler instead of by comment.
@@ -88,16 +89,34 @@ export function useDriveListing({
   const rootFolders = useDriveStore((state) => state.rootFolders);
   const isVirtualRoot = currentFolderId === VIRTUAL_ROOT_ID;
 
-  const dbFiles = useLiveQuery(() => {
+  // Reactive owner (same source as useSearchWorker/useDriveExplorer): the auth
+  // store is live, localStorage is only the pre-hydration fallback. An account
+  // switch keeps `currentFolderId` unchanged, so the folder id alone can never
+  // re-scope the query — the email must be a dependency too.
+  const storeEmail = useAuthStore((s) => s.userProfile?.email ?? "");
+  const accountEmail = storeEmail !== "" ? storeEmail : getCurrentUserEmail();
+
+  // The query carries the owner it answered for: dexie-react-hooks keeps the
+  // previous result in a ref across the dep change, so without this guard the
+  // render right after a switch would paint the OLD account's rows for a frame.
+  const result = useLiveQuery(async () => {
     if (!currentFolderId || currentFolderId === VIRTUAL_ROOT_ID) {
-      return Promise.resolve<DriveFile[]>([]);
+      return { email: accountEmail, rows: [] as DriveFile[] };
     }
     // Per-user scoping (schema v10): only the signed-in account's rows.
-    return db.files
+    const rows = await db.files
       .where("[userEmail+parentId]")
-      .equals([getCurrentUserEmail(), currentFolderId])
+      .equals([accountEmail, currentFolderId])
       .toArray();
-  }, [currentFolderId]);
+    return { email: accountEmail, rows };
+  }, [currentFolderId, accountEmail]);
+
+  // A result answered for another account is exposed as `undefined`, which the
+  // items memo already maps to [] (the same empty/skeleton contract as before).
+  const dbFiles =
+    result !== undefined && result.email === accountEmail
+      ? result.rows
+      : undefined;
 
   // Items memo: maps rows to DriveItems; the O(n log n) sort runs below on
   // the same memo so a dbFiles change re-maps + re-sorts once.
