@@ -56,10 +56,10 @@ vi.mock("../../../utils/cache", () => ({
   removeFallbackEngine: vi.fn(),
   FALLBACK_ENGINE_ID: "fallback_engine",
   CACHE_CATEGORY_LABELS: {
-    metadata: "Metadata cache",
-    files: "File listing cache",
-    covers: "Covers & thumbnails",
-    prefetch: "Prefetched data",
+    metadata: "Song information cache",
+    files: "File list cache",
+    covers: "Covers and thumbnails",
+    prefetch: "Preloaded data",
   } satisfies Record<CacheCategoryId, string>,
 }));
 
@@ -82,10 +82,10 @@ vi.mock("../../../utils/simpleToast", () => ({
 }));
 
 const SIZES: CacheCategoryInfo[] = [
-  { id: "metadata", label: "Metadata cache", bytes: 1024 },
-  { id: "files", label: "File listing cache", bytes: 2048 },
-  { id: "covers", label: "Covers & thumbnails", bytes: 0 },
-  { id: "prefetch", label: "Prefetched data", bytes: 1536 },
+  { id: "metadata", label: "Song information cache", bytes: 1024 },
+  { id: "files", label: "File list cache", bytes: 2048 },
+  { id: "covers", label: "Covers and thumbnails", bytes: 0 },
+  { id: "prefetch", label: "Preloaded data", bytes: 1536 },
 ];
 
 function renderOpen(onClose = vi.fn()) {
@@ -123,10 +123,10 @@ describe("CacheManagerModal", () => {
 
   it("lists all 4 categories with formatted sizes and all checked by default", async () => {
     renderOpen();
-    expect(await screen.findByText("Metadata cache")).toBeTruthy();
-    expect(screen.getByText("File listing cache")).toBeTruthy();
-    expect(screen.getByText("Covers & thumbnails")).toBeTruthy();
-    expect(screen.getByText("Prefetched data")).toBeTruthy();
+    expect(await screen.findByText("Song information cache")).toBeTruthy();
+    expect(screen.getByText("File list cache")).toBeTruthy();
+    expect(screen.getByText("Covers and thumbnails")).toBeTruthy();
+    expect(screen.getByText("Preloaded data")).toBeTruthy();
 
     // Sizes arrive after the fetch resolves: formatBytes(1024) = "1 KB",
     // formatBytes(2048) = "2 KB", formatBytes(0) = "0 B",
@@ -155,12 +155,12 @@ describe("CacheManagerModal", () => {
     );
     renderOpen();
 
-    // Rows render from CACHE_CATEGORY_LABELS right away, no "Loading..." row.
-    expect(screen.getByText("Metadata cache")).toBeTruthy();
-    expect(screen.getByText("File listing cache")).toBeTruthy();
-    expect(screen.getByText("Covers & thumbnails")).toBeTruthy();
-    expect(screen.getByText("Prefetched data")).toBeTruthy();
-    expect(screen.queryByText("Loading...")).toBeNull();
+    // Rows render from CACHE_CATEGORY_LABELS right away, no "Loading…" row.
+    expect(screen.getByText("Song information cache")).toBeTruthy();
+    expect(screen.getByText("File list cache")).toBeTruthy();
+    expect(screen.getByText("Covers and thumbnails")).toBeTruthy();
+    expect(screen.getByText("Preloaded data")).toBeTruthy();
+    expect(screen.queryByText("Loading…")).toBeNull();
 
     // Every row shows a text placeholder in its size slot until the fetch
     // resolves — same text-sm as the real size, so the column never jumps.
@@ -179,7 +179,7 @@ describe("CacheManagerModal", () => {
 
   it("uses a custom checkbox with a visible unchecked border (Material-style)", async () => {
     renderOpen();
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
     const first = screen.getAllByRole("checkbox")[0] as HTMLInputElement;
     // appearance-none + gray border are the contract that makes the unchecked
     // state visible instead of the native accent color.
@@ -189,12 +189,12 @@ describe("CacheManagerModal", () => {
 
   it("disables the Clear button when every category is unchecked", async () => {
     renderOpen();
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
     const checkboxes = screen.getAllByRole("checkbox");
     checkboxes.forEach((cb) => fireEvent.click(cb));
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
-        name: "Clear Data",
+        name: "Clear app data",
       }).disabled,
     ).toBe(true);
   });
@@ -202,12 +202,12 @@ describe("CacheManagerModal", () => {
   it("calls clearAppCache with only the still-checked categories", async () => {
     vi.mocked(clearAppCache).mockResolvedValue(undefined);
     renderOpen();
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
     const checkboxes = screen.getAllByRole("checkbox");
     const coversCheckbox = checkboxes[1];
     if (coversCheckbox === undefined) throw new Error("expected checkbox");
     fireEvent.click(coversCheckbox);
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
     await waitFor(() => {
       expect(clearAppCache).toHaveBeenCalledWith([
         "metadata",
@@ -220,7 +220,7 @@ describe("CacheManagerModal", () => {
   it("Cancel closes the modal without clearing anything", async () => {
     const onClose = vi.fn();
     renderOpen(onClose);
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(clearAppCache).not.toHaveBeenCalled();
@@ -230,10 +230,10 @@ describe("CacheManagerModal", () => {
     vi.mocked(clearAppCache).mockResolvedValue(undefined);
     const onClose = vi.fn();
     renderOpen(onClose);
-    await screen.findByText("Metadata cache");
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    await screen.findByText("Song information cache");
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
     await waitFor(() => {
-      expect(showSuccessToast).toHaveBeenCalledWith("App data cleared");
+      expect(showSuccessToast).toHaveBeenCalledWith("App data cleared.");
     });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(showErrorToast).not.toHaveBeenCalled();
@@ -242,21 +242,23 @@ describe("CacheManagerModal", () => {
   it("shows an error toast and stays open when clearing fails", async () => {
     vi.mocked(clearAppCache).mockRejectedValue(new Error("boom"));
     renderOpen();
-    await screen.findByText("Metadata cache");
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    await screen.findByText("Song information cache");
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
     await waitFor(() => {
       expect(showErrorToast).toHaveBeenCalledWith(
-        "Couldn't clear app data. Try again.",
+        "Couldn't clear app data. Please try again.",
       );
     });
     expect(showSuccessToast).not.toHaveBeenCalled();
-    expect(screen.getByText("Clear App Data")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Clear app data" }),
+    ).toBeTruthy();
   });
 
   it("closes on Escape keydown", async () => {
     const onClose = vi.fn();
     renderOpen(onClose);
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -264,15 +266,15 @@ describe("CacheManagerModal", () => {
   it("closes on overlay click", async () => {
     const onClose = vi.fn();
     renderOpen(onClose);
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
     fireEvent.click(screen.getByTestId("cache-manager-overlay"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("exposes the visible title as the dialog's accessible name", async () => {
     renderOpen();
-    await screen.findByText("Metadata cache");
-    expect(screen.getByRole("dialog", { name: "Clear App Data" })).toBeTruthy();
+    await screen.findByText("Song information cache");
+    expect(screen.getByRole("dialog", { name: "Clear app data" })).toBeTruthy();
   });
 
   it("moves focus to Cancel on open and restores it to the invoker on close", async () => {
@@ -283,7 +285,7 @@ describe("CacheManagerModal", () => {
     const onClose = vi.fn();
     try {
       const { rerender } = renderOpen(onClose);
-      await screen.findByText("Metadata cache");
+      await screen.findByText("Song information cache");
       expect(document.activeElement).toBe(
         screen.getByRole("button", { name: "Cancel" }),
       );
@@ -332,7 +334,7 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
   it("does NOT render the fallback row when the fallback is not installed", async () => {
     vi.mocked(getFallbackEngineSize).mockResolvedValue(null);
     renderOpen();
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
 
     expect(screen.queryByText("mpv.exe fallback engine")).toBeNull();
     expect(screen.queryByTestId("fallback-engine-checkbox")).toBeNull();
@@ -380,13 +382,13 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
 
     uncheckAllCategories();
     fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
 
     await waitFor(() => {
       expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
     });
     expect(clearAppCache).not.toHaveBeenCalled();
-    expect(showSuccessToast).toHaveBeenCalledWith("App data cleared");
+    expect(showSuccessToast).toHaveBeenCalledWith("App data cleared.");
   });
 
   // (4)
@@ -395,7 +397,7 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
     renderOpen();
     await screen.findByText("mpv.exe fallback engine");
 
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
 
     await waitFor(() => {
       expect(clearAppCache).toHaveBeenCalledWith([
@@ -415,13 +417,13 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
     await screen.findByText("mpv.exe fallback engine");
 
     fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
 
     await waitFor(() => {
       expect(clearAppCache).toHaveBeenCalledTimes(1);
       expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
     });
-    expect(showSuccessToast).toHaveBeenCalledWith("App data cleared");
+    expect(showSuccessToast).toHaveBeenCalledWith("App data cleared.");
     expect(showErrorToast).not.toHaveBeenCalled();
   });
 
@@ -436,11 +438,11 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
     await screen.findByText("mpv.exe fallback engine");
 
     fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
 
     await waitFor(() => {
       expect(showErrorToast).toHaveBeenCalledWith(
-        "Couldn't clear app data. Try again.",
+        "Couldn't clear app data. Please try again.",
       );
     });
     // Order independence: both groups were attempted despite the failure.
@@ -448,7 +450,9 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
     expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
     expect(showSuccessToast).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByText("Clear App Data")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Clear app data" }),
+    ).toBeTruthy();
   });
 
   // (6b) The mirror case: a cache failure must not skip the removal.
@@ -459,11 +463,11 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
     await screen.findByText("mpv.exe fallback engine");
 
     fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
 
     await waitFor(() => {
       expect(showErrorToast).toHaveBeenCalledWith(
-        "Couldn't clear app data. Try again.",
+        "Couldn't clear app data. Please try again.",
       );
     });
     expect(removeFallbackEngine).toHaveBeenCalledTimes(1);
@@ -473,13 +477,13 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
   // (7) Title/confirm copy, localized from the en resources.
   it("renders the renamed dialog title and confirm button", async () => {
     renderOpen();
-    await screen.findByText("Metadata cache");
+    await screen.findByText("Song information cache");
 
-    expect(screen.getByRole("dialog", { name: "Clear App Data" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Clear app data" })).toBeTruthy();
     expect(
-      screen.getByRole("heading", { name: "Clear App Data" }),
+      screen.getByRole("heading", { name: "Clear app data" }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Clear Data" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clear app data" })).toBeTruthy();
   });
 
   // An installed engine alone keeps the confirm enabled (the four rows can all
@@ -491,13 +495,13 @@ describe("CacheManagerModal — mpv.exe fallback engine row", () => {
 
     uncheckAllCategories();
     expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Clear Data" })
+      screen.getByRole<HTMLButtonElement>("button", { name: "Clear app data" })
         .disabled,
     ).toBe(true);
 
     fireEvent.click(screen.getByTestId("fallback-engine-checkbox"));
     expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Clear Data" })
+      screen.getByRole<HTMLButtonElement>("button", { name: "Clear app data" })
         .disabled,
     ).toBe(false);
   });

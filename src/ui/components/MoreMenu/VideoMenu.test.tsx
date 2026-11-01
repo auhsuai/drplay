@@ -637,7 +637,7 @@ describe("VideoMenu hover opens submenus (pointer devices)", () => {
           label: "Playlist",
           children: [{ kind: "item", id: "menu:queue:a", label: "One" }],
         },
-        { kind: "item", id: "PLAYER_MEDIA_INFO", label: "Media info" },
+        { kind: "item", id: "PLAYER_MEDIA_INFO", label: "Media information" },
       ],
     });
 
@@ -645,8 +645,8 @@ describe("VideoMenu hover opens submenus (pointer devices)", () => {
     fireEvent.mouseOver(hoverArea(rowByLabel(root, /Playlist/)));
     expect(flyouts()).toHaveLength(1);
 
-    // Playlist -> Media info: the flyout must not survive the crossing.
-    fireEvent.mouseOver(hoverArea(rowByLabel(root, /^Media info$/)));
+    // Playlist -> Media information: the flyout must not survive the crossing.
+    fireEvent.mouseOver(hoverArea(rowByLabel(root, /^Media information$/)));
 
     expect(flyouts()).toHaveLength(0);
     expect(props.onClose).not.toHaveBeenCalled();

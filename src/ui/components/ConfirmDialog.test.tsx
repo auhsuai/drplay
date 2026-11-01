@@ -10,7 +10,7 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-const TITLE = "Use these folders as your root folders?";
+const TITLE = "Use these folders as your roots?";
 const BODY = "You have selected 2 folders.";
 
 afterEach(() => {

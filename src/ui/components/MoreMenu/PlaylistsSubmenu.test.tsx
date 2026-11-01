@@ -99,7 +99,7 @@ describe("PlaylistsSubmenu search filter", () => {
 
   it("names the search box for assistive tech", () => {
     renderSubmenu([], "");
-    expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Search…" })).toBeTruthy();
   });
 });
 
@@ -131,13 +131,13 @@ describe("PlaylistsSubmenu WAI-ARIA + empty states (P2-09a-3/4/5)", () => {
 
   it("shows a no-results message when a non-empty query matches nothing", () => {
     renderSubmenu([makePlaylist("p1", "Chill Vibes")], "zzz");
-    expect(screen.getByText("No matching playlists")).toBeTruthy();
+    expect(screen.getByText("No matching playlists.")).toBeTruthy();
     expect(screen.queryByText("No playlists yet")).toBeNull();
   });
 
   it("keeps the no-playlists message for a genuinely empty playlist list", () => {
     renderSubmenu([], "");
     expect(screen.getByText("No playlists yet")).toBeTruthy();
-    expect(screen.queryByText("No matching playlists")).toBeNull();
+    expect(screen.queryByText("No matching playlists.")).toBeNull();
   });
 });

@@ -142,13 +142,13 @@ describe("useMenuDownload writes through plugin:fs|write_file", () => {
     expect(mockedGetCustomDownloadPath).toHaveBeenCalled();
   });
 
-  it('shows the real save location ("Saved at:") after a successful write', async () => {
+  it('shows the real save location ("Saved to:") after a successful write', async () => {
     fetchResolved();
 
     const result = await runDownload();
 
     expect(result.current.downloadMessage).toContain(
-      "Saved at: C:\\Downloads\\Test Song - Test Artist.mp3",
+      "Saved to: C:\\Downloads\\Test Song - Test Artist.mp3",
     );
   });
 });
@@ -209,17 +209,19 @@ describe("useMenuDownload custom download path (RC2)", () => {
     expect(pathHeader).toBe(
       encodeURIComponent("C:\\Music\\Test Song - Test Artist.mp3"),
     );
-    expect(result.current.downloadMessage).toContain("Saved at:");
+    expect(result.current.downloadMessage).toContain("Saved to:");
   });
 });
 
 describe("useMenuDownload error handling", () => {
-  it('shows "Download failed" and does not write when the fetch fails', async () => {
+  it('shows "Couldn\'t download the file." and does not write when the fetch fails', async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
 
     const result = await runDownload();
 
-    expect(result.current.downloadMessage).toContain("Download failed");
+    expect(result.current.downloadMessage).toContain(
+      "Couldn't download the file.",
+    );
     expectNoWriteFile();
   });
 
@@ -234,18 +236,20 @@ describe("useMenuDownload error handling", () => {
     expectNoWriteFile();
   });
 
-  it('shows "Download failed" on a timeout (TimeoutError)', async () => {
+  it('shows "Couldn\'t download the file." on a timeout (TimeoutError)', async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new DOMException("Timed out", "TimeoutError"),
     );
 
     const result = await runDownload();
 
-    expect(result.current.downloadMessage).toContain("Download failed");
+    expect(result.current.downloadMessage).toContain(
+      "Couldn't download the file.",
+    );
     expectNoWriteFile();
   });
 
-  it('shows "Download failed" when the write itself is rejected by the fs plugin', async () => {
+  it('shows "Couldn\'t download the file." when the write itself is rejected by the fs plugin', async () => {
     fetchResolved();
     mockedInvoke.mockImplementation((cmd: string) => {
       if (cmd === "plugin:fs|write_file") {
@@ -256,7 +260,9 @@ describe("useMenuDownload error handling", () => {
 
     const result = await runDownload();
 
-    expect(result.current.downloadMessage).toContain("Download failed");
+    expect(result.current.downloadMessage).toContain(
+      "Couldn't download the file.",
+    );
   });
 });
 

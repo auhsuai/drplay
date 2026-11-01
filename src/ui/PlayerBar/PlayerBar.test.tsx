@@ -856,7 +856,9 @@ describe("R3.5 — PlayerBar is observe-only (bridge effect removed)", () => {
 describe("PlayerBar favorite (heart) button", () => {
   it("checks favorite status for the current track and renders the heart button (not liked)", async () => {
     renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
+    const btn = await screen.findByRole("button", {
+      name: "Add to Liked Songs",
+    });
     expect(btn).toBeTruthy();
     expect(isFavorite).toHaveBeenCalledWith("track-1");
   });
@@ -865,16 +867,18 @@ describe("PlayerBar favorite (heart) button", () => {
     isFavorite.mockResolvedValue(true);
     renderPlayer();
     const btn = await screen.findByRole("button", {
-      name: "Remove from favorites",
+      name: "Remove from Liked Songs",
     });
     expect(btn.className).toContain("text-brand-text");
   });
 
   it("calls addFavorite and flips to liked on click when not liked", async () => {
     renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
+    const btn = await screen.findByRole("button", {
+      name: "Add to Liked Songs",
+    });
     fireEvent.click(btn);
-    await screen.findByRole("button", { name: "Remove from favorites" });
+    await screen.findByRole("button", { name: "Remove from Liked Songs" });
     expect(addFavorite).toHaveBeenCalledTimes(1);
     expect(addFavorite).toHaveBeenCalledWith(
       expect.objectContaining({ id: "track-1" }),
@@ -886,10 +890,10 @@ describe("PlayerBar favorite (heart) button", () => {
     isFavorite.mockResolvedValue(true);
     renderPlayer();
     const btn = await screen.findByRole("button", {
-      name: "Remove from favorites",
+      name: "Remove from Liked Songs",
     });
     fireEvent.click(btn);
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
     expect(removeFavorite).toHaveBeenCalledTimes(1);
     expect(removeFavorite).toHaveBeenCalledWith("track-1");
     expect(addFavorite).not.toHaveBeenCalled();
@@ -897,7 +901,7 @@ describe("PlayerBar favorite (heart) button", () => {
 
   it("re-checks favorite status when the track id changes", async () => {
     const { rerender } = renderPlayer();
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
     isFavorite.mockClear();
 
     rerender(
@@ -915,13 +919,13 @@ describe("PlayerBar favorite (heart) button", () => {
         onToggleQueue={vi.fn()}
       />,
     );
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
     expect(isFavorite).toHaveBeenCalledWith("track-2");
   });
 
   it("re-checks the current track when favorites-updated fires elsewhere (no stale heart)", async () => {
     renderPlayer();
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
     isFavorite.mockClear();
     isFavorite.mockResolvedValue(true);
 
@@ -930,12 +934,12 @@ describe("PlayerBar favorite (heart) button", () => {
     });
 
     expect(isFavorite).toHaveBeenCalledWith("track-1");
-    await screen.findByRole("button", { name: "Remove from favorites" });
+    await screen.findByRole("button", { name: "Remove from Liked Songs" });
   });
 
   it("drops an in-flight favorites-updated re-check when the track changed (no cross-track heart race)", async () => {
     const { rerender } = renderPlayer();
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
     let resolveStale!: (liked: boolean) => void;
     isFavorite.mockImplementation((trackId: string) =>
       trackId === "track-1"
@@ -969,7 +973,7 @@ describe("PlayerBar favorite (heart) button", () => {
         onToggleQueue={vi.fn()}
       />,
     );
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
 
     // When the LATE track-1 response finally lands, it must NOT flip
     // track-2's heart (track-2 was never favorited — the old fixed
@@ -980,16 +984,16 @@ describe("PlayerBar favorite (heart) button", () => {
     });
 
     expect(
-      screen.queryByRole("button", { name: "Remove from favorites" }),
+      screen.queryByRole("button", { name: "Remove from Liked Songs" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Add to favorites" }),
+      screen.queryByRole("button", { name: "Add to Liked Songs" }),
     ).not.toBeNull();
   });
 
   it("does not crash when favorites-updated fires with no current track", async () => {
     const { rerender } = renderPlayer();
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
     isFavorite.mockClear();
 
     rerender(
@@ -1025,7 +1029,9 @@ describe("PlayerBar favorite (heart) button", () => {
         }),
     );
     renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
+    const btn = await screen.findByRole("button", {
+      name: "Add to Liked Songs",
+    });
 
     fireEvent.click(btn);
     fireEvent.click(btn);
@@ -1034,21 +1040,23 @@ describe("PlayerBar favorite (heart) button", () => {
     act(() => {
       resolveAdd?.();
     });
-    await screen.findByRole("button", { name: "Remove from favorites" });
+    await screen.findByRole("button", { name: "Remove from Liked Songs" });
   });
 
   it("resets the toggle guard after completion so the next click can remove", async () => {
     renderPlayer();
-    const btn = await screen.findByRole("button", { name: "Add to favorites" });
+    const btn = await screen.findByRole("button", {
+      name: "Add to Liked Songs",
+    });
     fireEvent.click(btn);
-    await screen.findByRole("button", { name: "Remove from favorites" });
+    await screen.findByRole("button", { name: "Remove from Liked Songs" });
     expect(addFavorite).toHaveBeenCalledTimes(1);
 
     const removeBtn = screen.getByRole("button", {
-      name: "Remove from favorites",
+      name: "Remove from Liked Songs",
     });
     fireEvent.click(removeBtn);
-    await screen.findByRole("button", { name: "Add to favorites" });
+    await screen.findByRole("button", { name: "Add to Liked Songs" });
     expect(removeFavorite).toHaveBeenCalledTimes(1);
     expect(removeFavorite).toHaveBeenCalledWith("track-1");
   });

@@ -93,7 +93,7 @@ describe("TopNavigationBar toolbar (post-dropdown-removal)", () => {
 
   it("names the search input for assistive tech", () => {
     render(<TopNavigationBar {...makeProps()} />);
-    expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Search…" })).toBeTruthy();
   });
 
   it("keeps the sortOption/onSortChange props accepted for call-site compatibility", () => {
@@ -106,7 +106,7 @@ describe("TopNavigationBar toolbar (post-dropdown-removal)", () => {
         {...makeProps({ sortOption: "modifiedTime desc", onSortChange })}
       />,
     );
-    expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Search…" })).toBeTruthy();
     expect(onSortChange).not.toHaveBeenCalled();
   });
 });

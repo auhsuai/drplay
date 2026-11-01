@@ -71,10 +71,10 @@ vi.mock("../../utils/cache", () => ({
   removeFallbackEngine: vi.fn(),
   FALLBACK_ENGINE_ID: "fallback_engine",
   CACHE_CATEGORY_LABELS: {
-    metadata: "Metadata cache",
-    files: "File listing cache",
-    covers: "Covers & thumbnails",
-    prefetch: "Prefetched data",
+    metadata: "Song information cache",
+    files: "File list cache",
+    covers: "Covers and thumbnails",
+    prefetch: "Preloaded data",
   },
 }));
 
@@ -209,7 +209,7 @@ describe("SettingsTab download path picker", () => {
     );
     render(<SettingsTab {...baseProps} />);
     const button = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Change Path",
+      name: "Change location",
     });
 
     fireEvent.click(button);
@@ -232,7 +232,7 @@ describe("SettingsTab download path picker", () => {
   it("writes the picked path and shows it once the dialog resolves", async () => {
     vi.mocked(open).mockResolvedValue("C:\\NewMusic");
     render(<SettingsTab {...baseProps} />);
-    fireEvent.click(screen.getByRole("button", { name: "Change Path" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change location" }));
     await waitFor(() => {
       expect(setCustomDownloadPath).toHaveBeenCalledWith("C:\\NewMusic");
     });
@@ -243,7 +243,7 @@ describe("SettingsTab download path picker", () => {
     vi.mocked(open).mockRejectedValue(new Error("dialog exploded"));
     render(<SettingsTab {...baseProps} />);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Change Path" }));
+      fireEvent.click(screen.getByRole("button", { name: "Change location" }));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -257,7 +257,7 @@ describe("SettingsTab download path picker", () => {
       }),
     );
     expect(showErrorToast).toHaveBeenCalledWith(
-      "Couldn't select folder. Try again.",
+      "Couldn't choose that folder. Please try again.",
     );
   });
 });
@@ -273,18 +273,20 @@ describe("SettingsTab clear cache button", () => {
     vi.mocked(clearAppCache).mockReset();
     vi.mocked(getCacheSizes).mockReset();
     vi.mocked(getCacheSizes).mockResolvedValue([
-      { id: "metadata", label: "Metadata cache", bytes: 1024 },
-      { id: "files", label: "File listing cache", bytes: 2048 },
-      { id: "covers", label: "Covers & thumbnails", bytes: 0 },
-      { id: "prefetch", label: "Prefetched data", bytes: 1536 },
+      { id: "metadata", label: "Song information cache", bytes: 1024 },
+      { id: "files", label: "File list cache", bytes: 2048 },
+      { id: "covers", label: "Covers and thumbnails", bytes: 0 },
+      { id: "prefetch", label: "Preloaded data", bytes: 1536 },
     ]);
   });
 
   it("opens the cache manager modal instead of clearing directly", async () => {
     render(<SettingsTab {...baseProps} />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
     const modal = await screen.findByTestId("cache-manager-modal");
-    expect(within(modal).getByText("Clear App Data")).toBeTruthy();
+    expect(
+      within(modal).getByRole("heading", { name: "Clear app data" }),
+    ).toBeTruthy();
     // The old direct-clear path is gone: nothing is cleared until the modal's
     // own Clear button is pressed.
     expect(clearAppCache).not.toHaveBeenCalled();
@@ -310,7 +312,7 @@ describe("SettingsTab metadata fetch toggle", () => {
   it("renders the toggle checked by default when storage is empty", () => {
     render(<SettingsTab {...baseProps} />);
     const checkbox = screen.getByRole<HTMLInputElement>("checkbox", {
-      name: "Fetch metadata",
+      name: "Fetch song information",
     });
     expect(checkbox.checked).toBe(true);
   });
@@ -318,7 +320,7 @@ describe("SettingsTab metadata fetch toggle", () => {
   it("persists OFF to localStorage when toggled off", () => {
     render(<SettingsTab {...baseProps} />);
     const checkbox = screen.getByRole<HTMLInputElement>("checkbox", {
-      name: "Fetch metadata",
+      name: "Fetch song information",
     });
 
     fireEvent.click(checkbox);
@@ -330,7 +332,7 @@ describe("SettingsTab metadata fetch toggle", () => {
     localStorage.setItem(KEY, "false");
     render(<SettingsTab {...baseProps} />);
     const checkbox = screen.getByRole<HTMLInputElement>("checkbox", {
-      name: "Fetch metadata",
+      name: "Fetch song information",
     });
     expect(checkbox.checked).toBe(false);
   });
@@ -350,9 +352,7 @@ describe("SettingsTab config sync retry row", () => {
     expect(screen.getByTestId("config-sync-unsaved")).toBeTruthy();
     expect(screen.getByTestId("config-sync-retry")).toBeTruthy();
     expect(
-      screen.getByText(
-        "Saved on this device, but Google Drive wasn't updated.",
-      ),
+      screen.getByText("Saved on this device, but not synced to Google Drive."),
     ).toBeTruthy();
   });
 

@@ -158,7 +158,7 @@ describe("MoreMenu recent variant", () => {
     expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
   });
 
-  it("shows exactly 4 curated items (Delete / Download Song / Add to Playlist / Locate File) and no Select Multiple or Move to", () => {
+  it("shows exactly 4 curated items (Delete / Download file / Add to playlist / Show file location) and no Select Multiple or Move to", () => {
     render(
       <MoreMenu
         variant="recent"
@@ -169,10 +169,10 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
-      "Add to Playlist",
+      "Add to playlist",
       "Delete",
-      "Download Song",
-      "Locate File",
+      "Download file",
+      "Show file location",
     ]);
     expect(
       within(menuEl()).queryByRole("menuitem", {
@@ -180,7 +180,7 @@ describe("MoreMenu recent variant", () => {
       }),
     ).toBeNull();
     expect(
-      within(menuEl()).queryByRole("menuitem", { name: "Move to..." }),
+      within(menuEl()).queryByRole("menuitem", { name: "Move to…" }),
     ).toBeNull();
   });
 
@@ -194,9 +194,9 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
+      "Add to playlist",
+      "Download file",
+      "Show file location",
     ]);
   });
 
@@ -204,13 +204,13 @@ describe("MoreMenu recent variant", () => {
     render(<MoreMenu variant="recent" track={makeTrack()} token="tok" />);
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
+      "Add to playlist",
+      "Download file",
+      "Show file location",
     ]);
   });
 
-  it("dispatches the locate-file CustomEvent with fileId/parentId/parentName on Locate File", () => {
+  it("dispatches the locate-file CustomEvent with fileId/parentId/parentName on Show file location", () => {
     const spy = vi.fn();
     window.addEventListener("locate-file", spy);
     const onClose = vi.fn();
@@ -225,7 +225,7 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("menuitem", { name: "Locate File" }),
+      within(menuEl()).getByRole("menuitem", { name: "Show file location" }),
     );
     expect(spy).toHaveBeenCalledTimes(1);
     const firstCall = spy.mock.calls[0];
@@ -278,7 +278,7 @@ describe("MoreMenu recent variant", () => {
     expect(screen.queryByText("Move to Trash?")).toBeNull();
   });
 
-  it("opens DownloadDialog on Download Song without crashing", () => {
+  it("opens DownloadDialog on Download file without crashing", () => {
     render(
       <MoreMenu
         variant="recent"
@@ -289,12 +289,12 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("menuitem", { name: "Download Song" }),
+      within(menuEl()).getByRole("menuitem", { name: "Download file" }),
     );
     expect(screen.getByText("File name")).toBeTruthy();
   });
 
-  it("opens PlaylistsSubmenu on Add to Playlist", () => {
+  it("opens PlaylistsSubmenu on Add to playlist", () => {
     render(
       <MoreMenu
         variant="recent"
@@ -305,27 +305,27 @@ describe("MoreMenu recent variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("menuitem", { name: "Add to Playlist" }),
+      within(menuEl()).getByRole("menuitem", { name: "Add to playlist" }),
     );
     expect(screen.getByText("Playlists")).toBeTruthy();
   });
 });
 
 describe("MoreMenu playlist variant", () => {
-  it("shows exactly 3 curated items (Select Multiple / Locate File / Remove from Playlist) and no file-management or shared Add to Playlist", () => {
+  it("shows exactly 3 curated items (Select Multiple / Show file location / Remove from playlist) and no file-management or shared Add to playlist", () => {
     render(<MoreMenu variant="playlist" track={makeTrack()} />);
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
-      "Locate File",
-      "Remove from Playlist",
+      "Remove from playlist",
       "Select multiple items",
+      "Show file location",
     ]);
     for (const absent of [
-      "Add to Playlist",
+      "Add to playlist",
       "Add to queue",
       "Delete",
-      "Download Song",
-      "Move to...",
+      "Download file",
+      "Move to…",
     ]) {
       expect(
         within(menuEl()).queryByRole("menuitem", { name: absent }),
@@ -333,7 +333,7 @@ describe("MoreMenu playlist variant", () => {
     }
   });
 
-  it("dispatches locate-file with fileId/parentId/parentName on Locate File and closes the menu", () => {
+  it("dispatches locate-file with fileId/parentId/parentName on Show file location and closes the menu", () => {
     const spy = vi.fn();
     window.addEventListener("locate-file", spy);
     const onClose = vi.fn();
@@ -342,7 +342,7 @@ describe("MoreMenu playlist variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("menuitem", { name: "Locate File" }),
+      within(menuEl()).getByRole("menuitem", { name: "Show file location" }),
     );
     expect(spy).toHaveBeenCalledTimes(1);
     const firstCall = spy.mock.calls[0];
@@ -383,7 +383,7 @@ describe("MoreMenu playlist variant", () => {
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
   });
 
-  it("Remove from Playlist click -> onRemoveFromPlaylist + menu closes", () => {
+  it("Remove from playlist click -> onRemoveFromPlaylist + menu closes", () => {
     const onRemoveFromPlaylist = vi.fn();
     const onClose = vi.fn();
     render(
@@ -396,7 +396,7 @@ describe("MoreMenu playlist variant", () => {
     );
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("menuitem", { name: "Remove from Playlist" }),
+      within(menuEl()).getByRole("menuitem", { name: "Remove from playlist" }),
     );
     expect(onRemoveFromPlaylist).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalled();
@@ -405,17 +405,17 @@ describe("MoreMenu playlist variant", () => {
 });
 
 describe("MoreMenu sidebarPlaylist variant", () => {
-  it("shows exactly Delete / Rename / Pin to top and no track-scoped or Add to Playlist items", () => {
+  it("shows exactly Delete / Rename / Pin to top and no track-scoped or Add to playlist items", () => {
     render(<MoreMenu variant="sidebarPlaylist" playlist={makePlaylist()} />);
     openTrigger();
     expect(menuItemNames()).toEqual(["Delete", "Rename", "Pin to top"]);
     for (const absent of [
-      "Add to Playlist",
+      "Add to playlist",
       "Add to queue",
-      "Download Song",
-      "Locate File",
-      "Move to...",
-      "Remove from Playlist",
+      "Download file",
+      "Show file location",
+      "Move to…",
+      "Remove from playlist",
       "Select multiple items",
     ]) {
       expect(
@@ -455,17 +455,17 @@ describe("MoreMenu sidebarPlaylist variant", () => {
 });
 
 describe("MoreMenu default variant regression (file list)", () => {
-  it("keeps the original 6 items (Select Multiple / Add to Queue / Move to / Delete / Download / Add to Playlist)", () => {
+  it("keeps the original 6 items (Select Multiple / Add to Queue / Move to / Delete / Download / Add to playlist)", () => {
     render(
       <MoreMenu track={makeTrack()} driveItem={makeDriveItem()} token="tok" />,
     );
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
-      "Add to Playlist",
+      "Add to playlist",
       "Add to queue",
       "Delete",
-      "Download Song",
-      "Move to...",
+      "Download file",
+      "Move to…",
       "Select multiple items",
     ]);
   });
@@ -481,11 +481,11 @@ describe("MoreMenu default variant regression (file list)", () => {
     );
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
-      "Add to Playlist",
+      "Add to playlist",
       "Add to queue",
       "Delete",
-      "Download Song",
-      "Move to...",
+      "Download file",
+      "Move to…",
       "Select multiple items",
     ]);
   });
@@ -518,13 +518,13 @@ describe("MoreMenu default variant add-to-queue item", () => {
 });
 
 describe("MoreMenu playerbar variant regression", () => {
-  it("keeps the original 2 track items (Download Song / Locate File) plus shared Add to Playlist, no Delete", () => {
+  it("keeps the original 2 track items (Download file / Show file location) plus shared Add to playlist, no Delete", () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
     expect(menuItemNames().sort()).toEqual([
-      "Add to Playlist",
-      "Download Song",
-      "Locate File",
+      "Add to playlist",
+      "Download file",
+      "Show file location",
     ]);
     expect(
       within(menuEl()).queryByRole("menuitem", { name: "Delete" }),
@@ -542,7 +542,7 @@ describe("MoreMenu playerbar variant regression", () => {
     render(<MoreMenu isPlayerBarMode track={makeTrack()} />);
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("menuitem", { name: "Locate File" }),
+      within(menuEl()).getByRole("menuitem", { name: "Show file location" }),
     );
     const firstCall = spy.mock.calls[0];
     if (firstCall === undefined) throw new Error("expected event dispatch");
@@ -712,7 +712,7 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     pressOnActive("ArrowDown");
     expect(document.activeElement).toBe(items[2]);
     pressOnActive("ArrowDown");
-    expect(document.activeElement).toBe(items[3]); // Add to Playlist (last)
+    expect(document.activeElement).toBe(items[3]); // Add to playlist (last)
     pressOnActive("ArrowDown"); // last -> first
     expect(document.activeElement).toBe(items[0]);
     pressOnActive("ArrowUp"); // first -> last
@@ -743,11 +743,11 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     openTrigger();
     const items = menuItems();
     expect(items.map((item) => item.textContent?.trim())).toEqual([
-      "Download Song",
-      "Locate File",
+      "Download file",
+      "Show file location",
       "Remove from Queue",
       "Remove Folder from Queue",
-      "Add to Playlist",
+      "Add to playlist",
     ]);
     expect(items[2]?.tabIndex).toBe(-1);
     // P2-08-5: disable is now announced (aria-disabled) instead of the
@@ -755,7 +755,7 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     expect(items[2]?.getAttribute("aria-disabled")).toBe("true");
     expect(items[2]?.hasAttribute("disabled")).toBe(false);
 
-    pressOnActive("ArrowDown"); // -> Locate File
+    pressOnActive("ArrowDown"); // -> Show file location
     pressOnActive("ArrowDown"); // skips the disabled entry
     expect(document.activeElement).toBe(items[3]);
   });
@@ -790,7 +790,7 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     const user = userEvent.setup();
     renderRecent();
     openTrigger();
-    pressOnActive("ArrowDown"); // Download Song
+    pressOnActive("ArrowDown"); // Download file
 
     await user.keyboard(" ");
 
@@ -801,9 +801,9 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
     renderRecent();
     openTrigger();
     fireEvent.click(
-      within(menuEl()).getByRole("menuitem", { name: "Add to Playlist" }),
+      within(menuEl()).getByRole("menuitem", { name: "Add to playlist" }),
     );
-    const input = screen.getByRole("textbox", { name: "Search..." });
+    const input = screen.getByRole("textbox", { name: "Search…" });
     input.focus();
 
     fireEvent.keyDown(input, { key: "ArrowDown" });
@@ -829,7 +829,7 @@ describe("MoreMenu close-path focus return + resize + Esc submenu (P2-08b)", () 
   }
 
   function toggleItem(): HTMLElement {
-    return within(menuEl()).getByRole("menuitem", { name: "Add to Playlist" });
+    return within(menuEl()).getByRole("menuitem", { name: "Add to playlist" });
   }
 
   function menuClosed(): boolean {
@@ -897,7 +897,7 @@ describe("MoreMenu close-path focus return + resize + Esc submenu (P2-08b)", () 
     openTrigger();
     const toggle = toggleItem();
     fireEvent.click(toggle);
-    const input = screen.getByRole("textbox", { name: "Search..." });
+    const input = screen.getByRole("textbox", { name: "Search…" });
     input.focus();
 
     fireEvent.keyDown(input, { key: "Escape" });
@@ -942,7 +942,7 @@ describe("MoreMenu close-path focus return + resize + Esc submenu (P2-08b)", () 
     expect(document.activeElement).toBe(document.body);
   });
 
-  it("marks the Add to Playlist toggle as a menuitem exposing haspopup + expanded", () => {
+  it("marks the Add to playlist toggle as a menuitem exposing haspopup + expanded", () => {
     renderRecent();
     openTrigger();
     const toggle = toggleItem();

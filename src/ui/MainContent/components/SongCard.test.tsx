@@ -508,7 +508,7 @@ describe("SongCard MoreMenu WAI-ARIA APG menu button pattern", () => {
   });
 });
 
-describe("SongCard context menu closes after Download Song (forceOpen path)", () => {
+describe("SongCard context menu closes after Download file (forceOpen path)", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
     mockedFetch.mockResolvedValue({
@@ -523,7 +523,7 @@ describe("SongCard context menu closes after Download Song (forceOpen path)", ()
     cleanup();
   });
 
-  it("closes the right-click menu after Download Song while the dialog stays open", () => {
+  it("closes the right-click menu after Download file while the dialog stays open", () => {
     const { container } = render(<SongCard {...baseProps} item={makeItem()} />);
     const card = container.querySelector(".cursor-pointer") as Element;
     expect(card).not.toBeNull();

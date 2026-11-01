@@ -109,7 +109,7 @@ describe("LikedSongs debug empty trigger", () => {
 
     expect(screen.getByText("No liked songs yet")).not.toBeNull();
     expect(
-      screen.getByText("Tap the heart on any song to save it."),
+      screen.getByText("Tap the heart on a song to save it here."),
     ).not.toBeNull();
     expect(screen.queryByText("Liked Track 1")).toBeNull();
   });

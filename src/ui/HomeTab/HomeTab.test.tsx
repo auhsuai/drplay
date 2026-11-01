@@ -187,7 +187,7 @@ describe("HomeTab Recently Added delta sync", () => {
     render(<HomeTab {...baseProps()} />);
 
     expect(await screen.findByText("First.mp3")).toBeTruthy();
-    expect(screen.getByText("Recently Added to Drive")).toBeTruthy();
+    expect(screen.getByText("Recently Added")).toBeTruthy();
     expect(mocks.dbFilesToArray).toHaveBeenCalledTimes(1);
   });
 
@@ -326,7 +326,7 @@ describe("HomeTab Recently Added delta sync", () => {
     // on the null token — no fetch may ever run.
     await new Promise((r) => setTimeout(r, 1100));
     expect(mocks.dbFilesToArray).not.toHaveBeenCalled();
-    expect(screen.queryByText("Recently Added to Drive")).toBeNull();
+    expect(screen.queryByText("Recently Added")).toBeNull();
   });
 
   it("5. fetch rejection: captureError logged and previous state kept", async () => {
@@ -436,7 +436,7 @@ describe("HomeTab Recently Added delta sync", () => {
     ]);
     render(<HomeTab {...baseProps()} />);
     await screen.findByText("First.mp3");
-    expect(screen.getByText("Recently Added to Drive")).toBeTruthy();
+    expect(screen.getByText("Recently Added")).toBeTruthy();
 
     mocks.dbFilesToArray.mockResolvedValue([]);
     act(() => {
@@ -449,7 +449,7 @@ describe("HomeTab Recently Added delta sync", () => {
       { timeout: 2000 },
     );
 
-    expect(screen.queryByText("Recently Added to Drive")).toBeNull();
+    expect(screen.queryByText("Recently Added")).toBeNull();
   });
 
   it("10. refetches recently added when pro-sync-complete fires (sync worker detected new Drive files)", async () => {
@@ -493,7 +493,7 @@ describe("HomeTab Recently Added delta sync", () => {
     // on the null token — no fetch may ever run.
     await new Promise((r) => setTimeout(r, 1100));
     expect(mocks.dbFilesToArray).not.toHaveBeenCalled();
-    expect(screen.queryByText("Recently Added to Drive")).toBeNull();
+    expect(screen.queryByText("Recently Added")).toBeNull();
   });
 
   it("12. burst of N drive-files-changed events collapses to exactly ONE refetch (trailing debounce)", async () => {
@@ -670,7 +670,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
       "ra-4",
       "ra-5",
     ]);
-    expect(props.title).toBe("Recently Added to Drive");
+    expect(props.title).toBe("Recently Added");
     expect(typeof props.onBack).toBe("function");
     expect(props.token).toBe("tok-1");
   });
@@ -720,7 +720,7 @@ describe("HomeTab Recently Added View All (overlay reuses Recent Files mechanism
 
     // Full view was rendered once; going back re-renders the grid, not the view.
     expect(mocks.FullRecentViewSpy).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Recently Added to Drive")).toBeTruthy();
+    expect(screen.getByText("Recently Added")).toBeTruthy();
     expect(screen.getByTestId("premium-card-overlay")).toBeTruthy();
   });
 
@@ -920,10 +920,10 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.getAllByTestId("home-skeleton-section")).toHaveLength(5);
     expect(screen.getByTestId("home-greeting-skeleton")).toBeTruthy();
     expect(screen.queryByText("Recent Files")).toBeNull();
-    expect(screen.queryByText("Recently Added to Drive")).toBeNull();
-    expect(screen.queryByText("Heavy Rotation")).toBeNull();
+    expect(screen.queryByText("Recently Added")).toBeNull();
+    expect(screen.queryByText("Most Played")).toBeNull();
     expect(screen.queryByText("Discover")).toBeNull();
-    expect(screen.queryByText("Jump Back In")).toBeNull();
+    expect(screen.queryByText("Pick Up Where You Left Off")).toBeNull();
   });
 
   it("b. resolving every fetch replaces all skeletons with real sections", async () => {
@@ -966,10 +966,10 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.queryByTestId("home-skeleton-section")).toBeNull();
     expect(screen.queryByTestId("home-greeting-skeleton")).toBeNull();
     expect(screen.getByText("Recent Files")).toBeTruthy();
-    expect(screen.getByText("Recently Added to Drive")).toBeTruthy();
-    expect(screen.getByText("Heavy Rotation")).toBeTruthy();
+    expect(screen.getByText("Recently Added")).toBeTruthy();
+    expect(screen.getByText("Most Played")).toBeTruthy();
     expect(screen.getByText("Discover")).toBeTruthy();
-    expect(screen.getByText("Jump Back In")).toBeTruthy();
+    expect(screen.getByText("Pick Up Where You Left Off")).toBeTruthy();
     expect(screen.getAllByTestId("premium-card")).toHaveLength(12);
   });
 
@@ -996,10 +996,10 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.getByText("Recent Files")).toBeTruthy();
     expect(screen.getAllByTestId("premium-card")).toHaveLength(3);
     expect(screen.getAllByTestId("home-skeleton-section")).toHaveLength(4);
-    expect(screen.queryByText("Recently Added to Drive")).toBeNull();
-    expect(screen.queryByText("Heavy Rotation")).toBeNull();
+    expect(screen.queryByText("Recently Added")).toBeNull();
+    expect(screen.queryByText("Most Played")).toBeNull();
     expect(screen.queryByText("Discover")).toBeNull();
-    expect(screen.queryByText("Jump Back In")).toBeNull();
+    expect(screen.queryByText("Pick Up Where You Left Off")).toBeNull();
   });
 
   it("d. delta sync after a completed load never re-shows skeletons (no flicker)", async () => {
@@ -1067,10 +1067,10 @@ describe("HomeTab skeleton loading (null-state contract)", () => {
     expect(screen.queryByTestId("home-skeleton-section")).toBeNull();
     expect(screen.queryByTestId("home-greeting-skeleton")).toBeNull();
     expect(screen.queryByText("Recent Files")).toBeNull();
-    expect(screen.queryByText("Recently Added to Drive")).toBeNull();
-    expect(screen.queryByText("Heavy Rotation")).toBeNull();
+    expect(screen.queryByText("Recently Added")).toBeNull();
+    expect(screen.queryByText("Most Played")).toBeNull();
     expect(screen.queryByText("Discover")).toBeNull();
-    expect(screen.queryByText("Jump Back In")).toBeNull();
+    expect(screen.queryByText("Pick Up Where You Left Off")).toBeNull();
   });
 
   it("f. prefetch effect survives the all-null state and receives exactly the resolved ids", async () => {

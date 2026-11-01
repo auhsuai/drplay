@@ -208,7 +208,7 @@ describe("PlaylistView debug empty trigger", () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     renderView();
     expect(await screen.findByText("Track 1")).not.toBeNull();
-    expect(screen.queryByText("No tracks yet")).toBeNull();
+    expect(screen.queryByText("This playlist is empty")).toBeNull();
   });
 
   it("dispatches PLAYLIST_EMPTY -> empty state replaces the loaded track list", async () => {
@@ -218,8 +218,8 @@ describe("PlaylistView debug empty trigger", () => {
 
     dispatchPlaylistEmpty();
 
-    expect(screen.getByText("No tracks yet")).not.toBeNull();
-    expect(screen.getByText("Add songs to your playlist.")).not.toBeNull();
+    expect(screen.getByText("This playlist is empty")).not.toBeNull();
+    expect(screen.getByText("Songs you add will show up here.")).not.toBeNull();
     expect(screen.queryByText("Track 1")).toBeNull();
   });
 
@@ -230,11 +230,11 @@ describe("PlaylistView debug empty trigger", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.queryByText("No tracks yet")).toBeNull();
+    expect(screen.queryByText("This playlist is empty")).toBeNull();
 
     dispatchPlaylistEmpty();
 
-    expect(screen.getByText("No tracks yet")).not.toBeNull();
+    expect(screen.getByText("This playlist is empty")).not.toBeNull();
     expect(screen.getByText("pl-pending")).not.toBeNull();
   });
 
@@ -271,7 +271,7 @@ describe("PlaylistView header + row semantics (P2-13a-3/-4/-9)", () => {
     });
     renderView();
 
-    expect(await screen.findByText("Unknown Artist")).not.toBeNull();
+    expect(await screen.findByText("Unknown artist")).not.toBeNull();
   });
 
   it("nút Play header truyền cả playlist làm context queue (P2-13a-4)", async () => {
@@ -361,15 +361,19 @@ describe("PlaylistView playlist row menu + selection mode", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((b) => b.textContent?.trim()),
-    ).toEqual(["Select multiple items", "Locate File", "Remove from Playlist"]);
+    ).toEqual([
+      "Select multiple items",
+      "Show file location",
+      "Remove from playlist",
+    ]);
     expect(
-      within(menu).queryByRole("menuitem", { name: "Add to Playlist" }),
+      within(menu).queryByRole("menuitem", { name: "Add to playlist" }),
     ).toBeNull();
     expect(locateSpy).not.toHaveBeenCalled();
     window.removeEventListener("locate-file", locateSpy);
   });
 
-  it("Locate File dispatches locate-file with the row track detail and closes the menu", async () => {
+  it("Show file location dispatches locate-file with the row track detail and closes the menu", async () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     const locateSpy = vi.fn();
     window.addEventListener("locate-file", locateSpy);
@@ -377,7 +381,7 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     const menu = await openRowMenu("Track 1");
 
     fireEvent.click(
-      within(menu).getByRole("menuitem", { name: "Locate File" }),
+      within(menu).getByRole("menuitem", { name: "Show file location" }),
     );
 
     expect(locateSpy).toHaveBeenCalledTimes(1);
@@ -399,13 +403,13 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     window.removeEventListener("locate-file", locateSpy);
   });
 
-  it("Remove from Playlist removes only from the playlist (no delete/update call)", async () => {
+  it("Remove from playlist removes only from the playlist (no delete/update call)", async () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     renderView();
     const menu = await openRowMenu("Track 1");
 
     fireEvent.click(
-      within(menu).getByRole("menuitem", { name: "Remove from Playlist" }),
+      within(menu).getByRole("menuitem", { name: "Remove from playlist" }),
     );
 
     await waitFor(() => {
@@ -429,7 +433,7 @@ describe("PlaylistView playlist row menu + selection mode", () => {
 
     fireEvent.click(
       within(screen.getByRole("menu")).getByRole("menuitem", {
-        name: "Remove from Playlist",
+        name: "Remove from playlist",
       }),
     );
 
@@ -596,14 +600,14 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     expect(screen.queryByRole("button", { name: "Select" })).toBeNull();
   });
 
-  it("selection toolbar shows the playlist-scoped Remove from Playlist label", async () => {
+  it("selection toolbar shows the playlist-scoped Remove from playlist label", async () => {
     mocks.getPlaylistById.mockResolvedValue(FULL_PLAYLIST);
     renderView();
     await screen.findByText("Track 1");
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
 
     expect(screen.getByTestId("queue-remove-selected").textContent).toContain(
-      "Remove from Playlist",
+      "Remove from playlist",
     );
   });
 
@@ -646,7 +650,7 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     fireEvent.click(screen.getByTestId("queue-remove-selected"));
 
     await waitFor(() => {
-      expect(screen.getByText("No tracks yet")).not.toBeNull();
+      expect(screen.getByText("This playlist is empty")).not.toBeNull();
     });
     expect(screen.queryByTestId("queue-selection-toolbar")).toBeNull();
     expect(screen.queryByText("Track 1")).toBeNull();
@@ -686,7 +690,7 @@ describe("PlaylistView playlist row menu + selection mode", () => {
     renderView();
     await screen.findByText("Track 1");
 
-    expect(screen.queryByTitle("Remove from Playlist")).toBeNull();
+    expect(screen.queryByTitle("Remove from playlist")).toBeNull();
     expect(mocks.removeTrackFromPlaylist).not.toHaveBeenCalled();
   });
 });
@@ -762,13 +766,13 @@ describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
     const arrange = screen.getByRole("button", { name: "Arrange" });
     expect(arrange).toBeDisabled();
     fireEvent.click(arrange);
-    expect(screen.queryByText("Arrange mode")).toBeNull();
+    expect(screen.queryByText("Reorder songs")).toBeNull();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Track 1" }));
     expect(screen.getByRole("button", { name: "Arrange" })).not.toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
-    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.getByText("Reorder songs")).not.toBeNull();
     expect(screen.getByTestId("playlist-arrange-toolbar")).not.toBeNull();
     // Giữ nguyên selection khi vào arrange mode.
     expect(screen.getByRole("checkbox", { name: "Track 1" })).toBeChecked();
@@ -798,7 +802,7 @@ describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
       ]);
     });
     // Vẫn ở arrange mode, indicator đã sạch, playback không bị đụng.
-    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.getByText("Reorder songs")).not.toBeNull();
     expect(screen.queryByTestId("playlist-drop-indicator")).toBeNull();
     expect(onPlay).not.toHaveBeenCalled();
   });
@@ -845,7 +849,7 @@ describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
         "Track 5",
       ]);
     });
-    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.getByText("Reorder songs")).not.toBeNull();
     expect(screen.getByRole("checkbox", { name: "Track 2" })).toBeChecked();
   });
 
@@ -900,7 +904,7 @@ describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
 
     expect(mocks.updatePlaylist).not.toHaveBeenCalled();
     expect(renderedTitles()).toEqual(["Track 1"]);
-    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.getByText("Reorder songs")).not.toBeNull();
   });
 
   it("kéo từ row không nằm trong group → không có drag, không persist", async () => {
@@ -928,7 +932,7 @@ describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
-    expect(screen.queryByText("Arrange mode")).toBeNull();
+    expect(screen.queryByText("Reorder songs")).toBeNull();
     expect(screen.queryByTestId("playlist-arrange-toolbar")).toBeNull();
     // Về select mode, selection giữ nguyên (convention: user có thể Remove/Arrange tiếp).
     expect(screen.getByTestId("queue-selection-toolbar")).not.toBeNull();
@@ -970,7 +974,7 @@ describe("PlaylistView arrange mode + group drag reorder (Phase 4)", () => {
       "Track 5",
     ]);
     expect(screen.getByRole("checkbox", { name: "Track 2" })).toBeChecked();
-    expect(screen.getByText("Arrange mode")).not.toBeNull();
+    expect(screen.getByText("Reorder songs")).not.toBeNull();
   });
 
   it("order mới sống sót qua reload (playlists-updated) (Case 12)", async () => {

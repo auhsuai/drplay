@@ -75,7 +75,7 @@ describe("LoginScreen invoke login error handling", () => {
     fireEvent.click(screen.getByRole("button"));
 
     await waitFor(() => {
-      expect(toastRootText()).toContain("Login cancelled");
+      expect(toastRootText()).toContain("Sign-in cancelled.");
     });
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -95,7 +95,7 @@ describe("LoginScreen invoke login error handling", () => {
     fireEvent.click(screen.getByRole("button"));
 
     await waitFor(() => {
-      expect(toastRootText()).toContain("Login timed out. Try again.");
+      expect(toastRootText()).toContain("Sign-in timed out. Please try again.");
     });
   });
 
@@ -106,7 +106,7 @@ describe("LoginScreen invoke login error handling", () => {
     fireEvent.click(screen.getByRole("button"));
 
     await waitFor(() => {
-      expect(toastRootText()).toContain("Login failed. Try again.");
+      expect(toastRootText()).toContain("Couldn't sign in. Please try again.");
     });
     expect(captureErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({

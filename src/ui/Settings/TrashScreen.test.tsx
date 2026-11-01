@@ -209,7 +209,7 @@ describe("TrashScreen skeleton loading", () => {
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
   });
 
-  it('never flashes the "Trash is empty" state before the skeleton (first commit is already loading)', async () => {
+  it('never flashes the "Trash is empty." state before the skeleton (first commit is already loading)', async () => {
     // The empty-state flash lives in the FIRST commit (isLoading starts
     // false) which testing-library's act() flushes away before returning.
     // Profiler.onRender fires synchronously after EVERY commit — reading the

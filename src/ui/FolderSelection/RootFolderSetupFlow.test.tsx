@@ -472,7 +472,7 @@ describe("RootFolderSetupFlow merged mode screen", () => {
       const dialog = openConfirmDialog();
       expect(
         within(dialog).getByText(
-          `You have selected ${String(total)} folders. These folders will become your root locations in DrPlay.`,
+          `${String(total)} folders will become root locations in DrPlay.`,
         ),
       ).toBeTruthy();
 
@@ -681,7 +681,7 @@ describe("RootFolderSetupFlow merged mode screen", () => {
     const dialog = openConfirmDialog();
     expect(
       within(dialog).getByText(
-        "You have selected 2 folders. These folders will become your root locations in DrPlay.",
+        "2 folders will become root locations in DrPlay.",
       ),
     ).toBeTruthy();
     fireEvent.click(

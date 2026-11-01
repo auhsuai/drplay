@@ -49,10 +49,10 @@ vi.mock("../../utils/cache", () => ({
   removeFallbackEngine: vi.fn(),
   FALLBACK_ENGINE_ID: "fallback_engine",
   CACHE_CATEGORY_LABELS: {
-    metadata: "Metadata cache",
-    files: "File listing cache",
-    covers: "Covers & thumbnails",
-    prefetch: "Prefetched data",
+    metadata: "Song information cache",
+    files: "File list cache",
+    covers: "Covers and thumbnails",
+    prefetch: "Preloaded data",
   },
 }));
 
@@ -88,10 +88,10 @@ describe("Clear Cache flow renders a real success toast", () => {
     vi.mocked(clearAppCache).mockResolvedValue(undefined);
     vi.mocked(getCacheSizes).mockReset();
     vi.mocked(getCacheSizes).mockResolvedValue([
-      { id: "metadata", label: "Metadata cache", bytes: 1024 },
-      { id: "files", label: "File listing cache", bytes: 2048 },
-      { id: "covers", label: "Covers & thumbnails", bytes: 0 },
-      { id: "prefetch", label: "Prefetched data", bytes: 1536 },
+      { id: "metadata", label: "Song information cache", bytes: 1024 },
+      { id: "files", label: "File list cache", bytes: 2048 },
+      { id: "covers", label: "Covers and thumbnails", bytes: 0 },
+      { id: "prefetch", label: "Preloaded data", bytes: 1536 },
     ]);
   });
 
@@ -103,15 +103,17 @@ describe("Clear Cache flow renders a real success toast", () => {
   it("appends an .app-toast--success element to document.body after confirming in the modal", async () => {
     render(<SettingsTab {...baseProps} />);
     // Settings trigger → modal opens (all categories default-checked).
-    fireEvent.click(screen.getByRole("button", { name: "Clear Data" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear app data" }));
     const modal = await screen.findByTestId("cache-manager-modal");
-    await screen.findByText("Metadata cache");
-    fireEvent.click(within(modal).getByRole("button", { name: "Clear Data" }));
+    await screen.findByText("Song information cache");
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "Clear app data" }),
+    );
 
     await waitFor(() => {
       const successToast = document.querySelector(".app-toast--success");
       expect(successToast).not.toBeNull();
-      expect(successToast?.textContent).toBe("App data cleared");
+      expect(successToast?.textContent).toBe("App data cleared.");
     });
     expect(document.querySelector(".app-toast--error")).toBeNull();
   });

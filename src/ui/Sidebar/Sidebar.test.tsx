@@ -811,12 +811,12 @@ describe("Sidebar playlist more menu", () => {
     const menu = openMenuByRightClick("Beta");
     expect(menuItemNames(menu)).toEqual(["Delete", "Rename", "Pin to top"]);
     for (const absent of [
-      "Remove from Playlist",
-      "Locate File",
+      "Remove from playlist",
+      "Show file location",
       "Select multiple items",
       "Add to queue",
-      "Move to...",
-      "Download Song",
+      "Move to…",
+      "Download file",
     ]) {
       expect(within(menu).queryByRole("menuitem", { name: absent })).toBeNull();
     }
@@ -957,7 +957,7 @@ describe("Sidebar playlist more menu", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain(
-      "This removes the playlist only. Your music files are not deleted.",
+      "Only the playlist will be removed; your music files will stay in Google Drive.",
     );
     // Least destructive control owns the initial focus (APG dialog-modal).
     expect(document.activeElement).toBe(

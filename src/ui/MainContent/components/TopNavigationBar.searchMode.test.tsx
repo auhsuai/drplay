@@ -98,11 +98,11 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     );
 
     const button = screen.getByRole("button", {
-      name: "Switch to recursive search",
+      name: "Switch to folder search",
     });
     expect(button).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Switch to global search" }),
+      screen.queryByRole("button", { name: "Switch to library-wide search" }),
     ).toBeNull();
     expect(document.querySelector(".lucide-globe")).not.toBeNull();
     expect(document.querySelector(".lucide-search")).toBeNull();
@@ -120,10 +120,10 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Switch to global search" }),
+      screen.getByRole("button", { name: "Switch to library-wide search" }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Switch to recursive search" }),
+      screen.queryByRole("button", { name: "Switch to folder search" }),
     ).toBeNull();
     expect(
       document.querySelector(
@@ -136,10 +136,10 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     render(<TopNavigationBar {...makeProps({ searchQuery: "" })} />);
 
     expect(
-      screen.queryByRole("button", { name: "Switch to recursive search" }),
+      screen.queryByRole("button", { name: "Switch to folder search" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Switch to global search" }),
+      screen.queryByRole("button", { name: "Switch to library-wide search" }),
     ).toBeNull();
     expect(document.querySelector(".lucide-search")).not.toBeNull();
   });
@@ -156,7 +156,7 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Switch to recursive search" }),
+      screen.getByRole("button", { name: "Switch to folder search" }),
     ).toBeTruthy();
     expect(document.querySelector(".lucide-search")).toBeNull();
   });
@@ -177,14 +177,14 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
       />,
     );
     const button = screen.getByRole("button", {
-      name: "Switch to recursive search",
+      name: "Switch to folder search",
     });
     expect(button.className).toContain("z-10");
 
     // Focus the input (the exact user gesture): icon must STILL be present
     // and still stacked above the focused input (jsdom has no paint order,
     // so the class contract is what we can pin; the real-app fix is z-10).
-    const input = screen.getByRole("textbox", { name: "Search..." });
+    const input = screen.getByRole("textbox", { name: "Search…" });
     input.focus();
     expect(document.activeElement).toBe(input);
 
@@ -199,7 +199,7 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
       />,
     );
     const foldersButton = screen.getByRole("button", {
-      name: "Switch to global search",
+      name: "Switch to library-wide search",
     });
     expect(foldersButton.className).toContain("z-10");
   });
@@ -208,15 +208,15 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     render(<TopNavigationBar {...makeProps({ searchQuery: "alpha" })} />);
 
     expect(
-      screen.queryByRole("button", { name: "Switch to recursive search" }),
+      screen.queryByRole("button", { name: "Switch to folder search" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Switch to global search" }),
+      screen.queryByRole("button", { name: "Switch to library-wide search" }),
     ).toBeNull();
     expect(document.querySelector(".lucide-search")).not.toBeNull();
   });
 
-  it("global mode + non-empty query: Globe toggle button labelled 'Switch to recursive search'", () => {
+  it("global mode + non-empty query: Globe toggle button labelled 'Switch to folder search'", () => {
     render(
       <TopNavigationBar
         {...makeProps({
@@ -228,17 +228,17 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Switch to recursive search" }),
+      screen.getByRole("button", { name: "Switch to folder search" }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Switch to global search" }),
+      screen.queryByRole("button", { name: "Switch to library-wide search" }),
     ).toBeNull();
     expect(document.querySelector(".lucide-globe")).not.toBeNull();
     // Decorative magnifier is gone while the toggle owns the gutter.
     expect(document.querySelector(".lucide-search")).toBeNull();
   });
 
-  it("recursive mode + non-empty query: folders SVG toggle labelled 'Switch to global search'", () => {
+  it("recursive mode + non-empty query: folders SVG toggle labelled 'Switch to library-wide search'", () => {
     render(
       <TopNavigationBar
         {...makeProps({
@@ -250,10 +250,10 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Switch to global search" }),
+      screen.getByRole("button", { name: "Switch to library-wide search" }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Switch to recursive search" }),
+      screen.queryByRole("button", { name: "Switch to folder search" }),
     ).toBeNull();
     // Pinned Tabler folders artwork (not a lucide icon class).
     expect(
@@ -278,9 +278,9 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     );
 
     const button = screen.getByRole("button", {
-      name: "Switch to recursive search",
+      name: "Switch to folder search",
     });
-    expect(button.getAttribute("title")).toBe("Switch to recursive search");
+    expect(button.getAttribute("title")).toBe("Switch to folder search");
     fireEvent.click(button);
 
     expect(onToggleSearchMode).toHaveBeenCalledTimes(1);
@@ -302,7 +302,7 @@ describe("TopNavigationBar search mode toggle (Phase B)", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Switch to global search" }),
+      screen.getByRole("button", { name: "Switch to library-wide search" }),
     );
     expect(onToggleSearchMode).toHaveBeenCalledTimes(1);
     expect(onSearchChange).not.toHaveBeenCalled();

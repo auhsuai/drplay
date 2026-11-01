@@ -390,7 +390,7 @@ describe("filename-based name sort and search (recentDisplayName)", () => {
       />,
     );
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("Search..."), ".flac");
+    await user.type(screen.getByPlaceholderText("Search…"), ".flac");
     const ids = screen
       .getAllByTestId("song-card")
       .map((el) => el.getAttribute("data-item-id"));
@@ -410,7 +410,7 @@ describe("filename-based name sort and search (recentDisplayName)", () => {
       />,
     );
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("Search..."), "nỗi buồn");
+    await user.type(screen.getByPlaceholderText("Search…"), "nỗi buồn");
     const ids = screen
       .getAllByTestId("song-card")
       .map((el) => el.getAttribute("data-item-id"));
@@ -430,7 +430,7 @@ describe("filename-based name sort and search (recentDisplayName)", () => {
       />,
     );
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("Search..."), "noi buon");
+    await user.type(screen.getByPlaceholderText("Search…"), "noi buon");
     const ids = screen
       .getAllByTestId("song-card")
       .map((el) => el.getAttribute("data-item-id"));
@@ -570,7 +570,7 @@ describe("FullRecentView sort UI (FileListHeader columns)", () => {
 
   it("names the search input for assistive tech", () => {
     renderRecent([makeDated("a", "Alpha", 100)]);
-    expect(screen.getByRole("textbox", { name: "Search..." })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Search…" })).toBeTruthy();
   });
 
   it("renders exactly 3 sortable column headers", () => {
@@ -689,7 +689,7 @@ describe("FullRecentView sort UI (FileListHeader columns)", () => {
       makeDated("z", "Zulu", 300),
     ]);
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("Search..."), "z");
+    await user.type(screen.getByPlaceholderText("Search…"), "z");
     expect(cardOrder()).toEqual(["z", "x"]);
     await user.click(headerButton("Name"));
     expect(cardOrder()).toEqual(["x", "z"]);
@@ -702,7 +702,7 @@ describe("FullRecentView sort UI (FileListHeader columns)", () => {
       makeDated("zen", "Zen", 200),
     ]);
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("Search..."), "noi");
+    await user.type(screen.getByPlaceholderText("Search…"), "noi");
     expect(cardOrder()).toEqual(["noi"]);
   });
 
@@ -741,7 +741,7 @@ describe("FullRecentView sort UI (FileListHeader columns)", () => {
         onBack={vi.fn()}
         onPlay={vi.fn()}
         token="token"
-        title="Recently Added to Drive"
+        title="Recently Added"
       />,
     );
     expect(screen.getByText("Date modified")).toBeTruthy();
@@ -774,7 +774,7 @@ describe("FullRecentView search clear + empty states (P2-11-1 / P2-11-4)", () =>
   it("clear search button has an accessible name and resets the query", async () => {
     renderRecent([makeTrack("a", "Alpha")]);
     const user = userEvent.setup();
-    const input = screen.getByPlaceholderText("Search...");
+    const input = screen.getByPlaceholderText("Search…");
     await user.type(input, "alp");
     expect((input as HTMLInputElement).value).toBe("alp");
 
@@ -785,14 +785,14 @@ describe("FullRecentView search clear + empty states (P2-11-1 / P2-11-4)", () =>
   it("shows the no-results message when a search matches nothing", async () => {
     renderRecent([makeTrack("a", "Alpha")]);
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("Search..."), "zzz");
+    await user.type(screen.getByPlaceholderText("Search…"), "zzz");
 
-    expect(screen.getByText("No matching songs found.")).toBeTruthy();
+    expect(screen.getByText("No matching items found.")).toBeTruthy();
     expect(screen.queryAllByTestId("song-card").length).toBe(0);
   });
 
   it("shows the empty-list message when there are no tracks and no search", () => {
     renderRecent([]);
-    expect(screen.getByText("No audio files here.")).toBeTruthy();
+    expect(screen.getByText("No playable files in this folder.")).toBeTruthy();
   });
 });

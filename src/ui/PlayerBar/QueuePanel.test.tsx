@@ -548,7 +548,7 @@ describe("QueuePanel folder drill-down", () => {
     const folderRows = screen.getAllByTestId("queue-folder-row");
     expect(folderRows).toHaveLength(1);
     expect(folderRows[0]?.textContent).toContain("Album F1");
-    expect(folderRows[0]?.textContent).toContain("3 songs");
+    expect(folderRows[0]?.textContent).toContain("3 items");
 
     expect(screen.queryByText("Song f1a")).toBeNull();
     expect(screen.queryByText("Song f1b")).toBeNull();
@@ -613,7 +613,7 @@ describe("QueuePanel folder drill-down", () => {
     const folderRows = screen.getAllByTestId("queue-folder-row");
     expect(folderRows).toHaveLength(1);
     expect(folderRows[0]?.textContent).toContain("Album F1");
-    expect(folderRows[0]?.textContent).toContain("3 songs");
+    expect(folderRows[0]?.textContent).toContain("3 items");
     expect(screen.queryByText("Song loose")).toBeNull();
     expect(screen.queryByText(en.queue.no_results)).toBeNull();
 
@@ -856,7 +856,7 @@ describe("QueuePanel selection scope + prune + focus restore (UQS-1/UQS-3/QST-2)
     // Only the visible entry is gone; the collapsed folder keeps all members.
     expect(usePlayerStore.getState().playbackQueue).toEqual([F1A, F1B, F1C]);
     const folderRow = screen.getByTestId("queue-folder-row");
-    expect(folderRow.textContent).toContain("3 songs");
+    expect(folderRow.textContent).toContain("3 items");
     expect(screen.queryByText("Song loose")).toBeNull();
   });
 

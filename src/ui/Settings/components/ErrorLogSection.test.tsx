@@ -27,9 +27,9 @@ void i18n.use(initReactI18next).init({
     en: {
       translation: {
         settings: {
-          error_log_title: "Error Log",
-          error_log_copy: "Copy Report",
-          error_log_copy_selected: "Copy Selected",
+          error_log_title: "Error log",
+          error_log_copy: "Copy report",
+          error_log_copy_selected: "Copy selected text",
           error_log_copied: "Copied",
           error_log_clear: "Clear Log",
           error_log_empty: "No errors have been recorded yet.",
@@ -42,7 +42,7 @@ void i18n.use(initReactI18next).init({
           error_log_back: "Back",
           error_log_count: "{{count}} errors",
         },
-        loading: "Loading...",
+        loading: "Loading…",
         common: {
           cancel: "Cancel",
           delete: "Delete",
@@ -219,7 +219,7 @@ describe("ErrorLogSection", () => {
     fireEvent.click(screen.getByText(KEY_A));
     await screen.findByText("boom day A");
 
-    fireEvent.click(screen.getByRole("button", { name: /Copy Report/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Copy report/i }));
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledTimes(1);
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledWith(KEY_A);
     expect(exportErrorLogsSanitizedMock).not.toHaveBeenCalled();
@@ -236,7 +236,7 @@ describe("ErrorLogSection", () => {
     await screen.findByText(KEY_A);
     fireEvent.click(screen.getByText(KEY_A));
     await screen.findByText((c) => c.startsWith("boom"));
-    fireEvent.click(screen.getByRole("button", { name: /Copy Report/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Copy report/i }));
     expect(exportErrorLogsSanitizedForDateMock).toHaveBeenCalledTimes(1);
     await screen.findByText(/Copied/);
     await new Promise((r) => setTimeout(r, 0));
@@ -251,8 +251,10 @@ describe("ErrorLogSection", () => {
     await screen.findByText(/No errors have been recorded yet/i);
     // Copy/Clear buttons are only rendered in day view (selectedDate != null).
     // With empty log there are no day groups to click into, so buttons don't exist.
-    expect(screen.queryByRole("button", { name: /Copy Report/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Copy Selected/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Copy report/i })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Copy selected text/i }),
+    ).toBeNull();
   });
 
   it("clear button calls clearErrorLogs and empties the list", async () => {

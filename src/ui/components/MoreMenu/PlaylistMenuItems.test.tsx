@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 describe("PlaylistMenuItems", () => {
-  it("renders exactly Select multiple / Locate File / Remove from Playlist (no file-management items)", () => {
+  it("renders exactly Select multiple / Show file location / Remove from playlist (no file-management items)", () => {
     renderItems();
 
     expect(
@@ -81,7 +81,7 @@ describe("PlaylistMenuItems", () => {
     expect(props.handleNavigateClick).not.toHaveBeenCalled();
   });
 
-  it("Locate File click -> handleNavigateClick only (menu close is the shared handler's job)", () => {
+  it("Show file location click -> handleNavigateClick only (menu close is the shared handler's job)", () => {
     const props = renderItems();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "menu.navigate" }));
@@ -92,7 +92,7 @@ describe("PlaylistMenuItems", () => {
     expect(props.onRemoveFromPlaylist).not.toHaveBeenCalled();
   });
 
-  it("Remove from Playlist click -> setIsOpen(false) + onClose + onRemoveFromPlaylist", () => {
+  it("Remove from playlist click -> setIsOpen(false) + onClose + onRemoveFromPlaylist", () => {
     const props = renderItems();
 
     fireEvent.click(

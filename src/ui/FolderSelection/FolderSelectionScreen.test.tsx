@@ -294,24 +294,24 @@ describe("FolderSelectionScreen skeleton loading", () => {
 
     const rows = await screen.findAllByTestId("skeleton-row");
     expect(rows).toHaveLength(6);
-    expect(screen.getByRole("status", { name: "Loading..." })).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Loading…" })).toBeTruthy();
     expect(document.querySelector(".animate-spin")).toBeNull();
   });
 
-  it('keeps the "Searching deeper..." branch while an API search is in flight (no skeleton)', async () => {
+  it('keeps the "Searching subfolders…" branch while an API search is in flight (no skeleton)', async () => {
     renderScreen();
     await waitFor(() => {
       expect(deferredCalls).toHaveLength(1);
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "abc" },
     });
     await waitFor(() => {
       expect(searchDeferredCalls).toHaveLength(1);
     });
 
-    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+    expect(screen.getByText("Searching subfolders…")).not.toBeNull();
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
     expect(document.querySelector(".animate-spin")).toBeNull();
   });
@@ -342,7 +342,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
       await Promise.resolve();
     });
 
-    expect(await screen.findByText("No folders here.")).not.toBeNull();
+    expect(await screen.findByText("This folder is empty.")).not.toBeNull();
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
   });
 
@@ -356,7 +356,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
       const hasSkeleton =
         document.querySelector('[data-testid="skeleton-row"]') !== null;
       const hasEmpty = (document.body.textContent ?? "").includes(
-        "No folders here.",
+        "This folder is empty.",
       );
       if (hasSkeleton && !markers.includes("skeleton"))
         markers.push("skeleton");
@@ -386,7 +386,7 @@ describe("FolderSelectionScreen skeleton loading", () => {
       expect(deferredCalls).toHaveLength(1);
     });
 
-    const status = screen.getByRole("status", { name: "Loading..." });
+    const status = screen.getByRole("status", { name: "Loading…" });
     // The folder list is a definite-height flex child (overlay root is
     // fixed inset-0, dialog h-[75vh]) so h-full resolves here.
     expect(status.className).toContain("h-full");
@@ -419,16 +419,16 @@ describe("FolderSelectionScreen skeleton loading", () => {
     // While the folder fetch is still pending, typing a query must not swap
     // into the empty state: the loading/API-search branches take precedence
     // over every empty-state branch (drive.no_folders).
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "abc" },
     });
     await waitFor(() => {
       expect(searchDeferredCalls).toHaveLength(1);
     });
 
-    expect(screen.queryByText("No folders here.")).toBeNull();
+    expect(screen.queryByText("This folder is empty.")).toBeNull();
     expect(screen.queryAllByTestId("skeleton-row").length).toBe(0);
-    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+    expect(screen.getByText("Searching subfolders…")).not.toBeNull();
   });
 });
 
@@ -459,7 +459,7 @@ describe("FolderSelectionScreen API search gating", () => {
     });
     expect(screen.getByText("ABC Local")).not.toBeNull();
 
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "abc" },
     });
     // Regression: the old effect gate (filteredFolders.length > 0) skipped
@@ -470,8 +470,8 @@ describe("FolderSelectionScreen API search gating", () => {
     });
 
     expect(screen.getByText("ABC Local")).not.toBeNull();
-    expect(screen.getByText("From subfolders")).not.toBeNull();
-    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+    expect(screen.getByText("Include subfolders")).not.toBeNull();
+    expect(screen.getByText("Searching subfolders…")).not.toBeNull();
 
     const apiCall = searchDeferredCalls[0];
     if (apiCall === undefined)
@@ -483,7 +483,7 @@ describe("FolderSelectionScreen API search gating", () => {
 
     expect(screen.getByText("ABC Local")).not.toBeNull();
     expect(screen.getByText("Deep Folder")).not.toBeNull();
-    expect(screen.queryByText("Searching deeper...")).toBeNull();
+    expect(screen.queryByText("Searching subfolders…")).toBeNull();
   });
 
   it("drops an API search hit whose id already renders in the local listing (no duplicate card)", async () => {
@@ -499,7 +499,7 @@ describe("FolderSelectionScreen API search gating", () => {
       await Promise.resolve();
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "abc" },
     });
     await waitFor(() => {
@@ -525,9 +525,9 @@ describe("FolderSelectionScreen API search gating", () => {
     expect(screen.getByText("Deep ABC")).not.toBeNull();
     const text = document.body.textContent ?? "";
     expect(text.indexOf("ABC Local")).toBeLessThan(
-      text.indexOf("From subfolders"),
+      text.indexOf("Include subfolders"),
     );
-    expect(text.indexOf("From subfolders")).toBeLessThan(
+    expect(text.indexOf("Include subfolders")).toBeLessThan(
       text.indexOf("Deep ABC"),
     );
   });
@@ -543,7 +543,7 @@ describe("FolderSelectionScreen API search gating", () => {
       await Promise.resolve();
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "abc" },
     });
     await waitFor(() => {
@@ -567,7 +567,7 @@ describe("FolderSelectionScreen API search gating", () => {
       await Promise.resolve();
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "doi" },
     });
 
@@ -584,7 +584,7 @@ describe("FolderSelectionScreen API search gating", () => {
       await Promise.resolve();
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "a" },
     });
     // Longer than SEARCH_DEBOUNCE_MS (300) so the debounced callback ran.
@@ -594,7 +594,7 @@ describe("FolderSelectionScreen API search gating", () => {
 
     expect(mocks.driveApi.searchFolders).not.toHaveBeenCalled();
     expect(screen.getByText("No matching folders found.")).not.toBeNull();
-    expect(screen.queryByText("No folders here.")).toBeNull();
+    expect(screen.queryByText("This folder is empty.")).toBeNull();
   });
 });
 
@@ -628,9 +628,9 @@ describe("FolderSelectionScreen debug empty trigger", () => {
 
     dispatchFoldersEmpty();
 
-    expect(screen.getByText("No folders here.")).not.toBeNull();
+    expect(screen.getByText("This folder is empty.")).not.toBeNull();
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
-    expect(screen.queryByRole("status", { name: "Loading..." })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Loading…" })).toBeNull();
   });
 
   it("dispatches FOLDERS_EMPTY after folders loaded -> grid replaced by the empty state", async () => {
@@ -646,7 +646,7 @@ describe("FolderSelectionScreen debug empty trigger", () => {
 
     dispatchFoldersEmpty();
 
-    expect(screen.getByText("No folders here.")).not.toBeNull();
+    expect(screen.getByText("This folder is empty.")).not.toBeNull();
     expect(screen.queryByText("Folder 1")).toBeNull();
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
   });
@@ -703,7 +703,7 @@ describe("FolderSelectionScreen debug skeleton trigger", () => {
 
     expect(screen.queryByText("Folder 1")).toBeNull();
     expect(screen.queryAllByTestId("skeleton-row")).not.toHaveLength(0);
-    expect(screen.getByRole("status", { name: "Loading..." })).not.toBeNull();
+    expect(screen.getByRole("status", { name: "Loading…" })).not.toBeNull();
   });
 
   it("SKELETON with a non-folders target leaves the loaded grid untouched", async () => {
@@ -777,7 +777,7 @@ describe("FolderSelectionScreen Escape close (QP-3 / Esc-close 2026-09-14)", () 
       expect(deferredCalls).toHaveLength(1);
     });
 
-    const input = screen.getByPlaceholderText("Search...");
+    const input = screen.getByPlaceholderText("Search…");
     fireEvent.change(input, { target: { value: "abc" } });
     input.focus();
     expect(document.activeElement).toBe(input);
@@ -787,7 +787,7 @@ describe("FolderSelectionScreen Escape close (QP-3 / Esc-close 2026-09-14)", () 
     expect((input as HTMLInputElement).value).toBe("");
     expect(document.activeElement).not.toBe(input);
     expect(onCancel).not.toHaveBeenCalled();
-    expect(screen.getByPlaceholderText("Search...")).not.toBeNull();
+    expect(screen.getByPlaceholderText("Search…")).not.toBeNull();
   });
 
   it("Esc khi search trống → đóng picker (onCancel 1 lần)", async () => {
@@ -800,7 +800,7 @@ describe("FolderSelectionScreen Escape close (QP-3 / Esc-close 2026-09-14)", () 
     fireEvent.keyDown(document.body, { key: "Escape" });
 
     expect(onCancel).toHaveBeenCalledTimes(1);
-    expect(screen.queryByPlaceholderText("Search...")).toBeNull();
+    expect(screen.queryByPlaceholderText("Search…")).toBeNull();
   });
 
   it("Esc đóng picker → focus trả về element đã focus lúc mount (APG focus-return)", async () => {
@@ -956,23 +956,23 @@ describe("FolderSelectionScreen search spinner race (P2-10-3)", () => {
     mocks.getValidToken.mockReturnValue(tokenPromise);
 
     // Search A ("ab") starts and waits for the token.
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "ab" },
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 350));
     });
-    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+    expect(screen.getByText("Searching subfolders…")).not.toBeNull();
 
     // Query change aborts A while it still waits for the token; search B
     // ("abc") starts and waits for the SAME token promise.
-    fireEvent.change(screen.getByPlaceholderText("Search..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search…"), {
       target: { value: "abc" },
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 350));
     });
-    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+    expect(screen.getByText("Searching subfolders…")).not.toBeNull();
 
     // Token refresh resolves: the stale search must bail out on its aborted
     // signal instead of running to its finally and clearing the spinner.
@@ -995,7 +995,7 @@ describe("FolderSelectionScreen search spinner race (P2-10-3)", () => {
 
     // B is still in flight: the spinner must stay on, the stale search must
     // not have fired a Drive request and the abort path must not toast.
-    expect(screen.getByText("Searching deeper...")).not.toBeNull();
+    expect(screen.getByText("Searching subfolders…")).not.toBeNull();
     expect(mocks.driveApi.searchFolders).toHaveBeenCalledTimes(1);
     expect(mocks.driveApi.searchFolders.mock.calls[0]?.[1]).toContain(
       "name contains 'abc'",
@@ -1086,7 +1086,7 @@ describe("FolderSelectionScreen search clear button (P2-10-8)", () => {
 
     expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
 
-    const input = screen.getByPlaceholderText("Search...");
+    const input = screen.getByPlaceholderText("Search…");
     fireEvent.change(input, { target: { value: "abc" } });
 
     const clear = screen.getByRole("button", { name: "Clear search" });

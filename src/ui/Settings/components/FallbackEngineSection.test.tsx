@@ -110,10 +110,10 @@ vi.mock("../../../utils/cache", () => ({
   removeFallbackEngine: vi.fn(),
   FALLBACK_ENGINE_ID: "fallback_engine",
   CACHE_CATEGORY_LABELS: {
-    metadata: "Metadata cache",
-    files: "File listing cache",
-    covers: "Covers & thumbnails",
-    prefetch: "Prefetched data",
+    metadata: "Song information cache",
+    files: "File list cache",
+    covers: "Covers and thumbnails",
+    prefetch: "Preloaded data",
   },
 }));
 vi.mock("../components/LanguageDropdown", () => ({
@@ -252,7 +252,7 @@ describe("FallbackEngineSection — mount and copy", () => {
     expect(
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       section.querySelector("h2")!.textContent,
-    ).toBe("Playback Components");
+    ).toBe("Playback components");
   });
 
   // (2) All user-facing strings resolve from localization (no raw keys).
@@ -283,9 +283,7 @@ describe("FallbackEngineSection — checking state", () => {
     render(<FallbackEngineSection />);
 
     expect(screen.getByTestId("fallback-engine-checking")).toBeTruthy();
-    expect(
-      screen.getByText(/Checking whether the fallback engine/),
-    ).toBeTruthy();
+    expect(screen.getByText(/Checking the fallback engine/)).toBeTruthy();
     expect(screen.queryByText(/Not installed · optional/)).toBeNull();
 
     await act(async () => {
@@ -383,7 +381,7 @@ describe("FallbackEngineSection — progress", () => {
       total: null,
       percent: null,
     });
-    expect(screen.getByText("Verifying the downloaded file…")).toBeTruthy();
+    expect(screen.getByText("Verifying the download…")).toBeTruthy();
 
     await pushProgress({
       stage: "extracting",
@@ -399,7 +397,7 @@ describe("FallbackEngineSection — progress", () => {
       total: null,
       percent: null,
     });
-    expect(screen.getByText("Finishing the installation…")).toBeTruthy();
+    expect(screen.getByText("Finishing installation…")).toBeTruthy();
   });
 });
 
@@ -455,7 +453,7 @@ describe("FallbackEngineSection — installed", () => {
     // "No playback engine available" line is the fallback for a missing
     // reason, so it must NOT also render (one line, not two).
     expect(
-      await screen.findByText(/libmpv could not start and no fallback engine/),
+      await screen.findByText(/libmpv couldn't start, and no fallback engine/),
     ).toBeTruthy();
     expect(screen.queryByText("No playback engine available")).toBeNull();
   });
@@ -534,7 +532,7 @@ describe("FallbackEngineSection — errors", () => {
     // the full detail goes to the error log instead.
     expect(alert.textContent).not.toContain("checksum_mismatch:");
     expect(toastMocks.showErrorToast).toHaveBeenCalledWith(
-      "Couldn't install the fallback engine. Try again.",
+      "Couldn't install the fallback engine. Please try again.",
       { duration: 4000 },
     );
     // Stays on screen (no auto-dismiss, no timer).
@@ -563,7 +561,7 @@ describe("FallbackEngineSection — errors", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain(
-      "The fallback engine couldn't be installed.",
+      "Couldn't install the fallback engine. Please try again. If it still fails, check the error log in Settings.",
     );
   });
 
@@ -582,7 +580,9 @@ describe("FallbackEngineSection — errors", () => {
     fireEvent.click(screen.getByTestId("fallback-engine-action"));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Couldn't reach the download server");
+    expect(alert.textContent).toContain(
+      "Couldn't connect to the download server",
+    );
     // The facts did NOT get replaced by an error state.
     expect(screen.getByTestId("fallback-engine-installed")).toBeTruthy();
   });
@@ -595,7 +595,7 @@ describe("FallbackEngineSection — errors", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain(
-      "The application data folder is unavailable",
+      "DrPlay can't access its application data folder",
     );
     expect(screen.queryByText(/Not installed · optional/)).toBeNull();
     // The row action re-reads the status instead of installing blindly.

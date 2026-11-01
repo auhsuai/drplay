@@ -139,19 +139,19 @@ describe("FullRecentView title prop", () => {
     expect(span.getAttribute("title")).toBe("Recent Files");
   });
 
-  it("renders the provided title (Recently Added to Drive path)", () => {
+  it("renders the provided title (Recently Added path)", () => {
     render(
       <FullRecentView
         recent={[makeTrack("t1", "Alpha")]}
         onBack={vi.fn()}
         onPlay={vi.fn()}
         token="tok"
-        title="Recently Added to Drive"
+        title="Recently Added"
       />,
     );
-    const span = screen.getByText("Recently Added to Drive");
+    const span = screen.getByText("Recently Added");
     expect(span).toBeTruthy();
-    expect(span.getAttribute("title")).toBe("Recently Added to Drive");
+    expect(span.getAttribute("title")).toBe("Recently Added");
   });
 });
 
@@ -173,14 +173,14 @@ describe("FullRecentView menu delete flow", () => {
       (b) => b.textContent?.trim() ?? "",
     );
     expect(names.sort()).toEqual([
-      "Add to Playlist",
+      "Add to playlist",
       "Delete",
-      "Download Song",
-      "Locate File",
+      "Download file",
+      "Show file location",
     ]);
   });
 
-  it("closes the right-click menu after Download Song and keeps the dialog open", () => {
+  it("closes the right-click menu after Download file and keeps the dialog open", () => {
     const { container } = renderRecent([makeTrack("t1", "Alpha")]);
     const card = Array.from(
       container.querySelectorAll<HTMLElement>(".cursor-pointer"),
@@ -190,7 +190,7 @@ describe("FullRecentView menu delete flow", () => {
     fireEvent.contextMenu(card as HTMLElement);
     expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Download Song" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Download file" }));
 
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
     expect(screen.getByText("File name")).toBeTruthy();
@@ -299,7 +299,7 @@ describe("FullRecentView play context (P2-11-3)", () => {
       />,
     );
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Search..." }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Search…" }), {
       target: { value: "Alpha" },
     });
 
