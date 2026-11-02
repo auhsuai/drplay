@@ -9,12 +9,23 @@ import {
 } from "../../../hooks/useTrackMetadata";
 
 const SONG_CARD_MODULE = "SongCard";
+// Mirrors V_PLACEHOLDER (constants.ts). Any v below it is a real parse — the
+// same rule searchEngine.isRealCacheEntry uses, so the UI and the search
+// index can never disagree about what counts as real metadata.
+const V_PLACEHOLDER = 9;
 
 type SongCardMeta = {
   artist: string | null;
   duration: number;
   durationEstimated: boolean;
+  /**
+   * True only when REAL metadata resolved. A placeholder (v:9 / provisional)
+   * still resolves so the card can render the filename — but it is NOT a
+   * completed load, so the duration slot must not claim one.
+   */
   loaded: boolean;
+  /** Explicit lifecycle outcome (undefined for legacy cached rows). */
+  outcome: CachedMetadata["outcome"] | undefined;
 };
 
 /**
@@ -35,33 +46,39 @@ export function useSongCardMetadata({
   meta: SongCardMeta;
   coverUrl: string | null;
   clearCover: () => void;
+  /** Re-fetch this card in place (no remount); cache hits stay free. */
+  retry: () => void;
 } {
-  // loaded=true only after getTrackMetadata resolves, so the duration span
-  // appears only for real metadata. (Size and title used to ride along here —
-  // size moved to the dedicated Size column in SongCard, and the displayed
-  // name is now the Drive filename (trackInfo.originalName), so the ID3 title
-  // no longer drives the h3 and this hook no longer tracks it.)
   const [meta, setMeta] = useState<SongCardMeta>({
     artist: null,
     duration: 0,
     durationEstimated: false,
     loaded: false,
+    outcome: undefined,
   });
 
   const onMetadata = useCallback(
     (metadata: CachedMetadata) => {
+      // A placeholder is an entry at/past V_PLACEHOLDER (v:9); every real
+      // parse carries v:8. Legacy/partial fixtures without a `v` are treated
+      // as real (the previous behavior), since only the placeholder marker
+      // means "this is not usable metadata".
+      const isPlaceholder =
+        typeof metadata.v === "number" && metadata.v >= V_PLACEHOLDER;
       const newMeta: SongCardMeta = {
         artist: metadata.artist || null,
         duration: metadata.duration || 0,
         durationEstimated: metadata.durationEstimated,
-        loaded: true,
+        loaded: !isPlaceholder,
+        outcome: metadata.outcome,
       };
       setMeta((prev) => {
         if (
           newMeta.artist === prev.artist &&
           newMeta.duration === prev.duration &&
           newMeta.durationEstimated === prev.durationEstimated &&
-          newMeta.loaded === prev.loaded
+          newMeta.loaded === prev.loaded &&
+          newMeta.outcome === prev.outcome
         ) {
           return prev;
         }
@@ -84,7 +101,7 @@ export function useSongCardMetadata({
     [item.id],
   );
 
-  const { coverUrl, setCoverUrl } = useTrackMetadata({
+  const { coverUrl, setCoverUrl, retry } = useTrackMetadata({
     fileId: item.id,
     token,
     size: item.trackInfo?.size,
@@ -100,5 +117,5 @@ export function useSongCardMetadata({
     setCoverUrl(null);
   }, [setCoverUrl]);
 
-  return { meta, coverUrl, clearCover };
+  return { meta, coverUrl, clearCover, retry };
 }

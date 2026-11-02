@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { isAbortError } from "./player/utils";
 import { getTrackMetadata } from "../utils/metadata";
 import type { CachedMetadata } from "../utils/metadata";
+import { METADATA_NETWORK_COOLDOWN_MS } from "../utils/metadata/constants";
 import {
   buildCoverBlobUrl,
   buildCoverUrl,
@@ -14,6 +15,15 @@ import {
 // stays mounted for the window — avoids IPC/range-fetch spam when a large
 // grid mounts many cards at once.
 export const TRACK_METADATA_DEBOUNCE_MS = 150;
+
+// Retry without a remount (Phase A6): when a fetch resolves to a RETRYABLE
+// provisional placeholder (transient network failure / app-wide circuit-open
+// rejection) the hook re-fires once the cooldown window has elapsed. The
+// budget is bounded per mount so a broken Drive can never spin a fetch loop;
+// a consumer can always retry manually via the returned `retry()`.
+export const METADATA_AUTO_RETRY_DELAY_MS =
+  METADATA_NETWORK_COOLDOWN_MS + 1_000;
+export const METADATA_MAX_AUTO_RETRIES = 2;
 
 export interface TrackMetadataOptions {
   fileId: string | null | undefined;
@@ -69,8 +79,24 @@ export function useTrackMetadata({
 }: TrackMetadataOptions): {
   coverUrl: string | null;
   setCoverUrl: (url: string | null) => void;
+  /**
+   * Manual re-fetch for the SAME mount (no remount). It never forces the
+   * network — a valid cache hit is still served from memory/IDB — so calling
+   * it on a loaded card costs nothing.
+   */
+  retry: () => void;
 } {
   const [coverUrl, setCoverUrlState] = useState<string | null>(null);
+  // Manual/automatic retry tick: part of the effect deps, so bumping it
+  // re-runs the fetch lifecycle without remounting the consumer.
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => {
+    setAttempt((n) => n + 1);
+  }, []);
+  // Auto-retry budget, scoped per fileId: a new file starts fresh, and the
+  // effect cleanup clears the pending timer so an unmounted card never fires.
+  const autoRetriesRef = useRef(0);
+  const autoRetryFileRef = useRef<string | null | undefined>(undefined);
   // Blob URL last created by THIS hook with buildCoverBlobUrl (null while the
   // cover is a drplay:// GET URL, no cover, or already released). Tracked
   // across effect runs so the hook revokes exactly the URL it owns — never a
@@ -90,9 +116,37 @@ export function useTrackMetadata({
   useEffect(() => {
     if (!enabled || !fileId) return;
 
+    // A new file gets a fresh auto-retry budget.
+    if (autoRetryFileRef.current !== fileId) {
+      autoRetryFileRef.current = fileId;
+      autoRetriesRef.current = 0;
+    }
+
     const controller = new AbortController();
     let isMounted = true;
     const imgElement = imgRef?.current ?? null;
+    let autoRetryTimerId: ReturnType<typeof setTimeout> | undefined;
+
+    // Transient/circuit placeholders are PROVISIONAL: the metadata layer never
+    // pins them, so a re-fetch after the cooldown can succeed WITHOUT a
+    // remount. The budget is bounded per mount so a broken Drive cannot spin
+    // a fetch loop; "unsupported"/"no_metadata" are final and never retried.
+    function scheduleAutoRetryIfProvisional(metadata: CachedMetadata): void {
+      if (
+        metadata.outcome !== "transient_failure" &&
+        metadata.outcome !== "circuit_open"
+      ) {
+        return;
+      }
+      if (autoRetriesRef.current >= METADATA_MAX_AUTO_RETRIES) return;
+      autoRetriesRef.current += 1;
+      autoRetryTimerId = setTimeout(() => {
+        if (!isMounted || controller.signal.aborted) return;
+        // Bumps the effect's attempt dep: one clean re-run (new controller,
+        // full cleanup semantics) rather than a second in-place fetch.
+        setAttempt((n) => n + 1);
+      }, METADATA_AUTO_RETRY_DELAY_MS);
+    }
 
     const fetchMetadata = async () => {
       try {
@@ -145,6 +199,7 @@ export function useTrackMetadata({
           revokeCoverBlobUrl(previousHookBlobUrl);
         }
         onMetadata(metadata, nextCoverUrl, controller.signal);
+        scheduleAutoRetryIfProvisional(metadata);
       } catch (error) {
         // Deliberate cleanup abort (or an AbortError from the fetch layer) is
         // not an error (MDN AbortController) — stay silent.
@@ -165,6 +220,7 @@ export function useTrackMetadata({
     return () => {
       isMounted = false;
       if (timerId !== undefined) clearTimeout(timerId);
+      if (autoRetryTimerId !== undefined) clearTimeout(autoRetryTimerId);
       controller.abort();
       if (imgElement) imgElement.src = "";
       // The <img> no longer references the cover: release the hook-owned blob
@@ -183,11 +239,12 @@ export function useTrackMetadata({
     originalName,
     debounceMs,
     refreshKey,
+    attempt,
     imgRef,
     onMetadata,
     onError,
     onCleanup,
   ]);
 
-  return { coverUrl, setCoverUrl };
+  return { coverUrl, setCoverUrl, retry };
 }

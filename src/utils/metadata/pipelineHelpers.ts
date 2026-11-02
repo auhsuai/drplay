@@ -8,7 +8,7 @@ import {
   UNKNOWN_ARTIST,
   V_PLACEHOLDER,
 } from "./constants";
-import type { CachedMetadata } from "./types";
+import type { CachedMetadata, MetadataOutcome } from "./types";
 
 export const logMetaWarn = (message: string, kind?: string): Promise<void> =>
   captureError({
@@ -77,7 +77,11 @@ function hasEmbeddedDurationTag(
   return false;
 }
 
-function makePlaceholder(safeName: string, size?: number): CachedMetadata {
+function makePlaceholder(
+  safeName: string,
+  size?: number,
+  outcome: MetadataOutcome = "unsupported",
+): CachedMetadata {
   return {
     title: stripExtension(safeName),
     artist: UNKNOWN_ARTIST,
@@ -86,12 +90,32 @@ function makePlaceholder(safeName: string, size?: number): CachedMetadata {
     pictureData: null,
     pictureDataFull: null,
     v: V_PLACEHOLDER,
+    // Explicit, non-inferable lifecycle: a placeholder is ALWAYS provisional
+    // (the UI may render it, but it is not a completed load), and its outcome
+    // says whether the next mount can retry (transient/circuit/cancelled) or
+    // the result is final (unsupported/no_metadata).
+    outcome,
+    provisional: isProvisionalOutcome(outcome),
     // The size is set only when the caller knows it: a placeholder for a
     // known-size file must still show its real size (dropping it made every
     // failed metadata fetch render "0 B"), while an unknown-size file keeps
     // the field absent so callers fall back to "0 B".
     ...(size !== undefined ? { size } : {}),
   };
+}
+
+/**
+ * True when the outcome is a FAILURE/incomplete result whose entry must only
+ * ever be rendered, never persisted as final metadata. Deterministic
+ * placeholders (unsupported/no_metadata) are still provisional=… false, since
+ * a retry cannot change the answer.
+ */
+function isProvisionalOutcome(outcome: MetadataOutcome): boolean {
+  return (
+    outcome === "transient_failure" ||
+    outcome === "circuit_open" ||
+    outcome === "cancelled"
+  );
 }
 
 export { stripExtension, hasEmbeddedDurationTag, makePlaceholder };

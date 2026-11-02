@@ -25,11 +25,13 @@ function makeSw() {
   };
 }
 
-function makeFetchEvent(fileId: string) {
+function makeFetchEvent(fileId: string, purpose?: string) {
+  const headers: Record<string, string> = { Range: "bytes=0-" };
+  if (purpose !== undefined) headers["X-DrPlay-Purpose"] = purpose;
   const request = new Request(
     `http://localhost/drive-stream/${fileId}?ext=mp3`,
     {
-      headers: { Range: "bytes=0-" },
+      headers,
     },
   );
   return { request, respondWith: vi.fn() };
@@ -131,6 +133,86 @@ describe("sw.js play-path retry/backoff for 429/5xx (Slice 2)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const ev = makeFetchEvent("abc");
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    sw.emit("fetch", ev);
+    const pending = ev.respondWith.mock.calls[0]?.[0] as Promise<Response>;
+    await vi.waitFor(() => {
+      expect(sw.postMessage).toHaveBeenCalled();
+    });
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok2" } });
+    const response = await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2); // original + single 401 retry
+    expect(response.status).toBe(401);
+  });
+});
+
+// ---- Phase B4: single retry owner for metadata ranges ----------------------
+describe("sw.js does NOT retry metadata-purpose requests (page owns the retry)", () => {
+  async function metadataRoundtrip(
+    sw: ReturnType<typeof makeSw>,
+    fileId: string,
+  ): Promise<{ response: Response; fetchMock: ReturnType<typeof vi.fn> }> {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(upstream(500)));
+    vi.stubGlobal("fetch", fetchMock);
+    const ev = makeFetchEvent(fileId, "metadata");
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    sw.emit("fetch", ev);
+    const pending = ev.respondWith.mock.calls[0]?.[0] as Promise<Response>;
+    // Give any (wrongly scheduled) backoff timer a chance to run.
+    await vi.advanceTimersByTimeAsync(1_600);
+    return { response: await pending, fetchMock };
+  }
+
+  it("a 500 on a metadata range reaches Drive exactly ONCE (no SW retry layer)", async () => {
+    vi.useFakeTimers();
+    const sw = makeSw();
+    const { response, fetchMock } = await metadataRoundtrip(sw, "meta-500");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(500);
+  });
+
+  it("a 429 on a metadata range reaches Drive exactly ONCE (page retries instead)", async () => {
+    vi.useFakeTimers();
+    const sw = makeSw();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(upstream(429)));
+    vi.stubGlobal("fetch", fetchMock);
+    const ev = makeFetchEvent("meta-429", "metadata");
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    sw.emit("fetch", ev);
+    const pending = ev.respondWith.mock.calls[0]?.[0] as Promise<Response>;
+    await vi.advanceTimersByTimeAsync(1_600);
+    const response = await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(429);
+  });
+
+  it("playback requests keep the SW retry layer (unchanged)", async () => {
+    vi.useFakeTimers();
+    const sw = makeSw();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(upstream(500))
+      .mockResolvedValueOnce(upstream(206));
+    vi.stubGlobal("fetch", fetchMock);
+    const ev = makeFetchEvent("audio-1"); // no purpose header
+    sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
+    sw.emit("fetch", ev);
+    const pending = ev.respondWith.mock.calls[0]?.[0] as Promise<Response>;
+    await vi.advanceTimersByTimeAsync(400);
+    const response = await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(response.status).toBe(206);
+  });
+
+  it("a metadata request still gets a 401 token-refresh retry (auth is not a retry multiplier)", async () => {
+    const sw = makeSw();
+    const fetchMock = vi.fn().mockResolvedValue(upstream(401));
+    vi.stubGlobal("fetch", fetchMock);
+    const ev = makeFetchEvent("meta-401", "metadata");
     sw.emit("message", { data: { type: "UPDATE_TOKEN", token: "tok" } });
     sw.emit("fetch", ev);
     const pending = ev.respondWith.mock.calls[0]?.[0] as Promise<Response>;

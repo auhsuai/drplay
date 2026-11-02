@@ -5,6 +5,8 @@ import type { RefObject } from "react";
 import {
   useTrackMetadata,
   TRACK_METADATA_DEBOUNCE_MS,
+  METADATA_AUTO_RETRY_DELAY_MS,
+  METADATA_MAX_AUTO_RETRIES,
 } from "./useTrackMetadata";
 import type { TrackMetadataOptions } from "./useTrackMetadata";
 import { getTrackMetadata } from "../utils/metadata";
@@ -480,5 +482,122 @@ describe("useTrackMetadata img cleanup", () => {
     });
     unmount();
     expect(onCleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- Phase A6: retry lifecycle (no remount) --------------------------------
+describe("useTrackMetadata retry / provisional outcomes", () => {
+  it("exposes retry() which re-runs the fetch exactly once for this mount", async () => {
+    const { result } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+    // No polling loop: nothing else fires without another retry().
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retry() never forces the network (no forceNetwork arg, cache stays authoritative)", async () => {
+    const { result } = renderTrackMetadata();
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(() => {
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+    });
+    // Exactly 5 args: fileId, token, size, name, signal — no forceNetwork.
+    expect(mockedFetch.mock.calls[1]).toHaveLength(5);
+  });
+
+  it("auto-retries a TRANSIENT provisional outcome after the cooldown, without a remount", async () => {
+    vi.useFakeTimers();
+    mockedFetch
+      .mockResolvedValueOnce(
+        makeMetadata({
+          v: 9,
+          outcome: "transient_failure",
+          provisional: true,
+        }),
+      )
+      .mockResolvedValue(makeMetadata());
+    const { onMetadata } = renderTrackMetadata();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(onMetadata.mock.calls[0]?.[0]).toMatchObject({
+      outcome: "transient_failure",
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(METADATA_AUTO_RETRY_DELAY_MS + 1);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(onMetadata.mock.calls[1]?.[0]).toMatchObject({ v: 8 });
+  });
+
+  it("never auto-retries a FINAL outcome (unsupported / no_metadata)", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(
+      makeMetadata({ v: 9, outcome: "unsupported", provisional: false }),
+    );
+    renderTrackMetadata();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(METADATA_AUTO_RETRY_DELAY_MS * 4);
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps automatic retries so a broken Drive cannot loop", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(
+      makeMetadata({ v: 9, outcome: "transient_failure", provisional: true }),
+    );
+    renderTrackMetadata();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Walk well past the budget: only METADATA_MAX_AUTO_RETRIES extra calls.
+    for (let i = 0; i < METADATA_MAX_AUTO_RETRIES + 3; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(METADATA_AUTO_RETRY_DELAY_MS + 1);
+      });
+    }
+    expect(mockedFetch).toHaveBeenCalledTimes(1 + METADATA_MAX_AUTO_RETRIES);
+  });
+
+  it("a pending auto-retry is cancelled on unmount (no fetch after cleanup)", async () => {
+    vi.useFakeTimers();
+    mockedFetch.mockResolvedValue(
+      makeMetadata({ v: 9, outcome: "transient_failure", provisional: true }),
+    );
+    const { unmount } = renderTrackMetadata();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(METADATA_AUTO_RETRY_DELAY_MS * 3);
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 });

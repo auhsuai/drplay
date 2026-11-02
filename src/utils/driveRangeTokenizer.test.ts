@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BudgetExceededError,
   DRIVE_COOLDOWN_MS,
@@ -7,7 +7,6 @@ import {
   HEAD_BYTES,
   RangeFetchNetworkError,
   RangeNotSupportedError,
-  REQUEST_TIMEOUT_MS,
   SizeUnknownError,
   isDriveCircuitOpen,
   resetDriveCircuitBreakerForTests,
@@ -230,7 +229,7 @@ describe("DriveRangeTokenizer", () => {
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
-  it("classifies a body-stream read failure after 206 as RangeFetchNetworkError (no retry, counted as drive failure)", async () => {
+  it("classifies a body-stream read failure after 206 as RangeFetchNetworkError (no retry, transient — never opens the global circuit)", async () => {
     const mock = vi.fn(() => ({
       status: 206,
       ok: true,
@@ -244,23 +243,19 @@ describe("DriveRangeTokenizer", () => {
       kind: "network",
     });
     expect(mock).toHaveBeenCalledTimes(1); // no retry on body-stream failure
-    // Three body-stream failures trip the drive throttle circuit breaker —
-    // recordDriveFailure must count them (the 4th read fails fast with no fetch).
+    // PHASE A2 CONTRACT: body-stream failures are TRANSIENT (network), not a
+    // Drive throttle signal. Three of them must NOT open the app-wide circuit.
     await expect(tz.readRange(0, 10)).rejects.toBeInstanceOf(
       RangeFetchNetworkError,
     );
     await expect(tz.readRange(0, 10)).rejects.toBeInstanceOf(
       RangeFetchNetworkError,
     );
-    expect(isDriveCircuitOpen()).toBe(true);
-    await expect(tz.readRange(0, 10)).rejects.toMatchObject({
-      name: "RangeFetchNetworkError",
-      kind: "timeout",
-      message: expect.stringContaining(
-        "drive-throttle-circuit-open",
-      ) as unknown as string,
-    });
-    expect(mock).toHaveBeenCalledTimes(3); // circuit-open read did not fetch
+    expect(isDriveCircuitOpen()).toBe(false);
+    await expect(tz.readRange(0, 10)).rejects.toBeInstanceOf(
+      RangeFetchNetworkError,
+    );
+    expect(mock).toHaveBeenCalledTimes(4); // still fetching, no fail-fast
   });
 
   // Caller-abort during the body read (arrayBuffer rejects) after a 206:
@@ -269,40 +264,54 @@ describe("DriveRangeTokenizer", () => {
   // fetch-reject catch.
   it("caller abort during body read (arrayBuffer rejects) does not feed the circuit breaker either", async () => {
     const controller = new AbortController();
-    controller.abort();
     const captureSpy = vi
       .spyOn(errorLogModule, "captureError")
       .mockResolvedValue();
     const mock = vi.fn(() => ({
       status: 206,
       ok: true,
-      arrayBuffer: () =>
-        Promise.reject(
+      arrayBuffer: () => {
+        // The caller cancels while the body is being read (unmount mid-download).
+        controller.abort();
+        return Promise.reject(
           new DOMException("The user aborted a request", "AbortError"),
-        ),
+        );
+      },
     }));
     vi.stubGlobal("fetch", mock);
     const tz = new DriveRangeTokenizer("f1", 1000, {
       abortSignal: controller.signal,
     });
 
-    // Same exit shape as every other caller-abort path (kind timeout, the
-    // exact message the timeout/429-abort branches throw).
-    for (let i = 0; i < 3; i += 1) {
-      await expect(tz.readRange(0, 8)).rejects.toMatchObject({
-        name: "RangeFetchNetworkError",
-        kind: "timeout",
-        message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
-      });
-    }
-    // 3 deliberate cancels inside the failure window must NOT open the
-    // app-wide circuit...
+    // PHASE A1 CONTRACT: a cancellation is its OWN kind — never "timeout".
+    await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+      name: "RangeFetchNetworkError",
+      kind: "aborted",
+    });
+    // 3 cancels inside the failure window must NOT open the app-wide circuit
+    // (unmount/navigation is deliberate, not Drive throttling)...
+    const controller2 = new AbortController();
+    const tz2 = new DriveRangeTokenizer("f2", 1000, {
+      abortSignal: controller2.signal,
+    });
+    const abortingMock = vi.fn(() => ({
+      status: 206,
+      ok: true,
+      arrayBuffer: () => {
+        controller2.abort();
+        return Promise.reject(
+          new DOMException("The user aborted a request", "AbortError"),
+        );
+      },
+    }));
+    vi.stubGlobal("fetch", abortingMock);
+    await expect(tz2.readRange(0, 8)).rejects.toMatchObject({
+      kind: "aborted",
+    });
+    await expect(tz2.readRange(0, 8)).rejects.toMatchObject({
+      kind: "aborted",
+    });
     expect(isDriveCircuitOpen()).toBe(false);
-    // ...so the 4th read still issues a real fetch (no fail-fast pinning).
-    await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
-      RangeFetchNetworkError,
-    );
-    expect(mock).toHaveBeenCalledTimes(4);
     // Silent per the file's cancellation convention: no body-failed warn.
     expect(captureSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -411,13 +420,17 @@ describe("DriveRangeTokenizer", () => {
     const tz = new DriveRangeTokenizer("f1", 1000);
     const err = await settleWithTimers(tz.readRange(0, 8));
     expect(err).toBeInstanceOf(RangeFetchNetworkError);
+    // PHASE A1: a Drive rate-limit 403 is its own kind, distinct from a bare
+    // network error, so cooldown policy can treat it as a throttle signal.
     expect(err).toMatchObject({
       name: "RangeFetchNetworkError",
-      kind: "network",
+      kind: "rate_limited",
+      status: 403,
     });
     expect(vf.calls).toHaveLength(3); // all attempts spent before giving up
-    // Same breaker feed as 429/5xx: 3 exhausted attempts open the circuit.
-    expect(isDriveCircuitOpen()).toBe(true);
+    // ONE logical op ⇒ ONE throttle failure: below the 3-failure threshold,
+    // so a single throttled request does NOT black out the app.
+    expect(isDriveCircuitOpen()).toBe(false);
   });
 
   it("keeps a non-rate-limit 403 deterministic (RangeNotSupportedError, no retry)", async () => {
@@ -434,30 +447,31 @@ describe("DriveRangeTokenizer", () => {
 
   // FLIPPED deliberately per the android contract (2a2d909/e839613): retry
   // exhaustion on 429/5xx now surfaces the TRANSIENT RangeFetchNetworkError
-  // (kind network) instead of the deterministic RangeNotSupportedError, so
-  // fetchPipeline stops pinning the placeholder after throttle storms.
+  // instead of the deterministic RangeNotSupportedError, so fetchPipeline
+  // stops pinning the placeholder after throttle storms.
   it("gives up after 2 retries and reports a transient throttled error", async () => {
     const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 500]);
     const tz = new DriveRangeTokenizer("f1", 1000);
     await expect(tz.readRange(0, 8)).rejects.toMatchObject({
       name: "RangeFetchNetworkError",
       kind: "network",
+      status: 500,
     });
     expect(vf.calls).toHaveLength(3); // all attempts spent before giving up
   });
 
-  // Every 429/5xx attempt feeds the breaker, including the final exhausted
-  // one — 3 attempts must record 3 failures (DRIVE_FAILURE_THRESHOLD=3 opens
-  // the circuit), not 2.
-  it("feeds the drive breaker once per attempt including the final exhausted one", async () => {
+  // PHASE A2 CONTRACT (one failure per LOGICAL operation): a timed-out
+  // request consumes exactly ONE breaker slot even though the fetcher tries
+  // it twice. A 5xx storm likewise records ONE failure, not three.
+  it("records ONE breaker failure per logical operation, including the exhausted retries", async () => {
     const vf = installVirtualFile(1000, (i) => i % 256, [500, 500, 500]);
     const tz = new DriveRangeTokenizer("f1", 1000);
     await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
       RangeFetchNetworkError,
     );
     expect(vf.calls).toHaveLength(3);
-    // 3 recorded failures >= threshold -> circuit opened.
-    expect(isDriveCircuitOpen()).toBe(true);
+    // 5xx is TRANSIENT: even at threshold it never opens the global circuit.
+    expect(isDriveCircuitOpen()).toBe(false);
   });
 
   it("single non-retryable 404 stays deterministic RangeNotSupportedError without feeding the breaker", async () => {
@@ -509,16 +523,15 @@ describe("DriveRangeTokenizer", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
     const err = await guarded;
-    // Same error path the timeout branch uses for a caller-abort exit.
+    // PHASE A1: a caller cancel is its OWN kind, never "timeout".
     expect(err).toBeInstanceOf(RangeFetchNetworkError);
     expect(err).toMatchObject({
       name: "RangeFetchNetworkError",
-      kind: "timeout",
-      message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+      kind: "aborted",
+      message: "Range fetch aborted by caller",
     });
     expect(mock).toHaveBeenCalledTimes(1); // no doomed second attempt
-    // The 500 was a REAL failure: it still feeds the breaker, but one
-    // failure alone must not open the circuit.
+    // Cancellation is not a failure: no breaker evidence either way.
     expect(isDriveCircuitOpen()).toBe(false);
   });
 
@@ -565,14 +578,16 @@ describe("DriveRangeTokenizer", () => {
     await vi.advanceTimersByTimeAsync(32_000);
     const err = await guarded;
     expect(settledOnAbort).toBe(true);
-    // Same error path the pre-sleep abort guard uses.
+    // PHASE A1: cancellation has its own kind.
     expect(err).toBeInstanceOf(RangeFetchNetworkError);
     expect(err).toMatchObject({
       name: "RangeFetchNetworkError",
-      kind: "timeout",
-      message: `Range fetch timed out after ${String(REQUEST_TIMEOUT_MS)}ms`,
+      kind: "aborted",
+      message: "Range fetch aborted by caller",
     });
     expect(mock).toHaveBeenCalledTimes(1); // abort mid-backoff: no second attempt
+    // Cancellation is not a failure: the 429 never reached the breaker.
+    expect(isDriveCircuitOpen()).toBe(false);
   });
 
   it("throws SizeUnknownError when size is 0 or negative", () => {
@@ -880,76 +895,212 @@ describe("DriveRangeTokenizer", () => {
     });
   });
 
-  describe("Drive throttle circuit breaker (Fix H)", () => {
-    it("opens the circuit after 3 consecutive failures and fails fast without fetching", async () => {
+  describe("Drive throttle circuit breaker (Phase A2 contract)", () => {
+    // 429 (or a confirmed rate-limit 403) is the ONLY throttle signal that may
+    // open the app-wide circuit. 5xx / timeout / network are transient.
+    const RATE_LIMIT_429 = {
+      status: 429,
+      ok: false,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      json: () => Promise.resolve(undefined),
+      clone: () => ({ json: () => Promise.resolve(undefined) }),
+    };
+
+    function throttleMock(): ReturnType<typeof vi.fn> {
+      return vi.fn(() => Promise.resolve({ ...RATE_LIMIT_429 }));
+    }
+
+    it("opens on 3 LOGICAL throttle failures and rejects without fetching, as kind circuit_open", async () => {
       vi.useFakeTimers();
       const captureSpy = vi
         .spyOn(errorLogModule, "captureError")
         .mockResolvedValue();
-      const mock = timeoutMock();
+      const mock = throttleMock();
       vi.stubGlobal("fetch", mock);
       const tz = new DriveRangeTokenizer("f1", 1000);
 
-      await settleWithTimers(tz.readRange(0, 8)); // 2 failures (timeout + retry)
-      await settleWithTimers(tz.readRange(0, 8)); // 1 more failure -> circuit opens
-      const fastFail = await settleWithTimers(tz.readRange(0, 8));
+      // Each logical read = 3 upstream attempts (initial + 2 retries) but ONE
+      // breaker failure. Three of those reach DRIVE_FAILURE_THRESHOLD.
+      await settleWithTimers(tz.readRange(0, 8));
+      await settleWithTimers(tz.readRange(0, 8));
+      await settleWithTimers(tz.readRange(0, 8));
+      expect(mock).toHaveBeenCalledTimes(9);
+      expect(isDriveCircuitOpen()).toBe(true);
 
-      expect(mock).toHaveBeenCalledTimes(3); // NO 4th fetch while open
+      const fastFail = await settleWithTimers(tz.readRange(0, 8));
+      expect(mock).toHaveBeenCalledTimes(9); // NO fetch while open
       expect(fastFail).toBeInstanceOf(RangeFetchNetworkError);
       if (fastFail instanceof RangeFetchNetworkError) {
-        expect(fastFail.kind).toBe("timeout");
+        // PHASE A1: a breaker rejection is NEVER reported as a timeout.
+        expect(fastFail.kind).toBe("circuit_open");
         expect(fastFail.message).toContain("drive-throttle-circuit-open");
       }
       expect(captureSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "driveRangeTokenizer",
           message: expect.stringContaining(
-            "range-fetch-circuit-open",
+            "drive-throttle-circuit-open",
           ) as unknown as string,
         }),
       );
     });
 
-    it("resumes fetching after the cooldown window elapses", async () => {
+    it("ONE timeout never opens the circuit (transient failures do not accumulate into a blackout)", async () => {
+      vi.useFakeTimers();
+      const mock = timeoutMock();
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      // A single logical timeout = 2 upstream attempts. Repeat it well past
+      // the old threshold: the circuit must stay closed.
+      for (let i = 0; i < 5; i += 1) {
+        await settleWithTimers(tz.readRange(0, 8));
+      }
+      expect(isDriveCircuitOpen()).toBe(false);
+      expect(mock).toHaveBeenCalledTimes(10); // every read still fetched
+    });
+
+    it("a success RESETS the throttle window (account is not throttled if it still answers)", async () => {
       vi.useFakeTimers();
       let calls = 0;
       const mock = vi.fn(() => {
         calls += 1;
-        if (calls <= 3) {
-          return Promise.reject(
-            new DOMException("The operation timed out", "TimeoutError"),
-          );
+        // 1st logical op (attempts 1-3): throttled.
+        if (calls <= 3) return Promise.resolve({ ...RATE_LIMIT_429 });
+        // 2nd logical op (attempt 4): succeeds — resets the window.
+        if (calls === 4) {
+          return Promise.resolve({
+            status: 206,
+            ok: true,
+            arrayBuffer: () => Promise.resolve(new Uint8Array(8).buffer),
+          });
         }
-        return Promise.resolve({
-          status: 206,
-          ok: true,
-          arrayBuffer: () => Promise.resolve(new Uint8Array(8).buffer),
-        });
+        // 3rd logical op (attempts 5-7): throttled again — only ONE failure
+        // in the fresh window, so the circuit must stay closed.
+        return Promise.resolve({ ...RATE_LIMIT_429 });
       });
       vi.stubGlobal("fetch", mock);
       const tz = new DriveRangeTokenizer("f1", 1000);
 
-      await settleWithTimers(tz.readRange(0, 8)); // 2 failures
-      await settleWithTimers(tz.readRange(0, 8)); // 1 failure -> open
-      await settleWithTimers(tz.readRange(0, 8)); // fail fast (no fetch)
-      expect(mock).toHaveBeenCalledTimes(3);
-
-      await vi.advanceTimersByTimeAsync(DRIVE_COOLDOWN_MS + 1_000);
-      const data = await tz.readRange(0, 8);
-      expect(data).toHaveLength(8);
-      expect(mock).toHaveBeenCalledTimes(4);
+      await settleWithTimers(tz.readRange(0, 8)); // throttle failure #1
+      expect(isDriveCircuitOpen()).toBe(false);
+      const data = await settleWithTimers(tz.readRange(0, 8));
+      expect(data).toBeInstanceOf(Uint8Array);
+      expect(isDriveCircuitOpen()).toBe(false);
+      await settleWithTimers(tz.readRange(0, 8)); // failure #1 of a NEW window
+      // Would have been failure #2 overall (below threshold anyway) — the
+      // reset is proven by remaining below threshold after a 2nd failure.
+      expect(isDriveCircuitOpen()).toBe(false);
     });
 
-    it("keeps fetching when failures stay below the threshold (normal path guard)", async () => {
+    it("half-open admits exactly ONE probe after the cooldown; other callers keep failing fast", async () => {
+      vi.useFakeTimers();
+      let probes = 0;
+      const mock = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        probes += 1;
+        if (probes <= 9) return Promise.resolve({ ...RATE_LIMIT_429 });
+        // The probe hangs ~5s; the other reads must fail fast meanwhile.
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            resolve({
+              status: 206,
+              ok: true,
+              arrayBuffer: () => Promise.resolve(new Uint8Array(8).buffer),
+            });
+          }, 5_000);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        });
+      });
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 400_000);
+
+      for (let i = 0; i < 3; i += 1) {
+        await settleWithTimers(tz.readRange(0, 8));
+      }
+      expect(isDriveCircuitOpen()).toBe(true);
+      await vi.advanceTimersByTimeAsync(DRIVE_COOLDOWN_MS + 1_000);
+
+      // The probe claims chunk 0. Two OTHER chunk reads must fail fast —
+      // they use distinct chunk keys so they cannot join the probe's in-flight
+      // promise. Handlers are attached immediately to avoid an unhandled
+      // rejection while the probe is still parked.
+      const settle = (p: Promise<unknown>) =>
+        p.then(
+          (v) => v,
+          (e: unknown) => e,
+        );
+      const probe = settle(tz.readRange(0, 8));
+      await vi.advanceTimersByTimeAsync(10);
+      const other1 = settle(tz.readRange(65_600, 65_700));
+      const other2 = settle(tz.readRange(131_200, 131_300));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await other1).toMatchObject({ kind: "circuit_open" });
+      expect(await other2).toMatchObject({ kind: "circuit_open" });
+      await vi.advanceTimersByTimeAsync(6_000);
+      const data = await probe;
+      expect(data).toBeInstanceOf(Uint8Array);
+      expect(data).toHaveLength(8);
+      // 9 (three throttled ops) + exactly 1 probe.
+      expect(mock).toHaveBeenCalledTimes(10);
+      expect(isDriveCircuitOpen()).toBe(false);
+    });
+
+    it("half-open probe failure RE-OPENS the circuit for another cooldown", async () => {
+      vi.useFakeTimers();
+      const mock = vi.fn(() => Promise.resolve({ ...RATE_LIMIT_429 }));
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      for (let i = 0; i < 3; i += 1) {
+        await settleWithTimers(tz.readRange(0, 8));
+      }
+      expect(isDriveCircuitOpen()).toBe(true);
+      await vi.advanceTimersByTimeAsync(DRIVE_COOLDOWN_MS + 1_000);
+
+      // The probe runs and fails: one logical op = 3 upstream attempts.
+      await settleWithTimers(tz.readRange(0, 8));
+      expect(mock).toHaveBeenCalledTimes(12);
+      // Re-opened: the next read fails fast without fetching.
+      await settleWithTimers(tz.readRange(0, 8));
+      expect(mock).toHaveBeenCalledTimes(12);
+      expect(isDriveCircuitOpen()).toBe(true);
+    });
+
+    it("a breaker rejection does not extend or re-trip the open window", async () => {
+      vi.useFakeTimers();
+      const mock = throttleMock();
+      vi.stubGlobal("fetch", mock);
+      const tz = new DriveRangeTokenizer("f1", 1000);
+
+      for (let i = 0; i < 3; i += 1) {
+        await settleWithTimers(tz.readRange(0, 8));
+      }
+      expect(isDriveCircuitOpen()).toBe(true);
+      // Hammer rejections for half the cooldown.
+      await vi.advanceTimersByTimeAsync(DRIVE_COOLDOWN_MS / 2);
+      for (let i = 0; i < 5; i += 1) {
+        await settleWithTimers(tz.readRange(0, 8));
+      }
+      expect(mock).toHaveBeenCalledTimes(9); // still no fetch
+      // The remaining half of the ORIGINAL cooldown is enough to expire it —
+      // rejections did not push the deadline out.
+      await vi.advanceTimersByTimeAsync(DRIVE_COOLDOWN_MS / 2 + 1_000);
+      await settleWithTimers(tz.readRange(0, 8)); // probe admitted (fetches)
+      expect(mock).toHaveBeenCalledTimes(12);
+    });
+
+    it("keeps fetching when throttle failures stay below the threshold", async () => {
       vi.useFakeTimers();
       const mock = vi
         .fn()
-        .mockRejectedValueOnce(
-          new DOMException("The operation timed out", "TimeoutError"),
-        )
-        .mockRejectedValueOnce(
-          new DOMException("The operation timed out", "TimeoutError"),
-        )
+        .mockResolvedValueOnce({ ...RATE_LIMIT_429 })
+        .mockResolvedValueOnce({ ...RATE_LIMIT_429 })
+        .mockResolvedValueOnce({ ...RATE_LIMIT_429 })
         .mockImplementation(() => ({
           status: 206,
           ok: true,
@@ -958,23 +1109,26 @@ describe("DriveRangeTokenizer", () => {
       vi.stubGlobal("fetch", mock);
       const tz = new DriveRangeTokenizer("f1", 1000);
 
-      await settleWithTimers(tz.readRange(0, 8)); // 2 failures -> throws
-      const data = await tz.readRange(0, 8); // below threshold -> fetches fine
-      expect(data).toHaveLength(8);
-      expect(mock).toHaveBeenCalledTimes(3);
+      await settleWithTimers(tz.readRange(0, 8)); // 1 logical throttle failure
+      const data = await settleWithTimers(tz.readRange(0, 8));
+      expect(data).toBeInstanceOf(Uint8Array);
+      expect(isDriveCircuitOpen()).toBe(false);
     });
 
-    it("ignores failures older than the failure window (sliding window)", async () => {
+    it("ignores throttle failures older than the failure window (sliding window)", async () => {
       vi.useFakeTimers();
-      const mock = timeoutMock();
+      const mock = throttleMock();
       vi.stubGlobal("fetch", mock);
       const tz = new DriveRangeTokenizer("f1", 1000);
 
-      await settleWithTimers(tz.readRange(0, 8)); // 2 failures
+      await settleWithTimers(tz.readRange(0, 8));
       await vi.advanceTimersByTimeAsync(DRIVE_FAILURE_WINDOW_MS + 1_000);
-      await settleWithTimers(tz.readRange(0, 8)); // 2 fresh failures again
+      await settleWithTimers(tz.readRange(0, 8));
+      await settleWithTimers(tz.readRange(0, 8));
 
-      expect(mock).toHaveBeenCalledTimes(4); // never opened: window expired
+      // 2 fresh failures (not 3): the expired one was pruned.
+      expect(isDriveCircuitOpen()).toBe(false);
+      expect(mock).toHaveBeenCalledTimes(9); // 3 throttled logical ops × 3 attempts
     });
 
     it("caller-abort does not feed the circuit breaker (deliberate cancel, not a failure)", async () => {
@@ -993,24 +1147,21 @@ describe("DriveRangeTokenizer", () => {
         abortSignal: controller.signal,
       });
 
-      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
-        RangeFetchNetworkError,
-      );
-      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
-        RangeFetchNetworkError,
-      );
-      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
-        RangeFetchNetworkError,
-      );
+      for (let i = 0; i < 3; i += 1) {
+        await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+          kind: "aborted",
+        });
+      }
 
       // 3 cancels inside the failure window must NOT open the app-wide
       // circuit (unmount/navigation is deliberate, not Drive throttling)...
       expect(isDriveCircuitOpen()).toBe(false);
-      // ...so a 4th read must still fetch (no fail-fast placeholder pinning).
-      await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
-        RangeFetchNetworkError,
-      );
-      expect(mock).toHaveBeenCalledTimes(4);
+      // ...and a cancelled caller never dispatches a request: the semaphore
+      // drops the queued waiter before it can touch the network.
+      await expect(tz.readRange(0, 8)).rejects.toMatchObject({
+        kind: "aborted",
+      });
+      expect(mock).toHaveBeenCalledTimes(0);
       // A caller cancel is not a timeout: no "range-fetch-timeout" warn.
       expect(captureSpy).not.toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1021,7 +1172,7 @@ describe("DriveRangeTokenizer", () => {
       );
     });
 
-    it("AbortError from the internal timeout (no caller abort) still counts as a drive failure", async () => {
+    it("AbortError from the internal timeout (no caller abort) is a real timeout, still transient", async () => {
       vi.useFakeTimers();
       const mock = vi.fn(() =>
         Promise.reject(
@@ -1031,13 +1182,73 @@ describe("DriveRangeTokenizer", () => {
       vi.stubGlobal("fetch", mock);
       const tz = new DriveRangeTokenizer("f1", 1000);
 
-      await settleWithTimers(tz.readRange(0, 8)); // 2 failures (timeout + retry)
-      await settleWithTimers(tz.readRange(0, 8)); // 1 more failure -> circuit opens
-      await settleWithTimers(tz.readRange(0, 8)); // fail fast, no fetch
-
-      expect(isDriveCircuitOpen()).toBe(true);
-      expect(mock).toHaveBeenCalledTimes(3);
+      const err = await settleWithTimers(tz.readRange(0, 8));
+      expect(err).toMatchObject({
+        name: "RangeFetchNetworkError",
+        kind: "timeout",
+      });
+      // Transient: never opens the global circuit.
+      expect(isDriveCircuitOpen()).toBe(false);
+      expect(mock).toHaveBeenCalledTimes(2); // timeout + one retry
     });
+  });
+});
+
+describe("Drive range structured diagnostics (Phase C)", () => {
+  it("aggregates counters for a logical op without logging a success", async () => {
+    const vf = installVirtualFile(1000, (i) => i % 256);
+    const captureSpy = vi
+      .spyOn(errorLogModule, "captureError")
+      .mockResolvedValue();
+    const { driveRangeStats, resetDriveRangeStatsForTests } =
+      await import("./driveRangeChunkFetcher");
+    resetDriveRangeStatsForTests();
+    const tz = new DriveRangeTokenizer("f1", 1000);
+    await tz.readRange(0, 8);
+    expect(vf.calls).toHaveLength(1);
+    expect(driveRangeStats.operations).toBe(1);
+    expect(driveRangeStats.requests).toBe(1);
+    expect(driveRangeStats.retries).toBe(0);
+    expect(driveRangeStats.bytes).toBeGreaterThan(0);
+    // No per-success log spam.
+    expect(captureSpy).not.toHaveBeenCalled();
+  });
+
+  it("a failure log carries structured kind/status/attempts/bytes/timings and no token", async () => {
+    const captureSpy = vi
+      .spyOn(errorLogModule, "captureError")
+      .mockResolvedValue();
+    const mock = vi.fn(() => ({
+      status: 206,
+      ok: true,
+      arrayBuffer: () =>
+        Promise.reject(new TypeError("connection reset mid-body")),
+    }));
+    vi.stubGlobal("fetch", mock);
+    const { resetDriveRangeStatsForTests } =
+      await import("./driveRangeChunkFetcher");
+    resetDriveRangeStatsForTests();
+    const tz = new DriveRangeTokenizer("secret-file-id", 1000);
+    await expect(tz.readRange(0, 8)).rejects.toBeInstanceOf(
+      RangeFetchNetworkError,
+    );
+    const bodyLog = captureSpy.mock.calls.find(([args]) =>
+      args.message.includes("range-fetch-body-failed"),
+    );
+    expect(bodyLog).toBeDefined();
+    const message = bodyLog?.[0].message ?? "";
+    expect(message).toContain("kind=network");
+    expect(message).toContain("status=206");
+    expect(message).toContain("attempts=1");
+    expect(message).toContain("bytes=0-999");
+    expect(message).toContain("queueWaitMs=");
+    expect(message).toContain("ttfbMs=");
+    expect(message).toContain("transferMs=");
+    expect(message).toContain("totalMs=");
+    expect(message).toContain("aborted=false");
+    // Never the token (the range layer never sees one) and the id is present
+    // only in the pre-existing redactable fileId= slot.
+    expect(message).not.toContain("Bearer");
   });
 });
 

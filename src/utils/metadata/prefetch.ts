@@ -160,6 +160,36 @@ async function prefetchFlacPictureRemainder(
   }
 }
 
+/**
+ * Warm the tail region of a non-faststart m4a BEFORE the parser runs.
+ *
+ * Why (Phase B2): music-metadata's ParserFactory calls scanAppendingHeaders
+ * for every random-access tokenizer, which reads ~3 bytes at `size-128` (and
+ * 32 bytes near EOF for APEv2) BEFORE parsing. That probe is the extra ~64 KiB
+ * tail chunk request. Prefetching the whole 1 MiB tail first makes both the
+ * probe and the later moov scan cache hits, so the round trip is not repeated.
+ * Best-effort: any failure is logged and the parse proceeds exactly as before
+ * (the probe then fetches its chunk on demand).
+ *
+ * Deliberately does NOT scan — the authoritative moov scan still runs after
+ * the parse (prefetchAndScanM4aTail), so streamUnplayable semantics are
+ * unchanged.
+ */
+async function prefetchM4aTailRange(
+  tokenizer: DriveRangeTokenizer,
+  fileId: string,
+  size: number,
+): Promise<void> {
+  try {
+    const tailStart = Math.max(0, size - TAIL_BYTES);
+    await tokenizer.prefetchRange(tailStart, size);
+  } catch (e: unknown) {
+    void logMetaWarn(
+      `m4a-tail-prewarm-failed (fileId=${fileId}, size=${String(size)}): ${classifyMetaError(e).message}`,
+    );
+  }
+}
+
 async function prefetchAndScanM4aTail(
   tokenizer: DriveRangeTokenizer,
   fileId: string,
@@ -168,10 +198,8 @@ async function prefetchAndScanM4aTail(
   try {
     const tailStart = Math.max(0, size - TAIL_BYTES);
     try {
-      // Metadata-load latency: scanning a 1MB tail chunk-by-chunk cost
-      // 16 range requests (64KB each) behind the CONCURRENCY-3
-      // semaphore. Prefetch the tail in ONE request; the scan below
-      // then reads it from the seeded cache.
+      // Fully-cached fast path: when prefetchM4aTailRange already warmed the
+      // tail this is a cache read, not a second request.
       await tokenizer.prefetchRange(tailStart, size);
     } catch (e: unknown) {
       // Best-effort optimization only: a failed prefetch must not
@@ -197,5 +225,6 @@ async function prefetchAndScanM4aTail(
 export {
   prepareMp3Tokenizer,
   prefetchFlacPictureRemainder,
+  prefetchM4aTailRange,
   prefetchAndScanM4aTail,
 };

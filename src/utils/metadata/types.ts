@@ -1,3 +1,31 @@
+/**
+ * Explicit lifecycle of a metadata result (Phase A6). Before this, a resolved
+ * value could only be told apart by the numeric `v` marker, so a transient
+ * failure was indistinguishable from a successful load for every consumer.
+ *
+ * - "success":   full parse (or a cache hit of one).
+ * - "partial":   parsed text metadata, cover degraded (budget salvage). Still
+ *                real, usable metadata — rendered exactly like "success".
+ * - "no_metadata": the file IS a valid audio file but carries no usable tags
+ *                (title falls back to the filename).
+ * - "unsupported": deterministic — the format/media kind cannot be parsed or
+ *                the server refuses Range. Pinned; never retried.
+ * - "transient_failure": timeout/network/rate-limited. Provisional: retried
+ *                after the per-file cooldown, never pinned.
+ * - "circuit_open": rejected by the app-wide throttle breaker. Provisional
+ *                and GLOBAL — never punished with a per-file cooldown.
+ * - "cancelled": deliberate caller cancellation. Not a failure; retryable by
+ *                the next mount with no cooldown.
+ */
+export type MetadataOutcome =
+  | "success"
+  | "partial"
+  | "no_metadata"
+  | "unsupported"
+  | "transient_failure"
+  | "circuit_open"
+  | "cancelled";
+
 export interface CachedMetadata {
   title: string;
   artist: string;
@@ -6,6 +34,17 @@ export interface CachedMetadata {
   durationEstimated: boolean;
   pictureData: Uint8Array | null;
   pictureDataFull: Uint8Array | null;
+  /** Discriminated outcome (absent on legacy rows — treat as v-derived). */
+  outcome?: MetadataOutcome;
+  /**
+   * True when the entry is a RETRYABLE placeholder (transient failure,
+   * circuit rejection or cancellation): keep rendering it (filename, "–"), but
+   * consumers must not treat it as a completed load — a later attempt can
+   * still produce real metadata. Deterministic placeholders
+   * (unsupported/no_metadata) are rendered the same way but leave this false,
+   * because retrying cannot change the answer.
+   */
+  provisional?: boolean;
   pictureFormat?: string;
   // Format of `pictureDataFull` when it differs from the thumb's
   // pictureFormat: each cover variant is compressed independently, so a

@@ -34,21 +34,65 @@ import {
   UNKNOWN_ARTIST,
 } from "./constants";
 import { processCovers } from "./cover";
-import type { CachedMetadata } from "./types";
+import type { CachedMetadata, MetadataOutcome } from "./types";
 import {
   hasEmbeddedDurationTag,
   logMetaWarn,
   makePlaceholder,
   stripExtension,
 } from "./pipelineHelpers";
-import { networkCooldownUntil, setNetworkCooldown } from "./cooldown";
+import {
+  clearNetworkCooldownFor,
+  networkCooldownUntil,
+  setNetworkCooldown,
+} from "./cooldown";
 import { readCachedEntry } from "./parse";
 import { isMetadataFetchEnabled } from "./settings";
 import {
   prefetchAndScanM4aTail,
   prefetchFlacPictureRemainder,
+  prefetchM4aTailRange,
   prepareMp3Tokenizer,
 } from "./prefetch";
+
+/**
+ * Maps a thrown pipeline error to the explicit lifecycle outcome.
+ * - A breaker rejection is GLOBAL: provisional, and NEVER a per-file cooldown.
+ * - A cancellation is not a failure: provisional, retry immediately.
+ * - Transient network/throttle failures are provisional + cooldown-gated.
+ * - Everything deterministic (unsupported/http_error/parse/budget) is final.
+ */
+function outcomeForError(err: unknown): MetadataOutcome {
+  if (err instanceof RangeFetchNetworkError) {
+    switch (err.kind) {
+      case "circuit_open":
+        return "circuit_open";
+      case "aborted":
+        return "cancelled";
+      case "timeout":
+      case "network":
+      case "rate_limited":
+        return "transient_failure";
+      default:
+        return "transient_failure";
+    }
+  }
+  return "unsupported";
+}
+
+/**
+ * True when the error is a GENUINE transient failure that justifies a
+ * per-file network cooldown. A `circuit_open` rejection and an `aborted`
+ * result deliberately do not (see metadata/cooldown.ts).
+ */
+function shouldCooldown(err: unknown): boolean {
+  return (
+    err instanceof RangeFetchNetworkError &&
+    (err.kind === "timeout" ||
+      err.kind === "network" ||
+      err.kind === "rate_limited")
+  );
+}
 
 async function getTrackMetadataImpl(
   fileId: string,
@@ -80,7 +124,7 @@ async function getTrackMetadataImpl(
   // crash the UI nor display a garbage artist. Pinned in the memory cache
   // like any other placeholder, so the decision is made once per fileId.
   if (classifyMediaKind(safeName) === MEDIA_KIND_VIDEO) {
-    const videoEntry = makePlaceholder(safeName, _size);
+    const videoEntry = makePlaceholder(safeName, _size, "unsupported");
     setMetadataCache(fileId, videoEntry);
     return videoEntry;
   }
@@ -89,7 +133,7 @@ async function getTrackMetadataImpl(
   if (size <= 0) {
     // Size unknown: a range fetch is impossible — placeholder without touching
     // the network (Drive does not report a size for this file).
-    const placeholder = makePlaceholder(safeName);
+    const placeholder = makePlaceholder(safeName, undefined, "unsupported");
     setMetadataCache(fileId, placeholder);
     return placeholder;
   }
@@ -101,7 +145,7 @@ async function getTrackMetadataImpl(
   // flipping the toggle back ON re-fetches naturally on the next call.
   // forceNetwork does NOT bypass this: OFF means OFF.
   if (!isMetadataFetchEnabled()) {
-    return makePlaceholder(safeName, size);
+    return makePlaceholder(safeName, size, "unsupported");
   }
 
   // Per-file network cooldown: a re-mount of a file whose last fetch failed
@@ -112,7 +156,8 @@ async function getTrackMetadataImpl(
     const cooldownUntil = networkCooldownUntil.get(fileId);
     if (cooldownUntil !== undefined) {
       if (cooldownUntil > Date.now()) {
-        return makePlaceholder(safeName, size);
+        // Still cooling down: provisional, transient, retryable.
+        return makePlaceholder(safeName, size, "transient_failure");
       }
       // Lazy prune: the entry expired — drop it so the map never grows stale.
       networkCooldownUntil.delete(fileId);
@@ -175,9 +220,28 @@ async function getTrackMetadataImpl(
     if (format === "aac") {
       // ADTS has no embedded tags and music-metadata would scan the whole
       // stream for duration — skip parsing entirely, no further fetch.
-      const placeholder = makePlaceholder(safeName, size);
+      const placeholder = makePlaceholder(safeName, size, "unsupported");
       setMetadataCache(fileId, placeholder);
       return placeholder;
+    }
+
+    // 2b. Non-faststart m4a (Phase B2): the box walk runs BEFORE the parse.
+    //     walkMp4TopBoxes needs only the head, and knowing the layout early
+    //     lets us warm the tail in ONE request BEFORE music-metadata's
+    //     scanAppendingHeaders EOF probe — the probe then hits the cache
+    //     instead of issuing its own ~64 KiB tail range. The authoritative
+    //     streamUnplayable decision still comes from the same walk, so the
+    //     semantics are unchanged.
+    let m4aNonFaststart = false;
+    if (format === "m4a" && !isLargeFile) {
+      const walk = walkMp4TopBoxes(
+        head.subarray(0, Math.min(HEAD_BYTES, head.length)),
+        size,
+      );
+      m4aNonFaststart = walk.mdatBeforeMoov && !walk.moovBeforeMdat;
+      if (m4aNonFaststart) {
+        await prefetchM4aTailRange(tokenizer, fileId, size);
+      }
     }
 
     // 3. Parse tags/duration from the file via range fetches (moov at the end
@@ -189,6 +253,10 @@ async function getTrackMetadataImpl(
     //    read after the tags, e.g. FLAC; ID3v2 reads the whole tag up-front so
     //    a cover that large falls back to the placeholder below).
     let metadata: IAudioMetadata;
+    // True when the parse succeeded only after the cover-read budget was
+    // exceeded (text salvaged by the skipCovers re-parse) — surfaces as the
+    // explicit "partial" outcome instead of a silent success.
+    let coverDegraded = false;
     try {
       metadata = await parseFromTokenizer(tokenizer, {
         skipCovers: false,
@@ -210,6 +278,7 @@ async function getTrackMetadataImpl(
       });
     } catch (e: unknown) {
       if (e instanceof BudgetExceededError) {
+        coverDegraded = true;
         // Expected degradation, not a failure: the skipCovers retry below
         // salvages the text metadata, so this is informational by design
         // (logMetaWarn pins level "warn" — this site deliberately logs lower).
@@ -279,6 +348,17 @@ async function getTrackMetadataImpl(
       pictureDataFull: null,
       v: REAL_METADATA_VERSION,
       size,
+      // Phase A6: a REAL entry is never provisional. "no_metadata" marks a
+      // valid audio file that simply carries no usable tags (the filename
+      // fallback still renders); "partial" marks a successful text parse
+      // whose cover was degraded by the fetch budget. Both stay usable.
+      outcome:
+        metadata.common.title === undefined &&
+        metadata.common.artist === undefined
+          ? "no_metadata"
+          : coverDegraded
+            ? "partial"
+            : "success",
     };
     if (
       typeof metadata.format.bitrate === "number" &&
@@ -307,16 +387,18 @@ async function getTrackMetadataImpl(
       // small non-faststart file whose moov sits past 128KB) would flip
       // moovBeforeMdat and silently un-mark files the old contract flagged.
       // Slice 2 keeps the streamUnplayable semantics byte-identical.
-      const walk = walkMp4TopBoxes(
-        head.subarray(0, Math.min(HEAD_BYTES, head.length)),
-        size,
-      );
-      if (walk.mdatBeforeMoov && !walk.moovBeforeMdat) {
+      // Phase B2: the SAME walk already ran pre-parse (2b) so the tail could
+      // be warmed before the parser's EOF probe — reuse its result instead of
+      // walking twice.
+      if (m4aNonFaststart) {
         streamUnplayable = true;
         // The cached entry must carry the flag so the player's pre-play gate
         // (usePlayer) sees it without re-parsing; cacheTrackMetadata below
         // persists this entry to memory + IDB.
         entry.streamUnplayable = true;
+        // The tail is normally already warm (2b); the scan is the
+        // authoritative moov check and reads that warmed region (a cache hit
+        // when the prewarm succeeded, a chunked fallback otherwise).
         await prefetchAndScanM4aTail(tokenizer, fileId, size);
       }
     }
@@ -346,38 +428,43 @@ async function getTrackMetadataImpl(
       return entry;
     }
     cacheTrackMetadata(fileId, entry);
+    // A successful fetch voids this file's cooldown: a manual/refresh retry
+    // that worked must not leave every non-force caller blocked for the rest
+    // of the window.
+    clearNetworkCooldownFor(fileId);
     return entry;
   } catch (e: unknown) {
-    const placeholder = makePlaceholder(safeName, size);
+    const outcome = outcomeForError(e);
+    const placeholder = makePlaceholder(safeName, size, outcome);
     // A caller abort (scroll unmounted the card mid-fetch) surfaces here as a
-    // RangeFetchNetworkError — the tokenizer classifies the AbortError as
-    // transient so it skips retries and the circuit breaker — but Drive is
-    // perfectly healthy. Pinning the 60s cooldown for a deliberate
-    // cancellation made the card re-mount as a stuck placeholder for a full
-    // minute despite zero network trouble. Mirror the network branch's
-    // no-pin semantics WITHOUT the cooldown: return the placeholder to THIS
-    // caller only; the next mount re-fetches immediately. Checked BEFORE the
-    // failure log: a deliberate abort is not a failure and must not feed
-    // metadata-fetch-failed noise into the error log (see useTrackMetadata:
-    // "deliberate cleanup abort is not an error — stay silent").
-    if (signal?.aborted === true) {
+    // RangeFetchNetworkError(kind "aborted") — Drive is perfectly healthy.
+    // Pinning the 60s cooldown for a deliberate cancellation made the card
+    // re-mount as a stuck placeholder for a full minute despite zero network
+    // trouble. Return the placeholder to THIS caller only; the next mount
+    // re-fetches immediately. Checked BEFORE the failure log: a deliberate
+    // abort is not a failure and must not feed metadata-fetch-failed noise.
+    if (signal?.aborted === true || outcome === "cancelled") {
       return placeholder;
     }
     await logMetaWarn(
-      `metadata-fetch-failed (fileId=${fileId}, size=${String(size)}, format=${format}): ${classifyMetaError(e).message}`,
+      `metadata-fetch-failed (fileId=${fileId}, size=${String(size)}, format=${format}, outcome=${outcome}): ${classifyMetaError(e).message}`,
       classifyMetaError(e).name,
     );
-    // A transient network/timeout failure must NOT pin the v:9 placeholder
-    // into the memory cache — that made every card show 00:00:00 until app
-    // reload (the mem entry shadows any later fetch). Deterministic failures
-    // (parse errors, RangeNotSupported, budget, unknown size) still cache:
-    // re-fetching those can only fail again. A network failure returns the
-    // placeholder to THIS caller but the next getTrackMetadata re-fetches —
-    // gated by the per-file cooldown so the re-fetch does not re-hang the
-    // card while Drive is still slow.
-    if (e instanceof RangeFetchNetworkError) {
+    // Phase A4 — cooldown policy:
+    // - transient_failure (timeout/network/rate_limited): genuine transient
+    //   problem → per-file cooldown so re-mounts do not re-hang the card.
+    // - circuit_open: the app-wide breaker is the global gate; punishing this
+    //   file with its own 60s cooldown is what turned two slow files into a
+    //   whole-folder placeholder storm. Provisional, retry after recovery.
+    // - cancelled: handled above (no cooldown).
+    // - everything deterministic (unsupported/http_error/parse_error): pinned
+    //   in the metadata cache — re-fetching can only fail again, and a
+    //   network-retry loop would be pointless.
+    if (shouldCooldown(e)) {
       setNetworkCooldown(fileId, Date.now() + METADATA_NETWORK_COOLDOWN_MS);
-    } else {
+    } else if (outcome !== "circuit_open") {
+      // Deterministic failure (unsupported / http_error / parse_error): pin
+      // the placeholder. `cancelled` already returned above.
       setMetadataCache(fileId, placeholder);
     }
     return placeholder;

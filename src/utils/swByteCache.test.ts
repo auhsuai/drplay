@@ -14,6 +14,8 @@ type FakeError = { name: string; message: string };
 interface FakeDbConfig {
   failPut?: FakeError;
   openError?: FakeError;
+  /** Observability seam: counts meta-store getAll sweeps (eviction passes). */
+  onGetAll?: (storeName: string) => void;
 }
 
 class FakeRequest<T = unknown> {
@@ -124,6 +126,7 @@ class FakeObjectStore {
     return request;
   }
   getAll(): FakeRequest<unknown[]> {
+    this.tx.db.notifyGetAll(this.name);
     const request = new FakeRequest(this.tx, () => [...this.data.values()]);
     request.execute();
     return request;
@@ -166,6 +169,9 @@ class FakeDatabase {
   }
   get failPut(): FakeError | undefined {
     return this.config.failPut;
+  }
+  notifyGetAll(storeName: string): void {
+    this.config.onGetAll?.(storeName);
   }
   get objectStoreNames(): { contains: (name: string) => boolean } {
     return { contains: (name: string) => this.data.has(name) };
@@ -243,9 +249,11 @@ async function roundtrip(
   sw: ReturnType<typeof makeSw>,
   fileId: string,
   range: string | null,
+  purpose?: string,
 ): Promise<Response> {
   const headers: Record<string, string> = {};
   if (range !== null) headers.Range = range;
+  if (purpose !== undefined) headers["X-DrPlay-Purpose"] = purpose;
   const request = new Request(
     `http://localhost/drive-stream/${fileId}?ext=mp3`,
     { headers },
@@ -479,5 +487,124 @@ describe("sw.js byte-range cache (IndexedDB) — Slice 1 contract", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2); // chunk0 kept the LONGER prefix
     expect(await extended.text()).toBe(patternBody(151));
     expect(extended.headers.get("Content-Range")).toBe("bytes 0-150/300");
+  });
+
+  // ---- Phase B3: metadata-purpose requests never touch drplay-bytes --------
+  it("metadata-purpose ranges write NOTHING to drplay-bytes (and later audio ranges still miss)", async () => {
+    vi.stubGlobal("indexedDB", makeFakeIndexedDb());
+    const sw = makeSw();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(corsFiltered(256, patternBody(256))),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const meta = await roundtrip(sw, "meta-f", "bytes=0-65535", "metadata");
+    expect(meta.status).toBe(206);
+    expect(await meta.text()).toBe(patternBody(256));
+    await flush();
+
+    // A second metadata range still hits Drive (nothing was cached).
+    await roundtrip(sw, "meta-f", "bytes=0-65535", "metadata");
+    await flush();
+    expect(callsFor(fetchMock, "meta-f")).toBe(2);
+
+    // A later playback range for the same file is still a MISS.
+    await roundtrip(sw, "meta-f", "bytes=0-255");
+    await flush();
+    expect(callsFor(fetchMock, "meta-f")).toBe(3);
+  });
+
+  it("metadata-purpose requests also SKIP reads: a warm playback cache is not served to the parser", async () => {
+    vi.stubGlobal("indexedDB", makeFakeIndexedDb());
+    const sw = makeSw();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(corsFiltered(300, patternBody(300))),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Warm the playback cache for the file.
+    await roundtrip(sw, "both-f", "bytes=0-");
+    await flush();
+    const warmHits = callsFor(fetchMock, "both-f");
+
+    // A cached-servable metadata range must NOT be answered from the cache.
+    const meta = await roundtrip(sw, "both-f", "bytes=0-299", "metadata");
+    expect(meta.status).toBe(206);
+    expect(callsFor(fetchMock, "both-f")).toBe(warmHits + 1);
+  });
+
+  it("an audio (unmarked) request still write-throughs and serves from cache", async () => {
+    vi.stubGlobal("indexedDB", makeFakeIndexedDb());
+    const sw = makeSw();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(corsFiltered(300, patternBody(300))),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await roundtrip(sw, "audio-f", "bytes=0-");
+    await flush();
+    const hit = await roundtrip(sw, "audio-f", "bytes=0-299");
+    expect(await hit.text()).toBe(patternBody(300));
+    expect(callsFor(fetchMock, "audio-f")).toBe(1); // served from cache
+  });
+
+  it("a multi-chunk playback body runs ONE eviction sweep after the batch, not one per chunk", async () => {
+    let getAllCalls = 0;
+    vi.stubGlobal(
+      "indexedDB",
+      makeFakeIndexedDb({
+        onGetAll: (storeName) => {
+          if (storeName === "meta") getAllCalls += 1;
+        },
+      }),
+    );
+    const sw = makeSw(1_000_000); // generous cap: no eviction needed
+    // 3 x 256KB chunks worth of body.
+    const bodyLen = 3 * 256 * 1024;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(corsFiltered(bodyLen, patternBody(300))),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await roundtrip(sw, "batch-f", "bytes=0-");
+    await flush();
+    await flush();
+
+    // 3 chunks stored -> exactly ONE eviction sweep (was 3 before Phase B3).
+    expect(getAllCalls).toBe(1);
+  });
+
+  it("metadata-purpose responses keep auth, Range and Content-Range semantics", async () => {
+    vi.stubGlobal("indexedDB", makeFakeIndexedDb());
+    const sw = makeSw();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(corsFiltered(300, patternBody(300)))
+      .mockImplementation(() =>
+        Promise.resolve(corsFiltered(100, patternBody(100))),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Learn the total via an open-ended playback request.
+    await roundtrip(sw, "sem-f", "bytes=0-");
+    await flush();
+    const response = await roundtrip(sw, "sem-f", "bytes=100-199", "metadata");
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 100-199/300");
+    expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+    // The upstream request still carries the caller's Range + injected auth.
+    const lastRequest = fetchMock.mock.calls[
+      fetchMock.mock.calls.length - 1
+    ]?.[0] as Request;
+    expect(lastRequest.headers.get("Range")).toBe("bytes=100-199");
+    expect(lastRequest.headers.get("Authorization")).toBe("Bearer tok");
   });
 });

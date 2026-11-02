@@ -1737,6 +1737,185 @@ describe("getTrackMetadata per-file network cooldown", () => {
   });
 });
 
+// ---- Phase A4: cooldown policy ---------------------------------------------
+describe("getTrackMetadata cooldown policy (Phase A4)", () => {
+  const fresh = () => import("./metadata");
+  const cooldowns = () => import("./metadata/cooldown");
+
+  it("circuit_open does NOT create a per-file cooldown (global gate only)", async () => {
+    const { getTrackMetadata, metadataCache } = await fresh();
+    const { networkCooldownUntil } = await cooldowns();
+    const { resetDriveCircuitBreakerForTests, recordDriveFailure } =
+      await import("./driveRangeTokenizer");
+    resetDriveCircuitBreakerForTests();
+    // Trip the global circuit with three logical throttle failures.
+    for (let i = 0; i < 3; i += 1) recordDriveFailure("throttle");
+
+    const { calls } = makeFetchMock(buildMp3Fixture("X", "Y", "Z"));
+    const r1 = await getTrackMetadata("co-circuit", "tok", 2048, "c.mp3");
+    expect(r1.v).toBe(V_PLACEHOLDER);
+    expect(r1.outcome).toBe("circuit_open");
+    expect(r1.provisional).toBe(true);
+    expect(calls).toHaveLength(0); // rejected without touching the network
+    // The global gate is the ONLY punishment: no per-file cooldown.
+    expect(networkCooldownUntil.has("co-circuit")).toBe(false);
+    // Nothing pinned: an immediate re-mount still tries (and is rejected).
+    expect(metadataCache.get("co-circuit")).toBeUndefined();
+    resetDriveCircuitBreakerForTests();
+  });
+
+  it("a transient network failure still pins the per-file cooldown", async () => {
+    const { getTrackMetadata } = await fresh();
+    const { networkCooldownUntil } = await cooldowns();
+    const { calls } = makeFetchMock(new Uint8Array(0), { reject: true });
+    await getTrackMetadata("co-transient", "tok", 2048, "t.mp3");
+    expect(networkCooldownUntil.has("co-transient")).toBe(true);
+    const before = calls.length;
+    await getTrackMetadata("co-transient", "tok", 2048, "t.mp3");
+    expect(calls.length).toBe(before); // served the placeholder, no fetch
+  });
+
+  it("a successful fetch CLEARS an existing cooldown for that file", async () => {
+    const { getTrackMetadata } = await fresh();
+    const { networkCooldownUntil, setNetworkCooldown } = await cooldowns();
+    setNetworkCooldown("co-cleared", Date.now() + METADATA_NETWORK_COOLDOWN_MS);
+    const { calls } = makeFetchMock(
+      buildMp3Fixture("Clear Title", "Clear Artist", "Clear Album"),
+    );
+    // forceNetwork bypasses the cooldown and succeeds → the cooldown is removed.
+    const r = await getTrackMetadata(
+      "co-cleared",
+      "tok",
+      2048,
+      "clear.mp3",
+      undefined,
+      true,
+    );
+    expect(r.v).toBe(REAL_METADATA_VERSION);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(networkCooldownUntil.has("co-cleared")).toBe(false);
+  });
+
+  it("unsupported/parse failures pin the placeholder and never enter a retry loop", async () => {
+    const { getTrackMetadata, metadataCache } = await fresh();
+    const { calls } = makeFetchMock(new Uint8Array(512).fill(0xde));
+    const r = await getTrackMetadata("co-garbage", "tok", 512, "g.mp3");
+    expect(r.v).toBe(V_PLACEHOLDER);
+    expect(r.outcome).toBe("unsupported");
+    // Deterministic: pinned in memory, so a re-mount serves it with no fetch.
+    expect(metadataCache.get("co-garbage")?.v).toBe(V_PLACEHOLDER);
+    const before = calls.length;
+    const r2 = await getTrackMetadata("co-garbage", "tok", 512, "g.mp3");
+    expect(r2.v).toBe(V_PLACEHOLDER);
+    expect(calls.length).toBe(before);
+  });
+
+  it("the cooldown expires and the file becomes retryable afterwards", async () => {
+    vi.useFakeTimers();
+    const { getTrackMetadata } = await fresh();
+    const { networkCooldownUntil } = await cooldowns();
+    makeFetchMock(new Uint8Array(0), { reject: true });
+    await getTrackMetadata("co-expire", "tok", 2048, "e.mp3");
+    expect(networkCooldownUntil.has("co-expire")).toBe(true);
+    await vi.advanceTimersByTimeAsync(METADATA_NETWORK_COOLDOWN_MS + 1);
+    const fixture = buildMp3Fixture("Back Title", "Back Artist", "Back Album");
+    const { calls } = makeFetchMock(fixture);
+    const r = await getTrackMetadata("co-expire", "tok", 2048, "e.mp3");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(r.v).toBe(REAL_METADATA_VERSION);
+    expect(r.title).toBe("Back Title");
+    vi.useRealTimers();
+  });
+
+  it("metadata placeholders carry an explicit outcome + provisional flag", async () => {
+    const { getTrackMetadata } = await fresh();
+    makeFetchMock(new Uint8Array(0), { reject: true });
+    const r = await getTrackMetadata("co-signal", "tok", 2048, "s.mp3");
+    expect(r.v).toBe(V_PLACEHOLDER);
+    expect(r.outcome).toBe("transient_failure");
+    expect(r.provisional).toBe(true);
+  });
+
+  it("a real parsed entry is NEVER provisional", async () => {
+    const { getTrackMetadata } = await fresh();
+    makeFetchMock(buildMp3Fixture("Real T", "Real A", "Real L"));
+    const r = await getTrackMetadata("co-real", "tok", 2048, "r.mp3");
+    expect(r.v).toBe(REAL_METADATA_VERSION);
+    expect(r.outcome).toBe("success");
+    expect(r.provisional).toBeUndefined();
+  });
+
+  it("one file's timeout does NOT block unrelated files (no global lock)", async () => {
+    const { getTrackMetadata } = await fresh();
+    // File A times out (2 attempts) — one logical transient failure.
+    makeFetchMock(new Uint8Array(0), { reject: true });
+    const rA = await getTrackMetadata("co-slow-a", "tok", 2048, "a.mp3");
+    expect(rA.v).toBe(V_PLACEHOLDER);
+    expect(rA.outcome).toBe("transient_failure");
+
+    // File B is served by a healthy Drive: it must fetch and parse normally.
+    const fixture = buildMp3Fixture("Healthy B", "Healthy Artist", "Healthy");
+    const { calls: bCalls } = makeFetchMock(fixture);
+    const rB = await getTrackMetadata("co-slow-b", "tok", 2048, "b.mp3");
+    expect(bCalls.length).toBeGreaterThan(0);
+    expect(rB.v).toBe(REAL_METADATA_VERSION);
+    expect(rB.title).toBe("Healthy B");
+    // The breaker is still closed: nothing global happened.
+    const { isDriveCircuitOpen } = await import("./driveRangeTokenizer");
+    expect(isDriveCircuitOpen()).toBe(false);
+  });
+
+  it("the cooldown is keyed by fileId only (a different size/name is still blocked)", async () => {
+    const { getTrackMetadata } = await fresh();
+    const { networkCooldownUntil } = await cooldowns();
+    makeFetchMock(new Uint8Array(0), { reject: true });
+    await getTrackMetadata("co-key", "tok", 2048, "k.mp3");
+    expect(networkCooldownUntil.has("co-key")).toBe(true);
+    const { calls } = makeFetchMock(buildMp3Fixture("X", "Y", "Z"));
+    // Same id, DIFFERENT size+name: still inside the cooldown (deliberate).
+    const r = await getTrackMetadata("co-key", "tok", 4096, "other-name.mp3");
+    expect(r.v).toBe(V_PLACEHOLDER);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// ---- Phase B4 / F17: bounded upstream attempts per logical range op --------
+describe("one logical metadata range op has a BOUNDED upstream attempt count", () => {
+  const fresh = () => import("./metadata");
+
+  it("a throttled metadata range issues at most 3 upstream GETs (page retry only, SW does not multiply)", async () => {
+    const fixture = buildMp3Fixture("T", "A", "L");
+    let headCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        const range = new Headers(init?.headers).get("Range");
+        if (range?.startsWith("bytes=0-")) headCalls += 1;
+        return Promise.resolve({
+          status: 429,
+          ok: false,
+          headers: new Headers(),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+          json: () => Promise.resolve(undefined),
+          clone: () => ({ json: () => Promise.resolve(undefined) }),
+        });
+      }),
+    );
+    const { getTrackMetadata } = await fresh();
+    const r = await getTrackMetadata(
+      "attempt-bound",
+      "tok",
+      fixture.length,
+      "b.mp3",
+    );
+    expect(r.v).toBe(V_PLACEHOLDER);
+    // ONE logical head range op = initial + MAX_RETRIES(2) = 3. The SW side
+    // does not retry metadata-purpose requests, so there is no 3x multiplier.
+    expect(headCalls).toBe(3);
+    expect(headCalls).toBeLessThanOrEqual(3);
+  });
+});
+
 describe("cover extraction + full picture LRU", () => {
   const fresh = () => import("./metadata");
 
@@ -3192,9 +3371,11 @@ describe("getTrackMetadata prefetchRange (one request per region, was many chunk
     expect(filesUpdate).toHaveBeenCalledWith(["default", "m4a-prefetch-tail"], {
       metadata: { format: "m4a", streamUnplayable: true },
     });
-    // head (1) + the parse's moov-chunk read (1) + ONE tail prefetch (1);
-    // previously the 1MB tail scan alone was 16 chunk requests (17 total).
-    expect(calls.length).toBeLessThanOrEqual(4);
+    // PHASE B2 CONTRACT: head (1) + ONE pre-parse tail prewarm (1), which is
+    // then REUSED by music-metadata's scanAppendingHeaders EOF probe AND by
+    // the authoritative moov scan. Previously: head + probe + tail prefetch
+    // = 3 requests (and 17 before the tail prefetch existed).
+    expect(calls.length).toBe(2);
   });
 
   it("a failed tag-remainder prefetch falls back to the chunked parse and still yields v:8", async () => {

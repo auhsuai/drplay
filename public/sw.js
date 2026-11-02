@@ -245,6 +245,28 @@ function byteCacheLog(level, context, err) {
   console[level](`SW byte-cache ${context}`, err);
 }
 
+// ---- Request purpose marker -------------------------------------------------
+// Metadata range reads (driveRangeChunkFetcher.ts) are 64KB-aligned, closed
+// ranges over the same /drive-stream/ URL as <audio>. They must NOT populate
+// the audio byte cache: they are a different chunk size (one eviction sweep
+// per 256KB stored chunk, per card) and their bytes evict the currently
+// playing track. The page marks them explicitly with this header; sniffing the
+// Range shape alone would be fragile (a seek can be 64KB-aligned too).
+const PURPOSE_HEADER = 'X-DrPlay-Purpose';
+const PURPOSE_METADATA = 'metadata';
+
+function isMetadataPurpose(request) {
+  try {
+    return request.headers.get(PURPOSE_HEADER) === PURPOSE_METADATA;
+  } catch (err) {
+    // An unreadable header means we cannot PROVE it is metadata: treat it as
+    // a normal (playback) request and keep the historical behavior.
+    byteCacheLog('warn', 'purpose header unreadable', err);
+    return false;
+  }
+}
+
+
 function openByteCacheDb() {
   if (byteCacheDbPromise) return byteCacheDbPromise;
   if (typeof indexedDB === 'undefined') {
@@ -448,7 +470,11 @@ async function loadPersistedTotalSize(fileId) {
 // never shrinks a longer stored prefix (chunk bytes are immutable file
 // content, so the longer prefix dominates). Concurrent writes for the same
 // chunk coalesce via byteCachePendingWrites.
-async function storeChunk(fileId, chunkIndex, bytes) {
+//
+// `evict` is false when the caller batches several chunks and runs ONE
+// eviction sweep after the batch (storeBodyChunks): one full-store getAll()
+// per stored chunk was O(entries) per chunk, i.e. 6 scans for a 1.5MB head.
+async function storeChunk(fileId, chunkIndex, bytes, evict = true) {
   const key = chunkKey(fileId, chunkIndex);
   if (byteCachePendingWrites.has(key)) return;
   byteCachePendingWrites.add(key);
@@ -492,7 +518,7 @@ async function storeChunk(fileId, chunkIndex, bytes) {
       } else if (!ok) {
         byteCacheLog('warn', 'storeChunk transaction failed', rw.tx.error);
       }
-      if (ok) await evictOverCap(rw.db);
+      if (ok && evict) await evictOverCap(rw.db);
     } finally {
       byteCachePendingWrites.delete(key);
     }
@@ -540,6 +566,7 @@ async function collectUpTo(stream, target) {
 async function storeBodyChunks(fileId, start, stream) {
   const headSkip = start % BYTE_CHUNK_SIZE;
   let chunkIndex = chunkIndexOf(start);
+  let stored = 0;
   try {
     if (headSkip > 0) {
       const head = await collectUpTo(stream, headSkip);
@@ -548,9 +575,12 @@ async function storeBodyChunks(fileId, start, stream) {
     const chunkCap = chunkIndexOf(start) + 16384; // >4GB guard, then give up
     while (chunkIndex <= chunkCap) {
       const buffer = await collectUpTo(stream, BYTE_CHUNK_SIZE);
-      if (buffer.byteLength === 0) return;
-      await storeChunk(fileId, chunkIndex, buffer);
-      if (buffer.byteLength < BYTE_CHUNK_SIZE) return; // EOF/partial tail stored
+      if (buffer.byteLength === 0) break;
+      // Batch eviction: one sweep after the whole body instead of one
+      // full-store getAll() per stored chunk (6 scans per 1.5MB metadata head).
+      await storeChunk(fileId, chunkIndex, buffer, false);
+      stored += 1;
+      if (buffer.byteLength < BYTE_CHUNK_SIZE) break; // EOF/partial tail stored
       chunkIndex += 1;
     }
   } catch (err) {
@@ -559,6 +589,15 @@ async function storeBodyChunks(fileId, start, stream) {
     } else {
       byteCacheLog('warn', 'writeThrough failed', err);
     }
+  } finally {
+    if (stored > 0) {
+      try {
+        const db = await openByteCacheDb();
+        await evictOverCap(db);
+      } catch (err) {
+        byteCacheLog('warn', 'writeThrough evict failed', err);
+      }
+    }
   }
 }
 
@@ -566,8 +605,15 @@ async function storeBodyChunks(fileId, start, stream) {
 // while a background copy lands in IDB. Returns the user response (a tee'd
 // branch with identical status/headers), or the original response untouched
 // when the request/body is not cacheable.
+//
+// METADATA ranges are never cached (Phase B3): the page marks them with
+// X-DrPlay-Purpose: metadata, and they bypass drplay-bytes entirely — no
+// read bias, no write, no eviction churn — while the byte cache stays the
+// playback cache. The response is returned untouched (still a 206 with its
+// Range/Content-Range semantics intact).
 function writeThroughToCache(event, fileId, request, response) {
   if (response.status !== 206 || !response.body) return response;
+  if (isMetadataPurpose(request)) return response;
   let range;
   try {
     range = parseRangeHeader(request.headers.get('Range'));
@@ -644,6 +690,11 @@ async function buildCachedRangeResponse(fileId, start, end, ext) {
 // the caller falls through to the legacy Drive proxy unchanged.
 async function serveFromByteCache(fileId, request, ext) {
   if (typeof indexedDB === 'undefined') return null;
+  // Metadata reads never consult the audio byte cache: their 64KB-aligned
+  // ranges are a different granularity and answering them from (or biasing)
+  // the playback cache both corrupts the ROI of that cache and can serve a
+  // partial audio chunk where the parser expects exact bytes.
+  if (isMetadataPurpose(request)) return null;
   let range;
   try {
     range = parseRangeHeader(request.headers.get('Range'));
@@ -800,8 +851,9 @@ function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchWithBackoff(buildRequest) {
+async function fetchWithBackoff(buildRequest, allowRetries = true) {
   let response = await fetch(buildRequest());
+  if (!allowRetries) return response;
   for (let attempt = 0; attempt < SW_RETRY_DELAYS_MS.length; attempt++) {
     if (!SW_RETRYABLE_STATUS.has(response.status)) return response;
     await sleepMs(SW_RETRY_DELAYS_MS[attempt]);
@@ -811,6 +863,12 @@ async function fetchWithBackoff(buildRequest) {
 }
 
 async function fetchDriveStream(event, driveUrl) {
+  // SINGLE RETRY OWNER (Phase B4): metadata range requests are retried by the
+  // page's RangeChunkFetcher (bounded, exponential backoff, Retry-After
+  // aware). Retrying here too multiplied the worst case to 3 (page) × 3 (SW)
+  // = 9 upstream GETs for one logical range. Playback (<audio>) keeps the SW
+  // retry path unchanged.
+  const allowSwRetries = !isMetadataPurpose(event.request);
   const buildRequest = () => {
     // Giữ nguyên các header gốc (đặc biệt là header Range: bytes=...)
     const headers = new Headers(event.request.headers);
@@ -827,7 +885,7 @@ async function fetchDriveStream(event, driveUrl) {
     });
   };
 
-  const response = await fetchWithBackoff(buildRequest);
+  const response = await fetchWithBackoff(buildRequest, allowSwRetries);
 
   if (response.status === 401 && accessToken) {
     const staleToken = accessToken;
