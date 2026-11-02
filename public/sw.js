@@ -872,6 +872,11 @@ async function fetchDriveStream(event, driveUrl) {
   const buildRequest = () => {
     // Giữ nguyên các header gốc (đặc biệt là header Range: bytes=...)
     const headers = new Headers(event.request.headers);
+    // X-DrPlay-Purpose is an INTERNAL page↔SW control header: it must never
+    // leave the app boundary. Forwarding it cross-origin adds it to Drive's
+    // CORS preflight (Access-Control-Request-Headers) which Drive rejects,
+    // failing the fetch before any Range GET happens.
+    headers.delete(PURPOSE_HEADER);
     headers.set('Authorization', `Bearer ${accessToken}`);
     return new Request(driveUrl, {
       method: event.request.method,
