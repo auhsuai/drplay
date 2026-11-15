@@ -42,11 +42,13 @@ import type { TFunction } from "i18next";
 // disk is skipped by the Rust command (size gate) instead of
 // re-downloading, and a kept `.part` file resumes with HTTP Range.
 //
-// Deliberate limits of having no dedicated UI (see the report, do not
-// "fix" by inventing a panel): there is no per-file progress view and no
-// retry button — progress is one toast line (completed/total + bytes),
-// the final toast carries the failed/skipped counts, and per-file reasons
-// live only in the error log.
+// The DownloadPanel (MainContent) is the per-file view on top of this
+// hook — it previews the scanned plan before the job starts (so the user
+// sees the file count and can untick files), then renders `bulkFileStates`
+// live while the job runs. The panel adds no download path of its own:
+// preview reuses `expandSelectionToPlan`, starting reuses the same
+// `beginJob` runner as the one-shot `handleBulkDownload`, and cancelling
+// one file reuses the Rust `cancel_file_download` command.
 
 export type BulkFileStatus =
   "queued" | "downloading" | "verifying" | "done" | "failed" | "cancelled";
@@ -78,6 +80,11 @@ export interface BulkDownloadSummary {
   fatalKind?: DownloadErrorKind | undefined;
 }
 
+/** Which icon the DownloadToast shows for `bulkMessage`: progress and
+ * cancelled lines are neutral ("info"), a finished job with failures or
+ * a fatal kind (incl. no_space) is an error, a clean finish is success. */
+export type BulkMessageKind = "success" | "error" | "info";
+
 /** Toast updates at most once a second: the Rust progress throttle (200 ms
  * / 1% per file, ×4 files) would otherwise re-render MainContent ~20×/s. */
 const BULK_TOAST_THROTTLE_MS = 1000;
@@ -95,6 +102,8 @@ function newJobId(): string {
 export function useBulkDownload(t: TFunction) {
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [bulkMessageKind, setBulkMessageKind] =
+    useState<BulkMessageKind>("info");
   const [bulkProgress, setBulkProgress] = useState<FolderProgress>({
     completed: 0,
     total: 0,
@@ -103,9 +112,17 @@ export function useBulkDownload(t: TFunction) {
     percent: undefined,
   });
   const [summary, setSummary] = useState<BulkDownloadSummary | null>(null);
+  /** Live per-file states for the DownloadPanel (mirrors `fileStatesRef`,
+   * which stays the source of truth for the job logic itself). */
+  const [bulkFileStates, setBulkFileStates] = useState<BulkFileState[]>([]);
+  /** Scanned-but-not-started plan for the DownloadPanel preview. */
+  const [previewPlan, setPreviewPlan] = useState<BulkDownloadPlan | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const activeRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const cancelledIndicesRef = useRef<Set<number>>(new Set());
   const runningIdsRef = useRef<Map<number, string>>(new Map());
@@ -139,6 +156,7 @@ export function useBulkDownload(t: TFunction) {
     fileStatesRef.current = fileStatesRef.current.map((s, i) =>
       i === index ? { ...s, ...patch } : s,
     );
+    setBulkFileStates(fileStatesRef.current);
   };
 
   const updateProgress = (force: boolean): void => {
@@ -153,6 +171,7 @@ export function useBulkDownload(t: TFunction) {
     const now = Date.now();
     if (force || now - lastToastAtRef.current >= BULK_TOAST_THROTTLE_MS) {
       lastToastAtRef.current = now;
+      setBulkMessageKind("info");
       setBulkMessage(
         t("menu.bulk_download_progress", {
           completed: progress.completed,
@@ -316,13 +335,28 @@ export function useBulkDownload(t: TFunction) {
     setIsBulkDownloading(false);
     activeRef.current = false;
     if (cancelled) {
+      setBulkMessageKind("info");
       setBulkMessage(t("menu.bulk_download_cancelled"));
     } else if (fatalKindRef.current) {
+      setBulkMessageKind("error");
       setBulkMessage(
         downloadErrorMessage(fatalKindRef.current, t) ??
           t("menu.download_failed"),
       );
-    } else if (failed.length > 0 || skipped > 0) {
+    } else if (failed.length > 0) {
+      setBulkMessageKind("error");
+      setBulkMessage(
+        t("menu.bulk_download_done_partial", {
+          completed,
+          total: summaryValue.total,
+          failed: failed.length,
+          skipped,
+        }),
+      );
+    } else if (skipped > 0) {
+      // Everything downloadable finished; the skipped items (native Docs,
+      // no permission) were reported, not failed — still a success toast.
+      setBulkMessageKind("success");
       setBulkMessage(
         t("menu.bulk_download_done_partial", {
           completed,
@@ -332,6 +366,7 @@ export function useBulkDownload(t: TFunction) {
         }),
       );
     } else {
+      setBulkMessageKind("success");
       setBulkMessage(
         t("menu.bulk_download_done", {
           completed,
@@ -342,13 +377,68 @@ export function useBulkDownload(t: TFunction) {
     }
   };
 
-  const handleBulkDownload = async (items: DriveItem[]): Promise<void> => {
-    if (activeRef.current || items.length === 0) return;
+  /**
+   * The middle of a job, shared by the one-shot `handleBulkDownload` and
+   * the panel's `startPlannedDownload`: pre-flight free-space check,
+   * root-folder creation, then the parallel queue. Returns
+   * "preflight_failed" when the destination cannot fit the plan (the
+   * caller then finishes the job so the fatal toast/summary are set once);
+   * anything else thrown is a job-level failure for the caller's catch.
+   */
+  const executePlan = async (
+    plan: BulkDownloadPlan,
+    token: string,
+    dir: string,
+    signal: AbortSignal,
+  ): Promise<"started" | "preflight_failed"> => {
+    // Pre-flight: refuse a job that cannot fit instead of failing
+    // halfway through a multi-GB transfer.
+    if (plan.totalBytes > 0) {
+      const free = await invoke<number | null>("file_download_free_space", {
+        dir,
+      }).catch(() => null);
+      if (free !== null && free < plan.totalBytes) {
+        setFatal("no_space");
+        return "preflight_failed";
+      }
+    }
+    // Create the folder roots up front (also when every file inside was
+    // skipped, so the user still sees the empty folder).
+    for (const root of plan.roots) {
+      const rootDest = await join(dir, root);
+      await invoke("ensure_download_directory", { path: rootDest });
+    }
+    fileStatesRef.current = plan.files.map((planned) => ({
+      planned,
+      status: "queued" as const,
+      downloaded: 0,
+      total: planned.file.size,
+    }));
+    setBulkFileStates(fileStatesRef.current);
+    updateProgress(true);
+    await runFiles(plan, token, dir, signal);
+    return "started";
+  };
+
+  /**
+   * The whole job runner: guard + reset + token/dir, then the plan from
+   * `resolvePlan`, then `executePlan`, then the finish/catch bookkeeping.
+   * `handleBulkDownload` resolves the plan by scanning the selection;
+   * `startPlannedDownload` resolves it from the panel's preview.
+   */
+  const beginJob = async (
+    resolvePlan: (
+      token: string,
+      signal: AbortSignal,
+    ) => Promise<BulkDownloadPlan>,
+  ): Promise<void> => {
+    if (activeRef.current) return;
     activeRef.current = true;
     setIsBulkDownloading(true);
     setSummary(null);
     setFatal(null);
     fileStatesRef.current = [];
+    setBulkFileStates([]);
     lastToastAtRef.current = 0;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -371,47 +461,27 @@ export function useBulkDownload(t: TFunction) {
           });
         }
       }
-      // Expand the selection first: a folder's scan tells the user the
-      // job's size before any byte moves, and a scan failure fails the
-      // job instead of downloading half a folder.
-      const plan = await expandSelectionToPlan(items, freshToken, {
-        signal: controller.signal,
-      });
+      const plan = await resolvePlan(freshToken, controller.signal);
       planRef.current = plan;
       if (plan.files.length === 0 && plan.unavailable.length === 0) {
         // Nothing downloadable (e.g. only native Docs selected): say so
         // instead of flashing a 0-file "done" toast.
+        setBulkMessageKind("info");
         setBulkMessage(t("menu.bulk_download_empty"));
         setIsBulkDownloading(false);
         activeRef.current = false;
         return;
       }
-      // Pre-flight: refuse a job that cannot fit instead of failing
-      // halfway through a multi-GB transfer.
-      if (plan.totalBytes > 0) {
-        const free = await invoke<number | null>("file_download_free_space", {
-          dir,
-        }).catch(() => null);
-        if (free !== null && free < plan.totalBytes) {
-          setFatal("no_space");
-          finishJob(false, dir);
-          return;
-        }
+      const outcome = await executePlan(
+        plan,
+        freshToken,
+        dir,
+        controller.signal,
+      );
+      if (outcome === "preflight_failed") {
+        finishJob(false, dir);
+        return;
       }
-      // Create the folder roots up front (also when every file inside was
-      // skipped, so the user still sees the empty folder).
-      for (const root of plan.roots) {
-        const rootDest = await join(dir, root);
-        await invoke("ensure_download_directory", { path: rootDest });
-      }
-      fileStatesRef.current = plan.files.map((planned) => ({
-        planned,
-        status: "queued" as const,
-        downloaded: 0,
-        total: planned.file.size,
-      }));
-      updateProgress(true);
-      await runFiles(plan, freshToken, dir, controller.signal);
     } catch (err: unknown) {
       const kind = classifyDownloadError(err);
       if (kind === "cancelled" || controller.signal.aborted) {
@@ -434,19 +504,117 @@ export function useBulkDownload(t: TFunction) {
     finishJob(controller.signal.aborted, destDirRef.current);
   };
 
+  const handleBulkDownload = async (items: DriveItem[]): Promise<void> => {
+    if (items.length === 0) return;
+    await beginJob(async (token, signal) => {
+      // Expand the selection first: a folder's scan tells the user the
+      // job's size before any byte moves, and a scan failure fails the
+      // job instead of downloading half a folder.
+      return expandSelectionToPlan(items, token, { signal });
+    });
+  };
+
+  /**
+   * Scan the selection WITHOUT starting a job, for the DownloadPanel
+   * preview: the file count, the tree, and the ticked subset all come
+   * from this plan. A fresh preview aborts a previous scan in flight.
+   */
+  const previewBulkSelection = async (
+    items: DriveItem[],
+  ): Promise<BulkDownloadPlan | null> => {
+    if (items.length === 0) return null;
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    setIsPreviewing(true);
+    setPreviewError(null);
+    try {
+      const freshToken = await getValidToken(false);
+      if (!freshToken) throw new Error("unauthorized: no valid token");
+      const plan = await expandSelectionToPlan(items, freshToken, {
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return null;
+      setPreviewPlan(plan);
+      return plan;
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return null;
+      const kind = classifyDownloadError(err);
+      void captureError({
+        level: "error",
+        source: "useBulkDownload",
+        message: `Bulk download preview failed (${kind}): ${String(err)}`,
+      });
+      setPreviewError(
+        downloadErrorMessage(kind, t) ?? t("menu.download_failed"),
+      );
+      setPreviewPlan(null);
+      return null;
+    } finally {
+      if (previewAbortRef.current === controller) setIsPreviewing(false);
+    }
+  };
+
+  const clearPreview = (): void => {
+    previewAbortRef.current?.abort();
+    setPreviewPlan(null);
+    setPreviewError(null);
+  };
+
+  /**
+   * Start a job from an already-scanned plan (the panel's ticked subset):
+   * the same `beginJob` runner as `handleBulkDownload`, so the pre-flight
+   * check, the resume/skip behaviour and the finish/summary are identical.
+   * The subset keeps the preview's roots/skipped/unavailable lists, so a
+   * folder whose files were all unticked still gets its (empty) root.
+   */
+  const startPlannedDownload = async (
+    plan: BulkDownloadPlan,
+  ): Promise<void> => {
+    await beginJob(() => Promise.resolve(plan));
+  };
+
   const cancelBulkDownload = async (): Promise<void> => {
     if (!activeRef.current) return;
     abortRef.current?.abort();
     await cancelRunning();
   };
 
+  /**
+   * Cancel ONE file; the rest of the job keeps going. A running file is
+   * cancelled through the Rust command (its `downloadOne` catch marks it
+   * "cancelled"); a still-queued file is recorded in
+   * `cancelledIndicesRef`, so `downloadOne` skips it when its turn comes
+   * — and is marked cancelled in the panel immediately instead of sitting
+   * at "queued" until then.
+   */
+  const cancelBulkFile = async (index: number): Promise<void> => {
+    if (!activeRef.current) return;
+    cancelledIndicesRef.current.add(index);
+    const id = runningIdsRef.current.get(index);
+    if (id) {
+      await invoke("cancel_file_download", { downloadId: id }).catch(() => {});
+    }
+    updateFileState(index, { status: "cancelled" });
+    updateProgress(false);
+  };
+
   return {
     isBulkDownloading,
     bulkMessage,
     setBulkMessage,
+    bulkMessageKind,
     bulkProgress,
     summary,
+    bulkFileStates,
+    previewPlan,
+    isPreviewing,
+    previewError,
+    previewBulkSelection,
+    clearPreview,
+    startPlannedDownload,
     handleBulkDownload,
     cancelBulkDownload,
+    cancelBulkFile,
   };
 }

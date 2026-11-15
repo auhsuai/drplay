@@ -123,9 +123,9 @@ export function MoreMenu({
     showDownloadDialog,
     setShowDownloadDialog,
     downloadFileName,
-    setDownloadFileName,
     downloadMessage,
     setDownloadMessage,
+    downloadMessageKind,
     downloadProgress,
     downloadPaused,
     handleDownloadClick,
@@ -316,7 +316,6 @@ export function MoreMenu({
           show={showDownloadDialog}
           isDownloadingFile={isDownloadingFile}
           downloadFileName={downloadFileName}
-          setDownloadFileName={setDownloadFileName}
           onClose={() => {
             setShowDownloadDialog(false);
           }}
@@ -340,7 +339,9 @@ export function MoreMenu({
       )}
 
       {/* Toast Notification */}
-      {downloadMessage && <DownloadToast message={downloadMessage} />}
+      {downloadMessage && (
+        <DownloadToast message={downloadMessage} kind={downloadMessageKind} />
+      )}
 
       {createPortal(
         <DeleteConfirmDialog

@@ -57,6 +57,9 @@ vi.mock("lucide-react", () => {
     // Queue selection building blocks
     "Check",
     "Square",
+    // DownloadToast icons (MoreMenu → DownloadToast).
+    "CircleAlert",
+    "Info",
     // Arrange mode drag handle
     "GripVertical",
   ];

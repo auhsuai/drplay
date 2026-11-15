@@ -182,6 +182,7 @@ describe("useMenuDownload starts a Rust streaming download", () => {
     expect(result.current.downloadMessage).toContain(
       "Saved to: C:\\Downloads\\Test Song - Test Artist.mp3",
     );
+    expect(result.current.downloadMessageKind).toBe("success");
   });
 
   it("reports Channel progress into downloadProgress state", async () => {
@@ -340,6 +341,9 @@ describe("useMenuDownload error handling", () => {
     expect(result.current.downloadMessage).toContain(
       "Not enough free space to save this file.",
     );
+    // The no_space failure must render the red "!" toast, never the
+    // green check: the kind is what DownloadToast's icon reads.
+    expect(result.current.downloadMessageKind).toBe("error");
     expect(
       mockedInvoke.mock.calls.some((c) => c[0] === "start_file_download"),
     ).toBe(false);

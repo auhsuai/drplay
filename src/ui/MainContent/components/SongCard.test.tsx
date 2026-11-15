@@ -34,7 +34,12 @@ vi.mock("../../../utils/metadata", () => ({
 // which i18next would reject with "passing an undefined module" otherwise.
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
+    // A string second arg is a fallback; an object is interpolation
+    // options (incl. `count`, which picks the _one/_other plural form).
+    // Returning the options object for a plural key would make React
+    // try to render it — return the key instead, as before.
+    t: (key: string, options?: Record<string, unknown> | string) =>
+      typeof options === "string" ? options : key,
   }),
   initReactI18next: { type: "3rdParty", init: () => {} },
 }));
@@ -534,7 +539,10 @@ describe("SongCard context menu closes after Download file (forceOpen path)", ()
     fireEvent.click(screen.getByRole("menuitem", { name: "menu.download" }));
 
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
-    expect(screen.getByText("menu.file_name")).toBeTruthy();
+    // No rename field anymore: the dialog shows the file name read-only
+    // and the 1-file count instead.
+    expect(screen.getByText("My Song - common.unknown")).toBeTruthy();
+    expect(screen.getByText("menu.download_panel_files")).toBeTruthy();
   });
 });
 

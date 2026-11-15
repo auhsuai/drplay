@@ -220,6 +220,7 @@ describe("useBulkDownload", () => {
     expect(hook.result.current.bulkMessage).toContain(
       "Downloaded 3 of 3 files",
     );
+    expect(hook.result.current.bulkMessageKind).toBe("success");
     // Loose file straight into /Downloads, folder files under /Downloads/My Folder.
     const starts = mockedInvoke.mock.calls.filter(
       (c) => c[0] === "start_file_download",
@@ -247,6 +248,8 @@ describe("useBulkDownload", () => {
     );
     expect(hook.result.current.summary?.fatalKind).toBeUndefined();
     expect(hook.result.current.bulkMessage).toContain("1 failed");
+    // A partial finish is an error toast (red "!"), not a success check.
+    expect(hook.result.current.bulkMessageKind).toBe("error");
     expect(
       mockedInvoke.mock.calls.filter((c) => c[0] === "start_file_download"),
     ).toHaveLength(2);
@@ -288,6 +291,9 @@ describe("useBulkDownload", () => {
       await hook.result.current.handleBulkDownload([folderItem]);
     });
     expect(hook.result.current.summary?.fatalKind).toBe("no_space");
+    // The no_space toast must be the red "!" — the kind is what
+    // DownloadToast's icon reads.
+    expect(hook.result.current.bulkMessageKind).toBe("error");
     expect(
       mockedInvoke.mock.calls.filter((c) => c[0] === "start_file_download"),
     ).toHaveLength(0);
@@ -322,6 +328,123 @@ describe("useBulkDownload", () => {
     expect(hook.result.current.isBulkDownloading).toBe(false);
     expect(hook.result.current.summary?.cancelled).toBe(true);
     expect(hook.result.current.bulkMessage).toContain("Download cancelled.");
+    expect(hook.result.current.bulkMessageKind).toBe("info");
+  });
+
+  it("previews the selection without starting a job: 2-file folder + 1 loose file = 3 files", async () => {
+    const hook = renderHook(() => useBulkDownload(t));
+    await act(async () => {
+      const plan = await hook.result.current.previewBulkSelection([
+        looseItem,
+        folderItem,
+      ]);
+      expect(plan?.totalFiles).toBe(3);
+      // Folder files (100 + 200) + loose file (metadata default 50).
+      expect(plan?.totalBytes).toBe(350);
+    });
+    expect(hook.result.current.previewPlan?.totalFiles).toBe(3);
+    expect(hook.result.current.isPreviewing).toBe(false);
+    expect(hook.result.current.isBulkDownloading).toBe(false);
+    expect(
+      mockedInvoke.mock.calls.filter((c) => c[0] === "start_file_download"),
+    ).toHaveLength(0);
+  });
+
+  it("starts a planned subset: unticked files are never downloaded", async () => {
+    const hook = renderHook(() => useBulkDownload(t));
+    await act(async () => {
+      const plan = await hook.result.current.previewBulkSelection([
+        looseItem,
+        folderItem,
+      ]);
+      if (plan === null) throw new Error("preview returned no plan");
+      // Keep only the loose file (plan order: folder files first, then
+      // the loose file last).
+      const subset = {
+        ...plan,
+        files: plan.files.filter((f) => f.rootSegments.length === 0),
+        totalBytes: 50,
+        totalFiles: 1,
+      };
+      await hook.result.current.startPlannedDownload(subset);
+    });
+    expect(hook.result.current.summary?.completed).toBe(1);
+    expect(hook.result.current.summary?.total).toBe(1);
+    const starts = mockedInvoke.mock.calls.filter(
+      (c) => c[0] === "start_file_download",
+    );
+    expect(starts).toHaveLength(1);
+    expect(
+      (starts[0]?.[1] as { request: { fileId: string } }).request.fileId,
+    ).toBe("loose");
+  });
+
+  it("cancelling one file lets the rest of the job finish", async () => {
+    // Five files, concurrency 4: four run, one stays queued. Cancelling
+    // a running file frees its slot for the queued one.
+    listStub.entries.set("root", [
+      { id: "f1", name: "a.mp3", mimeType: "audio/mpeg", size: "100" },
+      { id: "f2", name: "b.mp3", mimeType: "audio/mpeg", size: "100" },
+      { id: "f3", name: "c.mp3", mimeType: "audio/mpeg", size: "100" },
+      { id: "f4", name: "d.mp3", mimeType: "audio/mpeg", size: "100" },
+      { id: "f5", name: "e.mp3", mimeType: "audio/mpeg", size: "100" },
+    ]);
+    const started = new Set<string>();
+    const resolvers = new Map<string, (v: unknown) => void>();
+    const downloadIdToFile = new Map<string, string>();
+    mockedInvoke.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "file_download_free_space")
+        return Promise.resolve(10_000_000);
+      if (cmd === "ensure_download_directory")
+        return Promise.resolve(undefined);
+      if (cmd === "cancel_file_download") {
+        const downloadId = (args as { downloadId: string }).downloadId;
+        const fileId = downloadIdToFile.get(downloadId);
+        const reject = resolvers.get(fileId ?? "");
+        resolvers.delete(fileId ?? "");
+        reject?.(new Error("cancelled: user cancelled"));
+        return Promise.resolve(true);
+      }
+      if (cmd === "start_file_download") {
+        const request = (
+          args as { request: { fileId: string; downloadId: string } }
+        ).request;
+        started.add(request.fileId);
+        downloadIdToFile.set(request.downloadId, request.fileId);
+        return new Promise((resolve, reject) => {
+          resolvers.set(request.fileId, (v: unknown) => {
+            if (v instanceof Error) reject(v);
+            else resolve(v);
+          });
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const hook = renderHook(() => useBulkDownload(t));
+    await act(async () => {
+      const run = hook.result.current.handleBulkDownload([folderItem]);
+      await vi.waitFor(() => {
+        expect(started.size).toBe(4);
+      });
+      await hook.result.current.cancelBulkFile(0);
+      // The queued fifth file takes the freed slot.
+      await vi.waitFor(() => {
+        expect(started.size).toBe(5);
+      });
+      for (const [fileId, resolve] of [...resolvers.entries()]) {
+        resolve({ path: `/Downloads/${fileId}`, size: 100, resumed: false });
+      }
+      await run;
+    });
+
+    expect(hook.result.current.summary?.completed).toBe(4);
+    expect(hook.result.current.summary?.total).toBe(5);
+    expect(hook.result.current.summary?.failed).toHaveLength(0);
+    expect(hook.result.current.bulkFileStates[0]?.status).toBe("cancelled");
+    expect(
+      hook.result.current.bulkFileStates.filter((s) => s.status === "done"),
+    ).toHaveLength(4);
   });
 
   it("ignores a second download while one job is running", async () => {

@@ -16,6 +16,8 @@ import { NewFolderModal } from "./components/NewFolderModal";
 import { useDriveExplorer } from "../../hooks/useDriveExplorer";
 import { useBulkDownload } from "../../hooks/useBulkDownload";
 import { DownloadToast } from "../components/MoreMenu/DownloadToast";
+import { DownloadFab } from "./components/DownloadFab";
+import { DownloadPanel } from "./components/DownloadPanel";
 import type { SearchSort } from "../../hooks/useDriveSearch";
 import {
   useSkeletonRows,
@@ -235,12 +237,72 @@ export const MainContent = React.memo(function MainContent({
   useEffect(() => {
     bulkDownloadRef.current = bulkDownload;
   });
-  const handleBulkDownloadClick = useCallback(() => {
+
+  // DownloadPanel state: which preview files are ticked. The ref mirror
+  // exists for the same stale-closure reason as bulkSelectionRef (the
+  // panel's Download button must read the CURRENT ticks, not the set from
+  // the render that created the callback).
+  const [isDownloadPanelOpen, setIsDownloadPanelOpen] = React.useState(false);
+  const [panelSelected, setPanelSelectedState] = React.useState<
+    ReadonlySet<number>
+  >(new Set());
+  const panelSelectedRef = useRef<ReadonlySet<number>>(panelSelected);
+  const setPanelSelected = (next: ReadonlySet<number>): void => {
+    panelSelectedRef.current = next;
+    setPanelSelectedState(next);
+  };
+
+  // Opening the panel scans the selection into a preview (file count +
+  // tree) instead of starting the download blind. While a job runs, the
+  // panel just reopens onto the live job — no re-scan.
+  const openDownloadPanel = useCallback(() => {
+    if (bulkDownloadRef.current.isBulkDownloading) {
+      setIsDownloadPanelOpen(true);
+      return;
+    }
     const { filteredItems, selectedIds } = bulkSelectionRef.current;
     const items = filteredItems.filter((i) => selectedIds.has(i.id));
     if (items.length === 0) return;
-    void bulkDownloadRef.current.handleBulkDownload(items);
+    setIsDownloadPanelOpen(true);
+    void bulkDownloadRef.current.previewBulkSelection(items).then((plan) => {
+      if (plan) {
+        setPanelSelected(new Set(plan.files.map((_, index) => index)));
+      }
+    });
   }, []);
+
+  const closeDownloadPanel = useCallback(() => {
+    setIsDownloadPanelOpen(false);
+    // A closed preview is stale the moment the selection changes; drop
+    // it so the next open re-scans. A running job's states live in the
+    // hook, not the preview, so closing mid-job loses nothing.
+    if (!bulkDownloadRef.current.isBulkDownloading) {
+      bulkDownloadRef.current.clearPreview();
+    }
+  }, []);
+
+  const handlePanelDownload = useCallback(() => {
+    const plan = bulkDownloadRef.current.previewPlan;
+    if (!plan) return;
+    const files = [...panelSelectedRef.current]
+      .sort((a, b) => a - b)
+      .map((index) => plan.files[index])
+      .filter((f): f is NonNullable<typeof f> => f !== undefined);
+    if (files.length === 0) return;
+    const subset = {
+      ...plan,
+      files,
+      totalBytes: files.reduce((sum, f) => sum + (f.file.size ?? 0), 0),
+      totalFiles: files.length,
+    };
+    void bulkDownloadRef.current.startPlannedDownload(subset);
+  }, []);
+
+  const handleBulkDownloadClick = useCallback(() => {
+    // Download no longer starts the job directly: it opens the panel,
+    // which shows the file count and lets the user untick files first.
+    openDownloadPanel();
+  }, [openDownloadPanel]);
 
   // Search sort wiring (Phase B2): while a search is active the header's
   // sortOption/onSortChange route through the SEARCH sort model, never the
@@ -554,10 +616,75 @@ export const MainContent = React.memo(function MainContent({
       />
 
       {/* Bulk-download feedback reuses the single-file DownloadToast: one
-          line (progress, then the final counts), auto-dismissed after 5 s. */}
+          line (progress, then the final counts), auto-dismissed after 5 s.
+          The kind picks the icon: progress/cancelled are neutral, a fatal
+          or partial finish is the red "!", a clean finish the check. */}
       {bulkDownload.bulkMessage && (
-        <DownloadToast message={bulkDownload.bulkMessage} />
+        <DownloadToast
+          message={bulkDownload.bulkMessage}
+          kind={bulkDownload.bulkMessageKind}
+        />
       )}
+
+      {/* Floating download bubble: only while a bulk job runs (hidden
+          otherwise). Dragging is clamped to this <main> — the content
+          area inside the sidebar's inner edge — and the panel below is
+          where the job is watched/cancelled per file. */}
+      <DownloadFab
+        visible={bulkDownload.isBulkDownloading && !isDownloadPanelOpen}
+        onClick={() => {
+          setIsDownloadPanelOpen(true);
+        }}
+        badge={`${String(bulkDownload.bulkProgress.completed)}/${String(bulkDownload.bulkProgress.total)}`}
+        label={t("menu.download_panel_title")}
+      />
+
+      <DownloadPanel
+        open={isDownloadPanelOpen}
+        onClose={closeDownloadPanel}
+        isDownloading={bulkDownload.isBulkDownloading}
+        previewPlan={bulkDownload.previewPlan}
+        isPreviewing={bulkDownload.isPreviewing}
+        previewError={bulkDownload.previewError}
+        fileStates={bulkDownload.bulkFileStates}
+        selectedIndices={panelSelected}
+        onToggleFile={(index) => {
+          setPanelSelected(
+            new Set(
+              panelSelected.has(index)
+                ? [...panelSelected].filter((i) => i !== index)
+                : [...panelSelected, index],
+            ),
+          );
+        }}
+        onToggleFolder={(fileIndices) => {
+          const allTicked = fileIndices.every((i) => panelSelected.has(i));
+          setPanelSelected(
+            new Set(
+              allTicked
+                ? [...panelSelected].filter((i) => !fileIndices.includes(i))
+                : [...panelSelected, ...fileIndices],
+            ),
+          );
+        }}
+        onSelectAll={() => {
+          const plan = bulkDownload.previewPlan;
+          if (plan) {
+            setPanelSelected(new Set(plan.files.map((_, index) => index)));
+          }
+        }}
+        onSelectNone={() => {
+          setPanelSelected(new Set());
+        }}
+        onDownloadSelected={handlePanelDownload}
+        onCancelJob={() => {
+          void bulkDownload.cancelBulkDownload();
+        }}
+        onCancelFile={(index) => {
+          void bulkDownload.cancelBulkFile(index);
+        }}
+        t={t}
+      />
 
       <NewFolderModal
         isOpen={showNewFolderModal}

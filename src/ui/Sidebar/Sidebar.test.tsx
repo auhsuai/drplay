@@ -52,6 +52,10 @@ vi.mock("lucide-react", () => {
     "Pencil",
     "Pin",
     "PinOff",
+    // DownloadToast icons (MoreMenu → DownloadToast).
+    "Check",
+    "CircleAlert",
+    "Info",
   ];
   const Stub = () => null;
   return Object.fromEntries(icons.map((n) => [n, Stub]));

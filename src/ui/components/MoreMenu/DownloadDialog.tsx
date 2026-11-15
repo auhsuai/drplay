@@ -6,8 +6,11 @@ import type { DownloadProgressState } from "../../../utils/fileDownload";
 interface DownloadDialogProps {
   show: boolean;
   isDownloadingFile: boolean;
+  /** Display name of the single file (read-only now: the rename field
+   * was removed — confirming a download shows the FILE COUNT instead).
+   * The name is still the pre-filled default (`title - artist`) that
+   * `executeDownload` saves under; it is just no longer editable here. */
   downloadFileName: string;
-  setDownloadFileName: (name: string) => void;
   onClose: () => void;
   onConfirm: () => void;
   t: import("i18next").TFunction;
@@ -23,7 +26,6 @@ export function DownloadDialog({
   show,
   isDownloadingFile,
   downloadFileName,
-  setDownloadFileName,
   onClose,
   onConfirm,
   t,
@@ -33,20 +35,19 @@ export function DownloadDialog({
   onPauseDownload,
   onResumeDownload,
 }: DownloadDialogProps) {
-  // Focus the file-name field when the dialog opens (replaces the autoFocus
-  // prop, which jsx-a11y/no-autofocus rejects), and remember the invoker so
-  // focus returns on close/unmount (APG dialog-modal). Deliberately ONE
-  // effect with hooks above the early return: the invoker snapshot must be
-  // taken BEFORE focus moves into the dialog — a separate mirror effect would
-  // observe the file-name input as the invoker (TrashScreen trap).
-  const nameInputRef = useRef<HTMLInputElement>(null);
+  // Focus the dialog itself when it opens (the rename input this used to
+  // focus is gone), and remember the invoker so focus returns on
+  // close/unmount (APG dialog-modal). Deliberately ONE effect with hooks
+  // above the early return: the invoker snapshot must be taken BEFORE
+  // focus moves into the dialog.
+  const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!show) return;
     const invoker =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    nameInputRef.current?.focus();
+    dialogRef.current?.focus();
     return () => {
       if (
         invoker &&
@@ -92,7 +93,9 @@ export function DownloadDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="download-title"
-        className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="bg-white dark:bg-[#1a1b1e] rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-5 animate-in zoom-in-95 duration-200 outline-none"
       >
         <div className="flex items-center justify-between">
           <h3
@@ -112,25 +115,18 @@ export function DownloadDialog({
           </button>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <label
-            htmlFor="download-file-name"
-            className="text-sm font-medium text-gray-700 dark:text-gray-300"
+        {/* No rename field anymore: a single-file download shows the
+            file name (read-only) and the file count — 1 file — instead. */}
+        <div className="flex flex-col gap-1">
+          <p
+            className="text-sm font-medium text-gray-900 dark:text-white truncate"
+            title={downloadFileName}
           >
-            {t("menu.file_name")}
-          </label>
-          <input
-            id="download-file-name"
-            ref={nameInputRef}
-            type="text"
-            value={downloadFileName}
-            onChange={(e) => {
-              setDownloadFileName(e.target.value);
-            }}
-            disabled={isDownloadingFile}
-            className="w-full bg-gray-100 dark:bg-[#25262a] hover:bg-gray-200/70 dark:hover:bg-[#2c2d32] focus:bg-gray-200 dark:focus:bg-[#2c2d32] text-gray-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none transition-all duration-300 placeholder:text-gray-400 dark:placeholder:text-gray-500"
-            placeholder={t("menu.file_name")}
-          />
+            {downloadFileName}
+          </p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {t("menu.download_panel_files", { count: 1 })}
+          </p>
         </div>
 
         {isDownloadingFile && downloadProgress && (

@@ -52,7 +52,35 @@ vi.mock("react-i18next", () => {
   };
   return {
     useTranslation: () => ({
-      t: (key: string, fallback?: string) => resolveKey(key) ?? fallback ?? key,
+      // Mirrors i18next for the call shapes the code uses: a string
+      // second arg is a fallback, an object is interpolation options
+      // (incl. `count`, which picks the _one/_other plural form).
+      // A naive `(key, fallback) => ...` mock returns the options
+      // OBJECT for plural keys, which React then tries to render.
+      t: (key: string, options?: Record<string, unknown> | string) => {
+        let template = resolveKey(key);
+        if (
+          template === undefined &&
+          typeof options === "object" &&
+          typeof options.count === "number"
+        ) {
+          template = resolveKey(
+            `${key}_${options.count === 1 ? "one" : "other"}`,
+          );
+        }
+        if (template === undefined) {
+          return typeof options === "string" ? options : key;
+        }
+        if (typeof options !== "object") {
+          return template;
+        }
+        return template.replace(/\{\{(\w+)\}\}/g, (_m, name: string) => {
+          const value = options[name];
+          return typeof value === "string" || typeof value === "number"
+            ? String(value)
+            : "";
+        });
+      },
     }),
   };
 });
@@ -291,7 +319,10 @@ describe("MoreMenu recent variant", () => {
     fireEvent.click(
       within(menuEl()).getByRole("menuitem", { name: "Download file" }),
     );
-    expect(screen.getByText("File name")).toBeTruthy();
+    // No rename field anymore: the dialog shows the file name read-only
+    // and the 1-file count instead.
+    expect(screen.getByText("My Song - Artist")).toBeTruthy();
+    expect(screen.getByText("1 file")).toBeTruthy();
   });
 
   it("opens PlaylistsSubmenu on Add to playlist", () => {
@@ -794,7 +825,10 @@ describe("MoreMenu WAI-ARIA roles + keyboard navigation (P2-08)", () => {
 
     await user.keyboard(" ");
 
-    expect(screen.getByText("File name")).toBeTruthy();
+    // No rename field anymore: the dialog shows the file name read-only
+    // and the 1-file count instead.
+    expect(screen.getByText("My Song - Artist")).toBeTruthy();
+    expect(screen.getByText("1 file")).toBeTruthy();
   });
 
   it("does not hijack arrow keys while typing in the playlists search input", () => {

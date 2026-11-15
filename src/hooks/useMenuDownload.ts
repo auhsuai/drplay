@@ -47,6 +47,13 @@ export function useMenuDownload(t: TFunction) {
   const [showDownloadDialog, setShowDownloadDialog] = useState(false);
   const [downloadFileName, setDownloadFileName] = useState("");
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  // Which icon the DownloadToast shows for the message above: the toast
+  // used to hardcode a green check for every message, so a failure
+  // (e.g. no_space) looked like a success. Success sets "success", any
+  // failure message sets "error"; a user cancel stays silent (null).
+  const [downloadMessageKind, setDownloadMessageKind] = useState<
+    "success" | "error"
+  >("success");
   const [downloadTrack, setDownloadTrack] = useState<Track | null>(null);
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgressState | null>(null);
@@ -246,6 +253,7 @@ export function useMenuDownload(t: TFunction) {
       });
 
       setDownloadMessage(`${t("menu.saved_at")} ${result.path}`);
+      setDownloadMessageKind("success");
     } catch (err: unknown) {
       const kind = classifyDownloadError(err);
       void captureError({
@@ -256,7 +264,10 @@ export function useMenuDownload(t: TFunction) {
       // A user-initiated cancel is silent by design; every other failure
       // gets a specific message instead of the old single generic toast.
       const message = downloadErrorMessage(kind, t);
-      if (message !== null) setDownloadMessage(message);
+      if (message !== null) {
+        setDownloadMessage(message);
+        setDownloadMessageKind("error");
+      }
     } finally {
       downloadIdRef.current = null;
       isDownloadingRef.current = false;
@@ -275,6 +286,7 @@ export function useMenuDownload(t: TFunction) {
     setDownloadFileName,
     downloadMessage,
     setDownloadMessage,
+    downloadMessageKind,
     downloadProgress,
     downloadPaused,
     handleDownloadClick,

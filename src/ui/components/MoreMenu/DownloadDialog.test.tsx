@@ -12,7 +12,6 @@ function baseProps(over: Partial<Parameters<typeof DownloadDialog>[0]> = {}) {
     show: true,
     isDownloadingFile: false,
     downloadFileName: "song.mp3",
-    setDownloadFileName: vi.fn(),
     onClose: vi.fn(),
     onConfirm: vi.fn(),
     t,
@@ -79,19 +78,23 @@ describe("DownloadDialog dialog semantics + focus (P2-09b-5/-6/-7)", () => {
     expect(dialog.getAttribute("aria-labelledby")).toBe("download-title");
   });
 
-  it("associates the label with the file-name input (getByLabelText)", () => {
+  // No rename field anymore: the dialog shows the file name read-only
+  // and the file count (1 file) instead of an editable name.
+  it("shows the file name as read-only text with the 1-file count, and no textbox", () => {
     render(<DownloadDialog {...baseProps()} />);
 
-    const input = screen.getByLabelText("menu.file_name");
-    expect(input.tagName).toBe("INPUT");
-    expect(input.id).toBe("download-file-name");
+    expect(screen.getByText("song.mp3")).toBeInTheDocument();
+    // Identity t stub: the plural key itself, resolved by i18next at
+    // runtime to "1 file" / "1 tệp".
+    expect(screen.getByText("menu.download_panel_files")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("focuses the file-name input on open (existing behavior preserved)", () => {
+  it("focuses the dialog itself on open (the rename input is gone)", () => {
     render(<DownloadDialog {...baseProps()} />);
 
     expect(document.activeElement).toBe(
-      screen.getByLabelText("menu.file_name"),
+      screen.getByRole("dialog", { name: "menu.download_title" }),
     );
   });
 
