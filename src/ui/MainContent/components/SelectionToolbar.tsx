@@ -39,19 +39,25 @@ export function SelectionToolbar({
 
   if (!isSelectionMode) return null;
 
+  const allSelected = totalCount > 0 && selectedCount === totalCount;
+  const selectAllLabel = allSelected
+    ? t("queue.unselect_all")
+    : t("drive.select_all");
+
   return (
     <div className="flex items-center gap-3 animate-in fade-in slide-in-from-right-4 duration-300">
       <button
         onClick={onToggleSelectAll}
-        aria-label={t("drive.select_all")}
-        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95"
+        aria-label={selectAllLabel}
+        disabled={totalCount === 0 || isBulkOperating}
+        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {selectedCount === totalCount ? (
+        {allSelected ? (
           <Square className="w-4 h-4" />
         ) : (
           <SquareCheckBig className="w-4 h-4" />
         )}
-        <span className="hidden sm:inline">{t("drive.select_all")}</span>
+        <span className="hidden sm:inline">{selectAllLabel}</span>
       </button>
 
       <button
@@ -66,7 +72,7 @@ export function SelectionToolbar({
 
       <button
         onClick={isBulkDownloading ? onBulkDownloadCancel : onBulkDownloadClick}
-        aria-label={t("menu.download")}
+        aria-label={isBulkDownloading ? t("menu.cancel") : t("menu.download")}
         disabled={selectedCount === 0 && !isBulkDownloading}
         className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
       >

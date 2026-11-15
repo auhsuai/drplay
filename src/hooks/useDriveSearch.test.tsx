@@ -255,7 +255,7 @@ describe("useDriveSearch phase A (mode/sort/roots)", () => {
     expect(folder).toBeDefined();
     expect(folder?.trackInfo).toBeUndefined();
     expect(folder?.parentId).toBe(ROOT_ID);
-    expect(file?.trackInfo?.parentName).toBe("Search Result");
+    expect(file?.trackInfo?.parentName).toBe("drive.search_result");
     expect(file?.trackInfo?.originalName).toBe("Song.mp3");
     view.unmount();
   });

@@ -586,6 +586,7 @@ function App() {
             userProfile={userProfile}
             token={accessToken}
             currentTrack={currentTrack}
+            isPlaying={isPlaying}
             onPlayTrack={handlePlayTrack}
             onOpenFolder={handleOpenFolder}
             onSwitchTab={handleTabChange}

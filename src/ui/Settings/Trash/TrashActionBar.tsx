@@ -39,6 +39,7 @@ export function TrashActionBar({
               onClick={() => {
                 void onBulkRestore();
               }}
+              aria-label={t("settings.trash_restore_selected")}
               disabled={isBulkActioning}
               className="px-4 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-medium hover:bg-brand-hover disabled:opacity-50 transition-colors flex items-center gap-2"
             >
@@ -53,6 +54,7 @@ export function TrashActionBar({
             </button>
             <button
               onClick={onBulkDelete}
+              aria-label={t("settings.trash_delete_selected")}
               disabled={isBulkActioning}
               className="px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 disabled:opacity-50 transition-colors flex items-center gap-2"
             >

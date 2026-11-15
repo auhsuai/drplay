@@ -791,7 +791,7 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
 
   it("playing card uses the hover-like gray bg (same as idle hover), not the accent tint (light/dark)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} isPlaying />,
+      <SongCard {...baseProps} item={makeItem()} isCurrent />,
     );
     const card = cardDiv(container);
     expect(card).not.toBeNull();
@@ -803,7 +803,7 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
 
   it("playing card is NOT lifted in its static state (no standalone -translate-y-1; only the shared group-hover lift survives)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} isPlaying />,
+      <SongCard {...baseProps} item={makeItem()} isCurrent />,
     );
     const card = cardDiv(container);
     expect(card?.className).not.toMatch(/(^|\s)-translate-y-1(\s|$)/);
@@ -811,7 +811,7 @@ describe("SongCard now-playing visual distinction (hover-like gray, no lift)", (
 
   it("playing card keeps the blue title and blue icon accents (hover-like)", () => {
     const { container } = render(
-      <SongCard {...baseProps} item={makeItem()} isPlaying />,
+      <SongCard {...baseProps} item={makeItem()} isCurrent />,
     );
     expect(container.querySelector("h3")?.className).toContain(
       "text-brand-text!",
@@ -888,7 +888,7 @@ describe("SongCard size display uses shared formatBytes semantics (subtitle → 
       pictureFormat: undefined,
     } as never);
     render(<SongCard {...baseProps} item={makeItem({ size: 500 * 1024 })} />);
-    expect(await screen.findByText("00:02:03")).not.toBeNull();
+    expect(await screen.findByText("2:03")).not.toBeNull();
     expect(screen.queryByText("–")).toBeNull();
   });
 
@@ -1242,7 +1242,7 @@ describe("SongCard size column", () => {
       pictureFormat: undefined,
     } as never);
     render(<SongCard {...baseProps} item={makeItem({ size: 4096 })} />);
-    expect(await screen.findByText("00:02:03")).not.toBeNull();
+    expect(await screen.findByText("2:03")).not.toBeNull();
     // The duration-only subtitle must not grow a size segment next to it.
     // ("4 KB" appears exactly once — in the dedicated Size column.)
     expect(screen.getAllByText("4 KB")).toHaveLength(1);

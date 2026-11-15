@@ -41,13 +41,20 @@ export function DownloadDialog({
   // above the early return: the invoker snapshot must be taken BEFORE
   // focus moves into the dialog.
   const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!show) return;
     const invoker =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    dialogRef.current?.focus();
+    // Focus Cancel first (ConfirmDialog pattern); the dialog itself is
+    // the fallback when no Cancel is rendered (downloading state).
+    if (cancelRef.current) {
+      cancelRef.current.focus();
+    } else {
+      dialogRef.current?.focus();
+    }
     return () => {
       if (
         invoker &&
@@ -86,7 +93,7 @@ export function DownloadDialog({
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4"
       role="presentation"
       onClick={(e) => {
-        e.stopPropagation();
+        if (e.target === e.currentTarget && !isDownloadingFile) onClose();
       }}
     >
       <div
@@ -105,6 +112,7 @@ export function DownloadDialog({
             {t("menu.download_title")}
           </h3>
           <button
+            aria-label={t("common.close")}
             onClick={() => {
               if (!isDownloadingFile) onClose();
             }}
@@ -208,6 +216,7 @@ export function DownloadDialog({
           ) : (
             <>
               <button
+                ref={cancelRef}
                 onClick={() => {
                   onClose();
                 }}

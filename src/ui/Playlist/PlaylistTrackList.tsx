@@ -176,6 +176,7 @@ export function PlaylistTrackList({
               <div className="flex-1 min-w-0 flex flex-col justify-center">
                 <h4
                   className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white group-hover:text-brand-text"}`}
+                  title={track.title}
                 >
                   {track.title}
                 </h4>

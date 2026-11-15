@@ -224,7 +224,7 @@ export function TopNavigationBar({
                   onSearchChange("");
                 }}
                 aria-label={t("common.clear_search")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -237,6 +237,7 @@ export function TopNavigationBar({
           {token && showNewFolderButton && (
             <button
               onClick={onNewFolderClick}
+              aria-label={t("drive.new_folder")}
               className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-lg transition-colors shadow-sm active:scale-95"
             >
               <FolderPlus className="w-4 h-4" />

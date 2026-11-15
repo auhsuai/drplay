@@ -40,13 +40,19 @@ export function ImageCropperModal({
     const previouslyFocused = document.activeElement as HTMLElement | null;
     dialogRef.current?.focus();
     return () => {
-      previouslyFocused?.focus();
+      // The invoker may have unmounted while the modal was open (e.g. the
+      // playlist it belonged to was deleted) — focusing a detached node is a
+      // no-op at best and a stray focus target at worst.
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
     };
   }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Window CAPTURE like every other dialog: swallow Esc before the
+        // document/window listeners behind this modal can react to it.
+        e.stopPropagation();
         if (!isProcessing) onClose();
         return;
       }
@@ -78,9 +84,9 @@ export function ImageCropperModal({
         first.focus();
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [onClose, isProcessing]);
 
@@ -119,7 +125,7 @@ export function ImageCropperModal({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200"
       role="presentation"
       onClick={(e) => {
         // Only close when the backdrop itself (not the dialog) is clicked.
@@ -145,7 +151,7 @@ export function ImageCropperModal({
             onClick={onClose}
             disabled={isProcessing}
             aria-label={t("playlist.close")}
-            className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            className="p-1 text-gray-500 hover:text-gray-900 dark:hover:text-white rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -181,9 +187,9 @@ export function ImageCropperModal({
                 onChange={(e) => {
                   setZoom(Number(e.target.value));
                 }}
-                className="absolute inset-0 appearance-none opacity-0 cursor-pointer"
+                className="peer absolute inset-0 appearance-none opacity-0 cursor-pointer"
               />
-              <div className="relative w-full h-1 bg-gray-300 dark:bg-[#2A2A2A] transition-[height] group-hover/zoom:h-1.5 pointer-events-none">
+              <div className="relative w-full h-1 bg-gray-300 dark:bg-[#2A2A2A] transition-[height] group-hover/zoom:h-1.5 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-primary/60 peer-focus-visible:rounded-full pointer-events-none">
                 <div className="absolute inset-0 overflow-hidden pointer-events-none">
                   <div
                     className="absolute left-0 h-full bg-brand-primary transform-gpu will-change-[width]"
@@ -204,7 +210,7 @@ export function ImageCropperModal({
             <button
               onClick={onClose}
               disabled={isProcessing}
-              className="px-4 py-2 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors"
+              className="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors"
             >
               {t("menu.cancel")}
             </button>
@@ -213,7 +219,7 @@ export function ImageCropperModal({
                 void handleSave();
               }}
               disabled={isProcessing}
-              className="px-6 py-2 rounded-xl text-sm font-bold bg-brand-primary hover:bg-brand-hover text-white shadow-md shadow-brand-primary/20 transition-all active:scale-95 disabled:opacity-50"
+              className="px-5 py-2.5 rounded-xl text-sm font-medium bg-brand-primary hover:bg-brand-hover text-white shadow-md shadow-brand-primary/20 transition-all active:scale-95 disabled:opacity-50"
             >
               {isProcessing ? t("menu.saving") : t("menu.save")}
             </button>

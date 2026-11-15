@@ -176,6 +176,7 @@ export function useBulkDownload(t: TFunction) {
         t("menu.bulk_download_progress", {
           completed: progress.completed,
           total: progress.total,
+          count: progress.total,
         }),
       );
     }
@@ -351,6 +352,7 @@ export function useBulkDownload(t: TFunction) {
           total: summaryValue.total,
           failed: failed.length,
           skipped,
+          count: summaryValue.total,
         }),
       );
     } else if (skipped > 0) {
@@ -363,6 +365,7 @@ export function useBulkDownload(t: TFunction) {
           total: summaryValue.total,
           failed: failed.length,
           skipped,
+          count: summaryValue.total,
         }),
       );
     } else {
@@ -372,6 +375,7 @@ export function useBulkDownload(t: TFunction) {
           completed,
           total: summaryValue.total,
           dir,
+          count: summaryValue.total,
         }),
       );
     }

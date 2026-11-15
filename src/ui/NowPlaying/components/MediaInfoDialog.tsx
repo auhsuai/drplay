@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { X } from "lucide-react";
+import { CircleAlert, X } from "lucide-react";
 import {
   getMediaInfo,
   type MediaInfoSnapshot,
@@ -125,6 +125,14 @@ export function MediaInfoDialog({ open, onClose }: MediaInfoDialogProps) {
   // Monotonic session id: a response from a previous open must never overwrite
   // the state of a newer one (open -> close -> open while a fetch is in flight).
   const requestIdRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Move focus into the dialog when it opens (it has only one button, so
+  // the panel itself is the initial focus target, like DownloadDialog).
+  useEffect(() => {
+    if (!open) return;
+    dialogRef.current?.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -172,7 +180,7 @@ export function MediaInfoDialog({ open, onClose }: MediaInfoDialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 px-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4"
       role="presentation"
       data-testid="media-info-backdrop"
       onClick={(e) => {
@@ -185,15 +193,17 @@ export function MediaInfoDialog({ open, onClose }: MediaInfoDialogProps) {
         aria-modal="true"
         aria-labelledby={DIALOG_TITLE_ID}
         data-testid="media-info-dialog"
-        className="w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#1a1b1e] shadow-2xl p-6 animate-in zoom-in-95 duration-200"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#1a1b1e] shadow-2xl p-6 animate-in zoom-in-95 duration-200 outline-none"
       >
         <div className="flex items-center justify-between mb-4">
-          <h2
+          <h3
             id={DIALOG_TITLE_ID}
             className="text-lg font-bold text-gray-900 dark:text-white"
           >
             {t("player.media_info.title")}
-          </h2>
+          </h3>
           <button
             type="button"
             data-testid="media-info-close"
@@ -206,7 +216,11 @@ export function MediaInfoDialog({ open, onClose }: MediaInfoDialogProps) {
         </div>
 
         {error !== null ? (
-          <p data-testid="media-info-error" className="text-sm text-red-500">
+          <p
+            data-testid="media-info-error"
+            className="flex items-start gap-2 text-sm text-red-500"
+          >
+            <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
             {error}
           </p>
         ) : info === null ? (

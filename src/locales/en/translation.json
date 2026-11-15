@@ -13,6 +13,7 @@
   "common": {
     "cancel": "Cancel",
     "selected": "selected",
+    "retry": "Retry",
     "delete": "Delete",
     "unknown": "Unknown",
     "coming_soon": "Coming soon",
@@ -66,6 +67,8 @@
     "use_single_root": "Use only one root folder",
     "confirm_roots_title": "Use these folders as your roots?",
     "confirm_roots_body": "{{totalCount}} folders will become root locations in DrPlay.",
+    "confirm_roots_body_one": "{{totalCount}} folder will become a root location in DrPlay.",
+    "confirm_roots_body_other": "{{totalCount}} folders will become root locations in DrPlay.",
     "confirm_root_title": "Use this folder as your root?",
     "confirm_root_body": "This folder will become a root location in DrPlay.",
     "confirm": "Confirm",
@@ -82,7 +85,11 @@
     "discover": "Discover",
     "recent_files": "Recent Files",
     "recently_added": "Recently Added",
-    "jump_back_in": "Pick Up Where You Left Off"
+    "jump_back_in": "Pick Up Where You Left Off",
+    "load_error": "Couldn't load Home. Please try again.",
+    "empty_title": "Your library is empty",
+    "empty_subtitle": "Add files to your Drive roots, or browse My Drive to get started.",
+    "empty_cta": "Browse My Drive"
   },
   "drive": {
     "my_drive": "My Drive",
@@ -91,7 +98,11 @@
     "no_audio": "No playable files in this folder.",
     "no_search_results": "No matching items found.",
     "searching": "Searching…",
+    "listing_error": "Couldn't load this folder. Please try again.",
+    "search_result": "Search Result",
     "results_truncated": "Showing the first {{shown}} of {{total}} matching results.",
+    "results_truncated_one": "Showing the first {{shown}} of {{total}} matching result.",
+    "results_truncated_other": "Showing the first {{shown}} of {{total}} matching results.",
     "folders": "Folders",
     "new_folder": "New Folder",
     "new_folder_title": "Create a folder",
@@ -187,6 +198,12 @@
     "play": "Play",
     "pause": "Pause",
     "play_mode": "Playback mode",
+    "play_mode_normal": "Playback mode: Off",
+    "play_mode_shuffle": "Playback mode: Shuffle",
+    "play_mode_repeat-all": "Playback mode: Repeat all",
+    "play_mode_repeat-one": "Playback mode: Repeat one",
+    "mute": "Mute",
+    "unmute": "Unmute",
     "fullscreen": "Fullscreen",
     "exit_fullscreen": "Exit fullscreen",
     "picture_in_picture": "Picture-in-Picture",
@@ -379,8 +396,14 @@
     "download_pause": "Pause",
     "download_verifying": "Verifying…",
     "bulk_download_progress": "Downloading {{completed}} of {{total}} files…",
+    "bulk_download_progress_one": "Downloading {{completed}} of {{total}} file…",
+    "bulk_download_progress_other": "Downloading {{completed}} of {{total}} files…",
     "bulk_download_done": "Downloaded {{completed}} of {{total}} files to {{dir}}.",
+    "bulk_download_done_one": "Downloaded {{completed}} of {{total}} file to {{dir}}.",
+    "bulk_download_done_other": "Downloaded {{completed}} of {{total}} files to {{dir}}.",
     "bulk_download_done_partial": "Downloaded {{completed}} of {{total}} files ({{failed}} failed, {{skipped}} skipped).",
+    "bulk_download_done_partial_one": "Downloaded {{completed}} of {{total}} file ({{failed}} failed, {{skipped}} skipped).",
+    "bulk_download_done_partial_other": "Downloaded {{completed}} of {{total}} files ({{failed}} failed, {{skipped}} skipped).",
     "bulk_download_cancelled": "Download cancelled.",
     "bulk_download_scan_failed": "Couldn't read the selected items. Please try again.",
     "bulk_download_empty": "Nothing in the selection can be downloaded.",
@@ -540,7 +563,9 @@
     "toggle_order": "Toggle order"
   },
   "pagination": {
-    "page": "Page"
+    "page": "Page",
+    "prev": "Previous",
+    "next": "Next"
   },
   "error": {
     "title": "Something went wrong",
@@ -559,6 +584,11 @@
   "ok": "OK",
   "recent": {
     "col_last_played": "Last played"
+  },
+  "recent": {
+    "col_last_played": "Last played",
+    "empty_title": "Nothing played yet",
+    "empty_subtitle": "Tracks you play will show up here."
   },
   "cache": {
     "label": {

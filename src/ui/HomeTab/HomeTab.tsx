@@ -10,6 +10,8 @@ import { RecentFolderCard } from "./RecentFolderCard";
 import { useHomeData } from "./useHomeData";
 import { toPlaybackTrack } from "./recentView";
 import { useResponsiveItems } from "../../hooks/useResponsiveItems";
+import { useDriveStore } from "../../store/driveStore";
+import { ROOT_FOLDER_ID } from "../../utils/driveConstants";
 import {
   Skeleton,
   SkeletonCardGrid,
@@ -22,6 +24,7 @@ export function HomeTab({
   token,
   userProfile,
   currentTrack,
+  isPlaying,
   isActive = true,
   isNowPlayingOpen = false,
 }: {
@@ -30,6 +33,8 @@ export function HomeTab({
   token: string | null;
   userProfile?: UserProfile | null;
   currentTrack?: Track | null;
+  /** True while the current track is actually playing (vs paused). */
+  isPlaying?: boolean | undefined;
   isActive?: boolean;
   // True while the fullscreen NowPlaying overlay is open (plumbed from App
   // through TabContentRouter, same as MainContent): Backspace must not close
@@ -91,6 +96,21 @@ export function HomeTab({
   }, [isActive, showFullRecent, showFullRecentlyAdded, isNowPlayingOpen]);
 
   const visibleCount = useResponsiveItems();
+  // First configured root (or plain My Drive) for the empty-state CTA.
+  const rootFolders = useDriveStore((state) => state.rootFolders);
+  const allSectionsLoaded =
+    recent !== null &&
+    heavy !== null &&
+    discover !== null &&
+    mostVisitedFolders !== null &&
+    recentlyAdded !== null;
+  const allSectionsEmpty =
+    allSectionsLoaded &&
+    recent.length === 0 &&
+    heavy.length === 0 &&
+    discover.length === 0 &&
+    mostVisitedFolders.length === 0 &&
+    recentlyAdded.length === 0;
 
   // Playback boundary for the home grids: quickAccess/recentlyAddedItems are
   // RecentItems (viewDate = last-played / modifiedTime), but PremiumGrid hands
@@ -116,6 +136,7 @@ export function HomeTab({
         onPlay={onPlay}
         token={token}
         currentTrack={currentTrack}
+        isPlaying={isPlaying}
       />
     );
   }
@@ -131,6 +152,7 @@ export function HomeTab({
         onPlay={onPlay}
         token={token}
         currentTrack={currentTrack}
+        isPlaying={isPlaying}
       />
     );
   }
@@ -274,6 +296,31 @@ export function HomeTab({
             <PremiumGrid items={discoverItems} onPlay={onPlay} token={token} />
           </HomeSection>
         ) : null}
+
+        {/* Fully-empty Home: greeting alone gives a new user nothing to do. */}
+        {allSectionsEmpty && (
+          <div className="flex flex-col items-center gap-3 py-16 text-center">
+            <p className="font-medium text-gray-700 dark:text-gray-300">
+              {t("home.empty_title")}
+            </p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {t("home.empty_subtitle")}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                const firstRoot = rootFolders[0];
+                onOpenFolder(
+                  firstRoot?.id ?? ROOT_FOLDER_ID,
+                  firstRoot?.name ?? t("sidebar.my_drive"),
+                );
+              }}
+              className="mt-2 px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-colors"
+            >
+              {t("home.empty_cta")}
+            </button>
+          </div>
+        )}
       </div>
     </main>
   );

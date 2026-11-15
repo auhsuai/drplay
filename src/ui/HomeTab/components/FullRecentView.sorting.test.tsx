@@ -793,6 +793,6 @@ describe("FullRecentView search clear + empty states (P2-11-1 / P2-11-4)", () =>
 
   it("shows the empty-list message when there are no tracks and no search", () => {
     renderRecent([]);
-    expect(screen.getByText("No playable files in this folder.")).toBeTruthy();
+    expect(screen.getByText("Nothing played yet")).toBeTruthy();
   });
 });

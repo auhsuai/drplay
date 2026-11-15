@@ -117,7 +117,7 @@ function renderList(overrides: Partial<ListProps> = {}) {
     currentFolderName: "Root",
     folderHistory: [],
     highlightedFileId: null,
-    isPlaying: undefined,
+    currentTrackId: undefined,
     onRefresh: vi.fn(),
     isSelectionMode: false,
     selectedIds: new Set<string>(),
@@ -161,7 +161,7 @@ describe("VirtualizedSongList grid semantics (P2-03-2)", () => {
   });
 
   it("không selection mode: row đang phát aria-selected=true, không có aria-multiselectable", () => {
-    renderList({ isPlaying: "id1" });
+    renderList({ currentTrackId: "id1" });
 
     expect(
       screen.getByRole("grid").getAttribute("aria-multiselectable"),
@@ -181,7 +181,7 @@ describe("VirtualizedSongList grid semantics (P2-03-2)", () => {
   });
 
   it("focus vào grid → active bắt đầu từ row đang phát", () => {
-    renderList({ isPlaying: "id1" });
+    renderList({ currentTrackId: "id1" });
 
     const grid = screen.getByRole("grid");
     expect(grid.getAttribute("aria-activedescendant")).toBeNull();

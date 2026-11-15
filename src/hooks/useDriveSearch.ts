@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import type { Dispatch, SetStateAction } from "react";
 import type { DriveItem } from "../types";
 import { useSearchWorker } from "./useSearchWorker";
@@ -7,7 +8,6 @@ import type { SearchHit } from "../search/searchEngine";
 import { useDriveStore } from "../store/driveStore";
 
 const GLOBAL_SEARCH_LIMIT = 500;
-const SEARCH_RESULT_LABEL = "Search Result";
 
 // Search mode + sort model (I2). Sort string mapping (FileListHeader ↔ model,
 // pinned for Phase B): "relevance" ↔ {relevance}; "name" ↔ {name, asc};
@@ -28,7 +28,10 @@ const DEFAULT_SORT: SearchSort = { field: "relevance", dir: "desc" };
 // when no real metadata exists) — this layer only adapts those into the Track
 // contract. Module-level because the mapping is pure; keeps the hook body
 // small.
-function mapSearchHitToDriveItem(hit: SearchHit): DriveItem {
+function mapSearchHitToDriveItem(
+  hit: SearchHit,
+  searchResultLabel: string,
+): DriveItem {
   return {
     id: hit.id,
     title: hit.title,
@@ -49,7 +52,7 @@ function mapSearchHitToDriveItem(hit: SearchHit): DriveItem {
           size: hit.size,
           originalName: hit.name,
           parentId: hit.parentId,
-          parentName: SEARCH_RESULT_LABEL,
+          parentName: searchResultLabel,
         },
   };
 }
@@ -69,6 +72,7 @@ export function useDriveSearch(currentFolderId?: string): {
   searchSort: SearchSort;
   setSearchSort: (sort: SearchSort) => void;
 } {
+  const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("global");
   const [searchSort, setSearchSort] = useState<SearchSort>(DEFAULT_SORT);
@@ -121,8 +125,10 @@ export function useDriveSearch(currentFolderId?: string): {
   // moved into the engine).
   const globalSearchItems = useMemo(() => {
     if (searchQuery.trim() === "") return [];
-    return hits.map(mapSearchHitToDriveItem);
-  }, [hits, searchQuery]);
+    return hits.map((hit) =>
+      mapSearchHitToDriveItem(hit, t("drive.search_result")),
+    );
+  }, [hits, searchQuery, t]);
 
   return {
     searchQuery,

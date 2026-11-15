@@ -103,7 +103,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
           <div className="w-48 h-48 bg-gradient-to-br from-brand-primary to-[#66a3ff] shadow-2xl flex items-center justify-center text-white rounded-md">
             <Heart className="w-20 h-20" fill="currentColor" />
           </div>
-          <div className="text-white dark:text-gray-100 mb-2">
+          <div className="text-gray-900 dark:text-gray-100 mb-2">
             <p className="text-sm font-medium uppercase tracking-wider mb-2">
               {t("playlist_name")}
             </p>
@@ -129,6 +129,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
           }}
           className="w-14 h-14 bg-brand-primary hover:bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
           disabled={favorites.length === 0}
+          aria-label={t("player.play")}
         >
           <Play className="w-6 h-6 ml-1" fill="currentColor" />
         </button>
@@ -180,6 +181,9 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                         onPlay(track, favorites, virtualRow.index);
                       }}
                       onKeyDown={(e) => {
+                        // Nested controls own their keys: Enter/Space on the
+                        // Unlike or More button must not also play the row.
+                        if (e.target !== e.currentTarget) return;
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
                           onPlay(track, favorites, virtualRow.index);
@@ -230,6 +234,7 @@ export function LikedSongs({ onPlay, currentTrack }: LikedSongsProps) {
                       <div className="flex-1 min-w-0 flex flex-col justify-center">
                         <h4
                           className={`text-[15px] font-semibold truncate transition-colors leading-tight mb-0.5 ${currentTrack?.id === track.id ? "text-brand-text" : "text-gray-900 dark:text-white group-hover:text-brand-text"}`}
+                          title={track.title}
                         >
                           {track.title}
                         </h4>

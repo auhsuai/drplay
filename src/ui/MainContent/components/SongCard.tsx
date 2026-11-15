@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Folder, Music, Square, SquareCheckBig } from "lucide-react";
+import { Folder, Music, Pause, Square, SquareCheckBig } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Track } from "../../../types";
 import type { DriveItem } from "../../../types";
@@ -39,7 +39,10 @@ interface SongCardProps {
   folderHistory: { id: string; name: string }[];
   onRefresh: () => void;
   onRemoveItem?: ((id: string) => void) | undefined;
-  isPlaying?: boolean;
+  /** This row is the current track. */
+  isCurrent?: boolean | undefined;
+  /** True while the current track is actually playing (vs paused). */
+  isPlaying?: boolean | undefined;
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelection?: (id: string) => void;
@@ -69,11 +72,11 @@ const CARD_STATE_CLASSES = {
 function cardStateClass(
   isFlashOn: boolean,
   isSelected: boolean | undefined,
-  isPlaying: boolean | undefined,
+  isCurrent: boolean | undefined,
 ): string {
   if (isFlashOn) return CARD_STATE_CLASSES.flash;
   if (isSelected) return CARD_STATE_CLASSES.selected;
-  if (isPlaying) return CARD_STATE_CLASSES.playing;
+  if (isCurrent) return CARD_STATE_CLASSES.playing;
   return CARD_STATE_CLASSES.idle;
 }
 
@@ -145,6 +148,7 @@ export const SongCard = React.memo(
     folderHistory,
     onRefresh,
     onRemoveItem,
+    isCurrent,
     isPlaying,
     isSelectionMode,
     isSelected,
@@ -176,7 +180,7 @@ export const SongCard = React.memo(
       x: number;
       y: number;
     } | null>(null);
-    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isFlashOn || isPlaying ? "text-brand-text!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-text`;
+    const titleClass = `font-semibold text-[15px] transition-colors truncate leading-tight mb-0.5 ${isFlashOn || isCurrent ? "text-brand-text!" : "text-gray-800 dark:text-gray-200"} group-hover:text-brand-text`;
 
     // Full Drive filename (extension included) for files; folders have no
     // trackInfo and keep the listing title. The ID3 title from the async
@@ -239,7 +243,7 @@ export const SongCard = React.memo(
           className={`group w-full rounded-xl cursor-pointer`}
         >
           <div
-            className={`${LIST_ROW_PADDING} rounded-xl transition-all duration-300 flex items-center ${LIST_GAP} active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${cardStateClass(isFlashOn, isSelected, isPlaying)}`}
+            className={`${LIST_ROW_PADDING} rounded-xl transition-all duration-300 flex items-center ${LIST_GAP} active:scale-[0.98] w-full hover:shadow-md group-hover:-translate-y-1 ${cardStateClass(isFlashOn, isSelected, isCurrent)}`}
           >
             {isSelectionMode && (
               <div className="flex-shrink-0 flex items-center justify-center animate-in zoom-in duration-200">
@@ -251,7 +255,7 @@ export const SongCard = React.memo(
               </div>
             )}
             <div
-              className={`relative ${LIST_ICON_TRACK} h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-text ${isFlashOn || isPlaying ? "bg-brand-primary/10! text-brand-text!" : "text-gray-400"}`}`}
+              className={`relative ${LIST_ICON_TRACK} h-12 rounded-lg flex items-center justify-center shrink-0 overflow-hidden transition-colors ${item.isFolder ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500" : `bg-gray-200 dark:bg-[#121212] group-hover:bg-brand-primary/10 group-hover:text-brand-text ${isFlashOn || isCurrent ? "bg-brand-primary/10! text-brand-text!" : "text-gray-400"}`}`}
             >
               {coverUrl && !item.isFolder ? (
                 <img
@@ -275,9 +279,19 @@ export const SongCard = React.memo(
               ) : (
                 <Music className="w-6 h-6 opacity-80" />
               )}
+              {isCurrent && !isPlaying && (
+                <span
+                  aria-label={t("player.pause")}
+                  className="absolute bottom-1 right-1 rounded-full bg-black/60 p-1 text-white"
+                >
+                  <Pause className="w-3 h-3" fill="currentColor" />
+                </span>
+              )}
             </div>
             <div className="overflow-hidden flex-1 flex flex-col justify-center">
-              <h3 className={titleClass}>{displayName}</h3>
+              <h3 className={titleClass} title={displayName}>
+                {displayName}
+              </h3>
               <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
                 {item.isFolder ? (
                   <span className="truncate">{t("drive.folders")}</span>
@@ -328,7 +342,7 @@ export const SongCard = React.memo(
               // Same fixed actions box as the header's trailing spacer (36px);
               // the parent gap-4 provides the spacing, so no ml-2 here.
               <div
-                className={`${LIST_ACTIONS_TRACK} flex items-center justify-end shrink-0 transition-opacity ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                className={`${LIST_ACTIONS_TRACK} flex items-center justify-end shrink-0 transition-opacity ${isThreeDotsMenuOpen || isContextMenuOpen || isFlashOn ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}
               >
                 <MoreMenu
                   track={item.trackInfo}
@@ -379,6 +393,7 @@ export const SongCard = React.memo(
       // delta-sync update that changes it re-sorts the list but leaves the
       // mounted card rendering the stale date.
       prev.item.modifiedTime === next.item.modifiedTime &&
+      prev.isCurrent === next.isCurrent &&
       prev.isPlaying === next.isPlaying &&
       prev.isSelected === next.isSelected &&
       prev.isSelectionMode === next.isSelectionMode &&

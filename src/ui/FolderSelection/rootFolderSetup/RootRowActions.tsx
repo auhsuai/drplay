@@ -1,4 +1,4 @@
-import { Minus, RefreshCw } from "lucide-react";
+import { FolderSync, Minus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 // Same trigger language as MoreMenuTrigger (MoreMenu components are shared and
@@ -43,7 +43,7 @@ export function RootRowActions({
         onClick={onChangeRoot}
         className={MUTED_TRIGGER_CLASS}
       >
-        <RefreshCw className="w-5 h-5" />
+        <FolderSync className="w-5 h-5" />
       </button>
     );
   }

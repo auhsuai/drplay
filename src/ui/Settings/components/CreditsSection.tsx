@@ -104,12 +104,15 @@ export function CreditsSection() {
   };
 
   return (
-    <div className="flex flex-col gap-2 mt-6 mb-8">
+    <div className="flex flex-col gap-2">
       <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
         {t("settings.contact")}
       </h2>
       {CREDIT_LINKS.map(({ label, display, url, Icon }, index) => (
-        <div key={url} className="flex items-center justify-between gap-4 py-4">
+        <div
+          key={url}
+          className="flex items-center justify-between gap-4 pt-4 pb-6"
+        >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
               <Icon className="w-6 h-6 text-brand-text" />
@@ -123,7 +126,7 @@ export function CreditsSection() {
               onClick={() => {
                 void handleCopy(index, display)();
               }}
-              className="text-base text-gray-900 dark:text-white hover:text-brand-text hover:underline transition-colors cursor-pointer select-none"
+              className="text-sm font-medium px-2 py-1 rounded-lg text-gray-900 dark:text-white hover:text-brand-text hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors cursor-pointer select-none"
               title={t("settings.copy")}
             >
               {copiedIndex === index ? t("settings.copied") : display}
@@ -135,7 +138,7 @@ export function CreditsSection() {
               }}
               aria-label={t("settings.open_link")}
               title={t("settings.open_link")}
-              className="text-gray-400 hover:text-brand-text transition-colors"
+              className="p-1 rounded-full text-gray-400 hover:text-brand-text transition-colors"
             >
               <ExternalLink className="w-5 h-5" aria-hidden="true" />
             </button>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import {
   Check,
@@ -79,6 +79,21 @@ export function DownloadPanel({
   onCancelFile,
   t,
 }: DownloadPanelProps) {
+  // Esc closes the panel (ConfirmDialog pattern: window capture so no
+  // layer behind the panel reacts to the press).
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [open, onClose]);
+
   // Folders start expanded; collapsing is per-folder and remembered
   // while the panel stays mounted.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -292,7 +307,7 @@ export function DownloadPanel({
     >
       <div className="flex items-center gap-2 px-4 pt-3 pb-1">
         <Download className="w-5 h-5 shrink-0 text-brand-primary" />
-        <h2 className="flex-1 min-w-0 truncate text-base font-bold text-gray-900 dark:text-white">
+        <h2 className="flex-1 min-w-0 truncate text-lg font-bold text-gray-900 dark:text-white">
           {t("menu.download_panel_title")}
         </h2>
         <button
@@ -381,14 +396,14 @@ export function DownloadPanel({
             <button
               type="button"
               onClick={onCancelJob}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl shadow-md shadow-red-500/20 transition-all"
+              className="px-5 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl shadow-md shadow-red-500/20 transition-all"
             >
               {t("menu.download_panel_cancel_job")}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors"
+              className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors"
             >
               {t("menu.download_panel_close")}
             </button>
@@ -398,7 +413,7 @@ export function DownloadPanel({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors"
+              className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors"
             >
               {t("menu.cancel")}
             </button>
@@ -408,7 +423,7 @@ export function DownloadPanel({
               disabled={
                 isPreviewing || selectedIndices.size === 0 || !previewPlan
               }
-              className="px-4 py-2 text-sm font-medium text-white bg-brand-primary hover:bg-blue-600 rounded-xl shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2 disabled:opacity-50"
+              className="px-5 py-2.5 text-sm font-medium text-white bg-brand-primary hover:bg-blue-600 rounded-xl shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Download className="w-4 h-4" />
               <span>{t("menu.confirm_download")}</span>

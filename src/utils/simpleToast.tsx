@@ -1,10 +1,22 @@
 const FADE_OUT_MS = 200;
 
-type ToastVariant = "error" | "success";
+type ToastVariant = "error" | "success" | "info";
 
 const TOAST_DEFAULT_DURATION: Record<ToastVariant, number> = {
   error: 4000,
   success: 3000,
+  info: 3000,
+};
+
+// Lucide icon paths (same glyphs as DownloadToast's getToastIcon): a toast
+// must show its kind by icon as well as by background colour, so an error
+// is never mistaken for a success.
+const TOAST_ICON_SVG: Record<ToastVariant, string> = {
+  error:
+    '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>',
+  success:
+    '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
+  info: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>',
 };
 
 // At most one toast is ever shown: a new showToast replaces the previous one
@@ -54,8 +66,13 @@ function showToast(
   // politely. The empty region must be in the DOM BEFORE its content changes,
   // otherwise screen readers do not announce the mutation.
   toastEl.setAttribute("role", variant === "error" ? "alert" : "status");
+  const iconEl = document.createElement("span");
+  iconEl.setAttribute("aria-hidden", "true");
+  iconEl.innerHTML = TOAST_ICON_SVG[variant];
+  const textEl = document.createElement("span");
+  textEl.textContent = message;
+  toastEl.append(iconEl, textEl);
   root.appendChild(toastEl);
-  toastEl.textContent = message;
   activeToastEl = toastEl;
 
   const removeToast = () => {
@@ -96,4 +113,12 @@ export function showSuccessToast(
   options?: { duration?: number },
 ): void {
   showToast(message, "success", options?.duration);
+}
+
+/** Neutral, non-error notices (user-cancelled actions, partial success). */
+export function showInfoToast(
+  message: string,
+  options?: { duration?: number },
+): void {
+  showToast(message, "info", options?.duration);
 }

@@ -6,7 +6,11 @@ import {
   collectFolderTracks,
   MAX_ADD_TO_QUEUE_TRACKS,
 } from "../utils/folderTracks";
-import { showErrorToast, showSuccessToast } from "../utils/simpleToast";
+import {
+  showErrorToast,
+  showInfoToast,
+  showSuccessToast,
+} from "../utils/simpleToast";
 import { captureError } from "../utils/errorLog";
 import { isAbortError } from "./player/utils";
 
@@ -99,7 +103,7 @@ export function useMenuAddToQueue(t: TFunction): {
           const cappedMessage = t("queue.add_truncated", {
             count: MAX_ADD_TO_QUEUE_TRACKS,
           });
-          showErrorToast(`${addedMessage}. ${cappedMessage}`);
+          showInfoToast(`${addedMessage}. ${cappedMessage}`);
         } else {
           showSuccessToast(t("queue.added_toast", { count: tracks.length }));
         }

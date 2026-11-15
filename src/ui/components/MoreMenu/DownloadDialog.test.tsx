@@ -90,11 +90,11 @@ describe("DownloadDialog dialog semantics + focus (P2-09b-5/-6/-7)", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("focuses the dialog itself on open (the rename input is gone)", () => {
+  it("focuses the Cancel button on open (safe default, not the confirm action)", () => {
     render(<DownloadDialog {...baseProps()} />);
 
     expect(document.activeElement).toBe(
-      screen.getByRole("dialog", { name: "menu.download_title" }),
+      screen.getByRole("button", { name: "menu.cancel" }),
     );
   });
 

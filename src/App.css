@@ -110,6 +110,13 @@ html.drplay-host-visible #content-area * {
   outline: none;
 }
 
+/* Keyboard focus must stay visible: brand ring for any focusable element
+   that does not already provide its own focus-visible ring. */
+:focus-visible {
+  outline: 2px solid var(--brand-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
 /* Hide scrollbar for Chrome, Safari and Opera */
 *::-webkit-scrollbar {
   display: none;
@@ -162,6 +169,10 @@ html.drplay-host-visible #content-area * {
   right: 16px;
   left: auto;
   z-index: 9999;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(90vw, 28rem);
   padding: 12px 20px;
   border-radius: 8px;
   background: #dc2626;
@@ -169,9 +180,13 @@ html.drplay-host-visible #content-area * {
   animation: fadeIn 0.2s ease-out;
   transition: all 0.2s;
   pointer-events: auto;
+  word-break: break-word;
 }
 .app-toast--success {
   background: #16a34a;
+}
+.app-toast--info {
+  background: #0284c7;
 }
 @keyframes fadeIn {
   from {

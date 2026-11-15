@@ -168,7 +168,10 @@ export function TrackInfo({
           )}
         </div>
         <div className="overflow-hidden flex-1">
-          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-brand-text transition-colors">
+          <h4
+            className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-brand-text transition-colors"
+            title={realTitle}
+          >
             {realTitle}
           </h4>
           <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2 overflow-hidden whitespace-nowrap text-ellipsis">

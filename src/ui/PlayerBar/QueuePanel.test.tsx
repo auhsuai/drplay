@@ -182,7 +182,7 @@ describe("QueuePanel docked shell", () => {
 
     const pane = screen.getByTestId("queue-panel");
     expect(pane.className).toContain("shrink-0");
-    expect(pane.className).toContain("w-[400px]");
+    expect(pane.className).toContain("w-[min(400px,45vw)]");
     expect(pane.className).not.toContain("w-0");
     expect(pane.className).not.toContain("border-l");
     expect(pane.getAttribute("aria-hidden")).toBe("false");
@@ -208,7 +208,7 @@ describe("QueuePanel docked shell", () => {
     // Inner width is pinned: the 0-width pane must clip a 400px dialog, not
     // squish its content while the width transition plays.
     const dialog = pane.firstElementChild as HTMLElement;
-    expect(dialog.className).toContain("w-[400px]");
+    expect(dialog.className).toContain("w-[min(400px,45vw)]");
     expect(dialog.className).toContain("shrink-0");
   });
 });

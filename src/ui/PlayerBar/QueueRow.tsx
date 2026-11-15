@@ -192,7 +192,9 @@ export function QueueRow({
       <div
         className={`overflow-hidden flex-1 flex flex-col justify-center ${selectionMode ? "" : "mr-11"}`}
       >
-        <h3 className={titleClass}>{track.title}</h3>
+        <h3 className={titleClass} title={track.title}>
+          {track.title}
+        </h3>
         <div className="flex items-center gap-2 text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 min-w-0">
           <div className="flex items-center truncate">
             {meta.loaded && (

@@ -287,9 +287,9 @@ describe("header controls", () => {
     expect(
       container.querySelectorAll('button[aria-label="common.close"]'),
     ).toHaveLength(1);
-    expect(
-      container.querySelectorAll(".absolute.top-6.left-6"),
-    ).toHaveLength(1);
+    expect(container.querySelectorAll(".absolute.top-6.left-6")).toHaveLength(
+      1,
+    );
     expect(
       container.querySelector("[data-testid='fullscreen-toggle']"),
     ).toBeNull();
@@ -308,9 +308,12 @@ describe("header controls", () => {
     const labels = [...bar.querySelectorAll("button[aria-label]")]
       .map((button) => button.getAttribute("aria-label"))
       .sort();
+    // player.mute joined the set when the volume icon became a real button
+    // (keyboard-reachable mute) instead of a bare icon.
     expect(labels).toEqual([
       "player.fullscreen",
       "player.more",
+      "player.mute",
       "player.next",
       "player.play",
       "player.prev",

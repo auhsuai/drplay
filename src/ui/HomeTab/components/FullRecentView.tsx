@@ -137,6 +137,7 @@ export function FullRecentView({
   onPlay,
   token,
   currentTrack,
+  isPlaying,
   title,
 }: {
   recent: RecentItem[];
@@ -144,6 +145,8 @@ export function FullRecentView({
   onPlay: (track: Track, ctx?: Track[]) => void;
   token: string | null;
   currentTrack?: Track | null | undefined;
+  /** True while the current track is actually playing (vs paused). */
+  isPlaying?: boolean | undefined;
   title?: string;
 }) {
   const { t } = useTranslation();
@@ -272,7 +275,7 @@ export function FullRecentView({
                     setSearchQuery("");
                   }}
                   aria-label={t("common.clear_search")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -298,9 +301,16 @@ export function FullRecentView({
       >
         {filteredItems.length === 0 ? (
           <div className="text-gray-500 py-10 text-center">
-            {searchQuery.trim() !== ""
-              ? t("drive.no_search_results")
-              : t("drive.no_audio")}
+            {searchQuery.trim() !== "" ? (
+              t("drive.no_search_results")
+            ) : (
+              <>
+                <p className="font-medium text-gray-700 dark:text-gray-300">
+                  {t("recent.empty_title")}
+                </p>
+                <p className="text-sm mt-1">{t("recent.empty_subtitle")}</p>
+              </>
+            )}
           </div>
         ) : (
           <div
@@ -345,7 +355,8 @@ export function FullRecentView({
                     onRefresh={() => {}}
                     onRemoveItem={handleRemoveTrack}
                     menuVariant="recent"
-                    isPlaying={!!currentTrack && track.id === currentTrack.id}
+                    isCurrent={!!currentTrack && track.id === currentTrack.id}
+                    isPlaying={isPlaying}
                   />
                 </div>
               );

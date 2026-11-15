@@ -75,6 +75,7 @@ vi.mock("lucide-react", () => {
     "Shuffle",
     "Repeat",
     "Repeat1",
+    "ListMusic",
     "Maximize2",
     "RefreshCw",
     "Heart",

@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { showErrorToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
+import { SkeletonRowList } from "../components/Skeleton";
 import { PLAYLIST_VIEW_MODULE, usePlaylistData } from "./usePlaylistData";
 import { usePlaylistSelection } from "./usePlaylistSelection";
 import { usePlaylistArrange } from "./usePlaylistArrange";
@@ -86,7 +87,15 @@ export function PlaylistView({
   });
 
   if (!playlist) {
-    if (!isLoadSettled) return null;
+    if (!isLoadSettled) {
+      return (
+        <main className="flex-1 bg-white dark:bg-[#121212] overflow-y-auto flex flex-col relative transition-colors duration-300">
+          <div className="px-8 pt-8 pb-24 flex-1 min-h-0">
+            <SkeletonRowList variant="audio" />
+          </div>
+        </main>
+      );
+    }
     return (
       <main className="flex-1 bg-white dark:bg-[#121212] flex items-center justify-center transition-colors duration-300">
         <div className="text-center text-gray-500 dark:text-gray-400">
@@ -273,6 +282,7 @@ export function PlaylistView({
                     onPlay(first, tracks);
                   }}
                   className="w-14 h-14 bg-brand-primary rounded-full flex items-center justify-center text-white hover:scale-105 hover:bg-blue-600 transition-all shadow-lg"
+                  aria-label={t("player.play")}
                 >
                   <Play className="w-7 h-7 fill-current ml-1" />
                 </button>

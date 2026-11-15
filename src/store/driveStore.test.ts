@@ -23,6 +23,21 @@ describe("driveStore isLoadingTracks initial contract", () => {
   });
 });
 
+describe("driveStore listingError contract", () => {
+  it("ships with listingError = false (no failed listing yet)", async () => {
+    vi.resetModules();
+    const { useDriveStore: freshStore } = await import("./driveStore");
+    expect(freshStore.getState().listingError).toBe(false);
+  });
+
+  it("setListingError toggles the flag the empty branch reads", () => {
+    useDriveStore.getState().setListingError(true);
+    expect(useDriveStore.getState().listingError).toBe(true);
+    useDriveStore.getState().setListingError(false);
+    expect(useDriveStore.getState().listingError).toBe(false);
+  });
+});
+
 describe("driveStore rootFolders contract", () => {
   it("ships with rootFolders = [] (no configured roots / legacy install)", async () => {
     vi.resetModules();

@@ -361,13 +361,13 @@ describe("MainContent debug triggers (DEV only)", () => {
     const explorer = makeExplorerState(makeItems(3));
     useDriveExplorerMock.mockReturnValue(explorer);
     render(<MainContent {...baseProps} />);
-    expect(screen.queryByText("playlist.next")).toBeNull();
+    expect(screen.queryByText("pagination.next")).toBeNull();
 
     act(() => {
       window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.PAGINATION));
     });
 
-    expect(screen.getByText("playlist.next")).not.toBeNull();
+    expect(screen.getByText("pagination.next")).not.toBeNull();
     expect(screen.getByText("/ 2")).not.toBeNull();
   });
 
@@ -378,10 +378,10 @@ describe("MainContent debug triggers (DEV only)", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent(DEBUG_EVENTS.PAGINATION));
     });
-    expect(screen.getByText("playlist.next")).not.toBeNull();
+    expect(screen.getByText("pagination.next")).not.toBeNull();
 
     await act(async () => {
-      fireEvent.click(screen.getByText("playlist.next"));
+      fireEvent.click(screen.getByText("pagination.next"));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 

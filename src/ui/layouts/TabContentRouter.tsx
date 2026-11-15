@@ -38,6 +38,8 @@ interface TabContentRouterProps {
   userProfile: UserProfile | null;
   token: string | null;
   currentTrack: Track | null;
+  /** True while the current track is actually playing (vs paused). */
+  isPlaying?: boolean | undefined;
   onPlayTrack: (track: Track, contextQueue?: Track[]) => void;
   onOpenFolder: (id: string, name: string) => void;
   onSwitchTab: (tab: TabKey) => void;
@@ -72,6 +74,7 @@ export function TabContentRouter({
   userProfile,
   token,
   currentTrack,
+  isPlaying,
   onPlayTrack,
   onOpenFolder,
   onSwitchTab,
@@ -126,6 +129,7 @@ export function TabContentRouter({
           token={token}
           userProfile={userProfile}
           currentTrack={currentTrack}
+          isPlaying={isPlaying}
           isNowPlayingOpen={isNowPlayingOpen}
         />
       </div>
@@ -144,6 +148,7 @@ export function TabContentRouter({
             onBreadcrumbClick={onBreadcrumbClick}
             token={token}
             currentTrack={currentTrack}
+            isPlaying={isPlaying}
             highlightedFileId={highlightedFileId}
             onRefresh={() => {
               /* No-op, sync runs in background */

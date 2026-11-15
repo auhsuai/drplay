@@ -140,7 +140,10 @@ export function TrashItemRow({
           <Music className="w-4 h-4" />
         )}
       </div>
-      <p className="flex-1 min-w-0 truncate text-sm font-medium text-gray-900 dark:text-gray-100">
+      <p
+        className="flex-1 min-w-0 truncate text-sm font-medium text-gray-900 dark:text-gray-100"
+        title={item.name}
+      >
         {item.name}
       </p>
       <span className="hidden sm:block w-24 shrink-0 text-xs text-gray-500 tabular-nums">

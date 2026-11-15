@@ -47,6 +47,9 @@ export function DownloadFab({
     dragged: boolean;
   } | null>(null);
   const onClickRef = useRef(onClick);
+  // Pointer click already fired onClickRef in handlePointerUp; the
+  // synthetic click that follows must not fire it a second time.
+  const pointerClickedRef = useRef(false);
   // Sync outside render (react-hooks/refs): the pointer-up handler reads
   // the latest onClick without re-binding the drag handlers.
   useEffect(() => {
@@ -140,6 +143,7 @@ export function DownloadFab({
       });
       return;
     }
+    pointerClickedRef.current = true;
     onClickRef.current();
   };
 
@@ -148,6 +152,16 @@ export function DownloadFab({
       ref={buttonRef}
       type="button"
       aria-label={label}
+      onClick={() => {
+        // Pointer drags already fire the click via handlePointerUp; a
+        // keyboard Enter/Space has no pointer events, so it needs onClick.
+        // Guard against double-firing after a pointer click.
+        if (pointerClickedRef.current) {
+          pointerClickedRef.current = false;
+          return;
+        }
+        onClickRef.current();
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

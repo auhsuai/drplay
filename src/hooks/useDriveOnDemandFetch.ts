@@ -43,6 +43,7 @@ export function useDriveOnDemandFetch({
   token: string | null;
 }): void {
   const setIsLoadingTracks = useDriveStore((state) => state.setIsLoadingTracks);
+  const setListingError = useDriveStore((state) => state.setListingError);
 
   // On-Demand Fetching: Kéo nóng 1 trang từ Drive nếu thư mục chưa có trong Dexie
   useEffect(() => {
@@ -61,6 +62,9 @@ export function useDriveOnDemandFetch({
     const stillMounted = () => isMounted;
     const isAborted = () => abortController.signal.aborted;
 
+    // Lives outside the try: both the catch (thrown fetch) and the finally
+    // (publish the flag) assign/read it.
+    let listingFailed = false;
     const fetchOnDemand = async () => {
       try {
         // B12-2: scope the gate to the current account — another account's
@@ -74,6 +78,7 @@ export function useDriveOnDemandFetch({
         // survives that run's skipped finally, so a cached folder must be able
         // to clear it instead of showing the skeleton until this fetch settles.
         setIsLoadingTracks(count === 0);
+        setListingError(false);
 
         // Phase A: the folder listing is the audio|video union (not audio-only) —
         // an audio-only query here means browsing a folder that holds movies
@@ -86,7 +91,6 @@ export function useDriveOnDemandFetch({
         // never drive deletions.
         const ownerEmail = getCurrentUserEmail();
         const seenIds = new Set<string>();
-        let listingFailed = false;
 
         while (hasMore && isMounted && !abortController.signal.aborted) {
           const url = new URL(DRIVE_FILES_URL);
@@ -226,6 +230,10 @@ export function useDriveOnDemandFetch({
         }
       } catch (err) {
         if (abortController.signal.aborted) return;
+        // A thrown fetch (network down, DNS, …) is a listing failure too —
+        // without this the flag stays false and the list would claim the
+        // folder is empty.
+        listingFailed = true;
         if (err instanceof TypeError) {
           void captureError({
             level: "warn",
@@ -240,7 +248,13 @@ export function useDriveOnDemandFetch({
           });
         }
       } finally {
-        if (isMounted) setIsLoadingTracks(false);
+        if (isMounted) {
+          setIsLoadingTracks(false);
+          // A failed page (HTTP / malformed payload / thrown fetch) is a
+          // listing error, not an empty folder — MainContent renders the
+          // retry state from this flag. A clean abort leaves it alone.
+          if (!isAborted()) setListingError(listingFailed);
+        }
       }
     };
 
@@ -249,5 +263,5 @@ export function useDriveOnDemandFetch({
       isMounted = false;
       abortController.abort();
     };
-  }, [currentFolderId, token, setIsLoadingTracks]);
+  }, [currentFolderId, token, setIsLoadingTracks, setListingError]);
 }

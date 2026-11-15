@@ -7,6 +7,7 @@ import {
   Eraser,
   Cloud,
   Tag,
+  Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { LanguageDropdown } from "./components/LanguageDropdown";
@@ -76,7 +77,7 @@ export function SettingsTab({
             <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
               {t("settings.music_library")}
             </h2>
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <Cloud className="w-6 h-6 text-brand-text" />
@@ -91,7 +92,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowFolderSelection(true);
                 }}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
+                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2"
               >
                 <FolderOpen className="w-4 h-4" />
                 {t("settings.change_folder")}
@@ -130,11 +131,11 @@ export function SettingsTab({
             ) : null}
           </div>
 
-          <div className="flex flex-col gap-2 mt-6">
+          <div className="flex flex-col gap-2">
             <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
               {t("settings.preferences")}
             </h2>
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <Globe className="w-6 h-6 text-brand-text" />
@@ -148,7 +149,7 @@ export function SettingsTab({
               <LanguageDropdown />
             </div>
 
-            <div className="flex items-center justify-between py-4">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <Moon className="w-6 h-6 text-brand-text" />
@@ -163,7 +164,7 @@ export function SettingsTab({
             </div>
 
             {/* Close Behavior Setting */}
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <MonitorDown className="w-6 h-6 text-brand-text" />
@@ -186,12 +187,12 @@ export function SettingsTab({
                   }}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
+                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus-visible:ring-2 peer-focus-visible:ring-brand-primary/40 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
               </label>
             </div>
 
             {/* Download Location Setting */}
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4 min-w-0">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <Download className="w-6 h-6 text-brand-text" />
@@ -214,7 +215,7 @@ export function SettingsTab({
                     void handlePickDownloadPath();
                   }}
                   disabled={isPicking}
-                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <FolderOpen className="w-4 h-4" />
                   {t("settings.change_path")}
@@ -223,7 +224,7 @@ export function SettingsTab({
             </div>
 
             {/* Metadata Fetch Setting */}
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <Tag className="w-6 h-6 text-brand-text" />
@@ -245,33 +246,20 @@ export function SettingsTab({
                   }}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
+                <div className="w-11 h-6 bg-gray-200 dark:bg-[#2A2A2A] peer-focus-visible:ring-2 peer-focus-visible:ring-brand-primary/40 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
               </label>
             </div>
           </div>
 
           {/* Data Management */}
-          <div className="flex flex-col gap-2 mt-6 mb-8">
+          <div className="flex flex-col gap-2">
             <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
               {t("settings.data_management")}
             </h2>
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
-                  <svg
-                    className="w-6 h-6 text-brand-text"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    ></path>
-                  </svg>
+                  <Trash2 className="w-6 h-6 text-brand-text" />
                 </div>
                 <div className="max-w-[320px]">
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -284,13 +272,13 @@ export function SettingsTab({
                 onClick={() => {
                   setShowTrashScreen(true);
                 }}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t("settings.open_trash")}
               </button>
             </div>
 
-            <div className="flex items-center justify-between py-4 pb-6">
+            <div className="flex items-center justify-between pt-4 pb-6">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
                   <Eraser className="w-6 h-6 text-brand-text" />
@@ -306,7 +294,7 @@ export function SettingsTab({
                 onClick={() => {
                   setShowCacheManager(true);
                 }}
-                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
+                className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-all transform active:scale-95 shadow-sm border border-transparent"
               >
                 {t("settings.clear_cache_btn")}
               </button>

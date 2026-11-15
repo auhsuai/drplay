@@ -202,13 +202,13 @@ export function ErrorLogSection() {
   }, []);
 
   const actionButtons = (
-    <div className="flex items-center gap-2 shrink-0 -mt-[2px]">
+    <div className="flex items-center gap-2 shrink-0">
       <button
         onClick={() => {
           void handleCopy();
         }}
         disabled={logList.length === 0 || busy}
-        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-w-[160px] justify-center"
+        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 justify-center"
       >
         <ScrollText className="w-4 h-4" />
         {copied
@@ -220,7 +220,7 @@ export function ErrorLogSection() {
       <button
         onClick={handleClear}
         disabled={logList.length === 0 || busy}
-        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-all transform active:scale-95 shadow-sm border border-transparent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
         {t("settings.error_log_clear")}
       </button>
@@ -228,7 +228,7 @@ export function ErrorLogSection() {
   );
 
   return (
-    <div ref={containerRef} className="flex flex-col gap-2 mt-6 mb-8">
+    <div ref={containerRef} className="flex flex-col gap-2">
       <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
         {t("settings.error_log_title")}
       </h2>
@@ -264,12 +264,12 @@ export function ErrorLogSection() {
                 onClick={() => {
                   setSelectedDate(group.dateKey);
                 }}
-                className="flex items-center justify-between w-full text-left px-3 py-2.5 rounded-lg bg-white dark:bg-[#222] hover:bg-gray-100 dark:hover:bg-[#2E2E2E] border border-gray-200 dark:border-[#2A2A2A] transition-all"
+                className="flex items-center justify-between w-full text-left px-3 py-2.5 rounded-lg bg-white dark:bg-[#1a1b1e] hover:bg-gray-100 dark:hover:bg-[#2a2b2f] border border-gray-200 dark:border-[#2a2b2f] transition-all"
               >
                 <span className="text-sm font-medium text-gray-800 dark:text-gray-100">
                   {group.dateKey}
                 </span>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gray-200 dark:bg-[#333] text-gray-600 dark:text-gray-300">
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gray-200 dark:bg-[#2a2b2f] text-gray-600 dark:text-gray-300">
                   {t("settings.error_log_count", {
                     count: group.entries.length,
                   })}

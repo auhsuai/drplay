@@ -319,6 +319,7 @@ export function RootFolderSetupFlow({
             ? t("folder_selection.confirm_root_body")
             : t("folder_selection.confirm_roots_body", {
                 totalCount: draftRoots.length,
+                count: draftRoots.length,
               })
         }
         confirmLabel={t("folder_selection.confirm")}

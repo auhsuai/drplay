@@ -149,7 +149,7 @@ describe("useDriveExplorer global search", () => {
     const hit = view.result.current.filteredItems.find((i) => i.id === "f2");
     expect(hit?.title).toBe("Nỗi buồn");
     expect(hit?.trackInfo?.artist).toBe("Ca sĩ X");
-    expect(hit?.trackInfo?.parentName).toBe("Search Result");
+    expect(hit?.trackInfo?.parentName).toBe("drive.search_result");
     view.unmount();
   });
 
@@ -202,7 +202,7 @@ describe("useDriveExplorer global search", () => {
     expect(folder?.trackInfo).toBeUndefined();
     const file = items.find((i) => i.id === "f1");
     expect(file?.title).toBe("Nhac vang");
-    expect(file?.trackInfo?.parentName).toBe("Search Result");
+    expect(file?.trackInfo?.parentName).toBe("drive.search_result");
     view.unmount();
   });
 

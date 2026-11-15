@@ -19,9 +19,11 @@ vi.mock("../utils/folderTracks", () => ({
 
 const showSuccessToastMock = vi.hoisted(() => vi.fn());
 const showErrorToastMock = vi.hoisted(() => vi.fn());
+const showInfoToastMock = vi.hoisted(() => vi.fn());
 vi.mock("../utils/simpleToast", () => ({
   showSuccessToast: showSuccessToastMock,
   showErrorToast: showErrorToastMock,
+  showInfoToast: showInfoToastMock,
 }));
 
 const captureErrorMock = vi.hoisted(() => vi.fn());
@@ -184,8 +186,9 @@ describe("useMenuAddToQueue", () => {
     // wiped by the truncation toast in the same tick, so both infos (added
     // count + cap reason) are merged into a single toast.
     expect(showSuccessToastMock).not.toHaveBeenCalled();
-    expect(showErrorToastMock).toHaveBeenCalledTimes(1);
-    expect(showErrorToastMock).toHaveBeenCalledWith(
+    expect(showErrorToastMock).not.toHaveBeenCalled();
+    expect(showInfoToastMock).toHaveBeenCalledTimes(1);
+    expect(showInfoToastMock).toHaveBeenCalledWith(
       "queue.added_toast#1. queue.add_truncated#1000",
     );
   });

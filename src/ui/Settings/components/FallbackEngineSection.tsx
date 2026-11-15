@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Cpu, LoaderCircle } from "lucide-react";
+import { CheckCircle2, CircleAlert, Cpu, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -576,15 +576,12 @@ export function FallbackEngineSection() {
       : t("settings.playback_components.button_download");
 
   return (
-    <div
-      data-testid="fallback-engine-section"
-      className="flex flex-col gap-2 mt-6"
-    >
+    <div data-testid="fallback-engine-section" className="flex flex-col gap-2">
       <h2 className="text-sm font-bold text-brand-text uppercase tracking-wider mb-2">
         {t("settings.playback_components.section_title")}
       </h2>
 
-      <div className="flex items-center justify-between py-4 pb-6">
+      <div className="flex items-center justify-between pt-4 pb-6">
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-12 h-12 rounded-xl bg-brand-primary/10 flex items-center justify-center shrink-0">
             <Cpu className="w-6 h-6 text-brand-text" />
@@ -700,7 +697,7 @@ export function FallbackEngineSection() {
               void runInstall();
             }}
             disabled={installing}
-            className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-brand-primary/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-all transform active:scale-95 shadow-sm border border-transparent flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-brand-primary/40 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {installing ? (
               <LoaderCircle className="w-4 h-4 animate-spin" />
@@ -715,7 +712,8 @@ export function FallbackEngineSection() {
           the retry affordance, so there is no second button here. */}
       {error !== null ? (
         <div data-testid="fallback-engine-error" role="alert" className="pb-6">
-          <p className="text-sm text-red-500">
+          <p className="flex items-start gap-2 text-sm text-red-500">
+            <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
             {t(errorMessageKey(error.code))}
           </p>
         </div>

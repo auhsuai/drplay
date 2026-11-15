@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { HardDrive, LoaderCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import { showErrorToast } from "../../utils/simpleToast";
+import { showErrorToast, showInfoToast } from "../../utils/simpleToast";
 import { captureError } from "../../utils/errorLog";
 
 const LOGIN_MODULE = "LoginScreen";
@@ -55,7 +55,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     attemptRef.current += 1;
     setIsLoading(false);
     setShowCancel(false);
-    showErrorToast(t("login.cancelled_by_user"));
+    showInfoToast(t("login.cancelled_by_user"));
   };
 
   const handleLoginClick = async () => {
@@ -77,7 +77,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       setIsLoading(false);
       const errStr = String(error);
       if (errStr.includes("cancel")) {
-        showErrorToast(t("login.cancelled"));
+        showInfoToast(t("login.cancelled"));
         void captureError({
           level: "warn",
           source: LOGIN_MODULE,
@@ -129,7 +129,10 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           className="w-full flex items-center justify-center gap-3 bg-white text-gray-700 font-medium py-3 px-4 rounded-lg shadow-[0_1px_3px_rgba(0,0,0,0.1)] hover:shadow-[0_2px_6px_rgba(0,0,0,0.15)] hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-4 focus:ring-brand-primary/30 active:scale-[0.98] transition-all duration-200 disabled:opacity-70 disabled:cursor-not-allowed"
         >
           {isLoading ? (
-            <LoaderCircle className="w-6 h-6 animate-spin text-brand-text" />
+            <>
+              <LoaderCircle className="w-6 h-6 animate-spin text-brand-text" />
+              <span>{t("login.connect_button")}</span>
+            </>
           ) : (
             <>
               {/* Google G Logo SVG */}

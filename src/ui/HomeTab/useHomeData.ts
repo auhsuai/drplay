@@ -17,6 +17,7 @@ import { prefetchVisibleTracks } from "../../utils/streamPrefetcher";
 import rawGreetingsData from "../../data/greetings.json";
 import { useTranslation } from "react-i18next";
 import { captureError } from "../../utils/errorLog";
+import { showErrorToast } from "../../utils/simpleToast";
 import { DEBUG_EVENTS, onDebugEvent } from "../debug/debugEvents";
 
 interface GreetingsEntry {
@@ -261,24 +262,37 @@ export function useHomeData(token: string | null) {
 
       loadRecentlyAdded(token);
     };
-    loadData().catch(
-      (err: unknown) =>
+    loadData().catch((err: unknown) => {
+      // A failed FIRST load must not leave any section null (= skeleton)
+      // forever: fall back to [] so the sections render empty instead of
+      // spinning, and tell the user (the recentlyAdded loader already
+      // follows the same `prev ?? []` rule below).
+      setRecent((prev) => prev ?? []);
+      setHeavy((prev) => prev ?? []);
+      setDiscover((prev) => prev ?? []);
+      setMostVisitedFolders((prev) => prev ?? []);
+      showErrorToast(t("home.load_error"));
+      void captureError({
+        level: "error",
+        source: HOME_TAB_MODULE,
+        message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    });
+
+    const handleUpdate = () => {
+      void loadData().catch((err: unknown) => {
+        // A failed refetch keeps previous data; the `prev ?? []` guards only
+        // apply while a section is still null (same rule as the initial load).
+        setRecent((prev) => prev ?? []);
+        setHeavy((prev) => prev ?? []);
+        setDiscover((prev) => prev ?? []);
+        setMostVisitedFolders((prev) => prev ?? []);
         void captureError({
           level: "error",
           source: HOME_TAB_MODULE,
           message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
-        }),
-    );
-
-    const handleUpdate = () => {
-      void loadData().catch(
-        (err: unknown) =>
-          void captureError({
-            level: "error",
-            source: HOME_TAB_MODULE,
-            message: `failed-to-load-home-data: ${err instanceof Error ? err.message : String(err)}`,
-          }),
-      );
+        });
+      });
     };
     // Delta sync: refresh ONLY the Recently Added section (light, no re-running
     // the heavy local loads). Fired by the proSync worker completing a

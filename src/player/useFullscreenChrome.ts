@@ -148,9 +148,13 @@ export function useFullscreenChrome({
 
     window.addEventListener("pointermove", onActivity);
     window.addEventListener("pointerdown", onActivity);
+    // Keyboard users Tab into hidden controls otherwise: focusing any
+    // element inside the fullscreen surface must reveal the chrome too.
+    window.addEventListener("focusin", onActivity);
     return () => {
       window.removeEventListener("pointermove", onActivity);
       window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("focusin", onActivity);
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;

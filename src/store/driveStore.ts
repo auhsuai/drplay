@@ -40,6 +40,9 @@ interface DriveState {
   sortOption: string;
   /** True while the first page of a folder is still being fetched. */
   isLoadingTracks: boolean;
+  /** True when the last folder listing failed (network / Drive API error).
+   * The list must then show a retry state, never the "folder empty" copy. */
+  listingError: boolean;
 
   /**
    * Pin the app root folder (user picks a folder to limit the library to).
@@ -71,6 +74,8 @@ interface DriveState {
   setSortOption: (sortOption: string) => void;
   /** Toggle the folder loading flag (skeleton vs. empty state). */
   setIsLoadingTracks: (isLoading: boolean) => void;
+  /** Set/clear the recoverable folder-listing failure flag. */
+  setListingError: (listingError: boolean) => void;
 }
 
 // Drive root folder id lives in utils/driveConstants.ts (shared with the
@@ -103,6 +108,7 @@ export const useDriveStore = create<DriveState>((set) => ({
   // skeleton — useDriveExplorer turns it off once the folder fetch settles.
   // Starting false flashed the "no audio" empty state for one frame (RC-B).
   isLoadingTracks: true,
+  listingError: false,
 
   setAppRootFolder: (appRootFolder) => {
     set({ appRootFolder });
@@ -136,5 +142,8 @@ export const useDriveStore = create<DriveState>((set) => ({
   },
   setIsLoadingTracks: (isLoadingTracks) => {
     set({ isLoadingTracks });
+  },
+  setListingError: (listingError) => {
+    set({ listingError });
   },
 }));

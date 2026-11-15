@@ -30,7 +30,7 @@ function ErrorIcon({
       : type === "engine_closed"
         ? TriangleAlert
         : WifiOff;
-  return <Icon className={`${className} text-brand-text`} />;
+  return <Icon className={`${className} text-red-500`} />;
 }
 
 export function ErrorToast({ errorInfo, inline = false }: ErrorToastProps) {
@@ -53,12 +53,12 @@ export function ErrorToast({ errorInfo, inline = false }: ErrorToastProps) {
             : errorInfo.message;
 
   const toast = (
-    <div className="absolute top-[76px] left-0 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 select-none">
+    <div className="absolute top-[76px] left-4 right-4 h-11 bg-[#2a2b2f] text-white text-sm flex items-center z-50 select-none">
       <div className="flex items-center gap-3 px-4 flex-1 min-w-0">
         <ErrorIcon type={errorInfo.code} />
         <span className="font-medium truncate">{errorText}</span>
       </div>
-      <div className="w-1.5 self-stretch bg-brand-primary" />
+      <div className="w-1.5 self-stretch bg-red-500" />
     </div>
   );
 

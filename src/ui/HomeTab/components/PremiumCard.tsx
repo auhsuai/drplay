@@ -114,7 +114,10 @@ export function PremiumCard({
       </div>
       {!isOverlayBtn && (
         <div className="px-1">
-          <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1">
+          <h4
+            className="font-semibold text-gray-900 dark:text-gray-100 truncate text-sm mb-1"
+            title={title}
+          >
             {title}
           </h4>
           <p className="text-xs text-gray-500 dark:text-gray-400 truncate">

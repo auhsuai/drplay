@@ -13,6 +13,7 @@
   "common": {
     "cancel": "Hủy",
     "selected": "mục đã chọn",
+    "retry": "Thử lại",
     "delete": "Xóa",
     "unknown": "Không rõ",
     "coming_soon": "Sắp ra mắt",
@@ -66,6 +67,8 @@
     "use_single_root": "Chỉ dùng một thư mục gốc",
     "confirm_roots_title": "Dùng những thư mục này làm thư mục gốc?",
     "confirm_roots_body": "{{totalCount}} thư mục đã chọn sẽ trở thành vị trí gốc trong DrPlay.",
+    "confirm_roots_body_one": "{{totalCount}} thư mục đã chọn sẽ trở thành vị trí gốc trong DrPlay.",
+    "confirm_roots_body_other": "{{totalCount}} thư mục đã chọn sẽ trở thành vị trí gốc trong DrPlay.",
     "confirm_root_title": "Dùng thư mục này làm thư mục gốc?",
     "confirm_root_body": "Thư mục này sẽ trở thành vị trí gốc trong DrPlay.",
     "confirm": "Xác nhận",
@@ -82,7 +85,11 @@
     "discover": "Khám phá",
     "recent_files": "Tệp gần đây",
     "recently_added": "Mới thêm vào Drive",
-    "jump_back_in": "Nghe tiếp"
+    "jump_back_in": "Nghe tiếp",
+    "load_error": "Không tải được Trang chính. Vui lòng thử lại.",
+    "empty_title": "Thư viện trống",
+    "empty_subtitle": "Thêm tệp vào thư mục gốc trên Drive, hoặc mở My Drive để bắt đầu.",
+    "empty_cta": "Mở My Drive"
   },
   "drive": {
     "my_drive": "Drive của tôi",
@@ -91,7 +98,11 @@
     "no_audio": "Thư mục này chưa có tệp nào có thể phát.",
     "no_search_results": "Không tìm thấy mục phù hợp.",
     "searching": "Đang tìm…",
+    "listing_error": "Không tải được thư mục này. Vui lòng thử lại.",
+    "search_result": "Kết quả tìm kiếm",
     "results_truncated": "Chỉ hiển thị {{shown}} trong tổng số {{total}} kết quả phù hợp.",
+    "results_truncated_one": "Chỉ hiển thị {{shown}} trong tổng số {{total}} kết quả phù hợp.",
+    "results_truncated_other": "Chỉ hiển thị {{shown}} trong tổng số {{total}} kết quả phù hợp.",
     "folders": "Thư mục",
     "new_folder": "Thư mục mới",
     "new_folder_title": "Tạo thư mục",
@@ -187,6 +198,12 @@
     "play": "Phát",
     "pause": "Tạm dừng",
     "play_mode": "Chế độ phát",
+    "play_mode_normal": "Chế độ phát: Tắt",
+    "play_mode_shuffle": "Chế độ phát: Ngẫu nhiên",
+    "play_mode_repeat-all": "Chế độ phát: Lặp lại tất cả",
+    "play_mode_repeat-one": "Chế độ phát: Lặp lại một bài",
+    "mute": "Tắt tiếng",
+    "unmute": "Bật tiếng",
     "fullscreen": "Toàn màn hình",
     "exit_fullscreen": "Thoát toàn màn hình",
     "picture_in_picture": "Hình trong hình (PiP)",
@@ -379,8 +396,14 @@
     "download_pause": "Tạm dừng",
     "download_verifying": "Đang kiểm tra…",
     "bulk_download_progress": "Đang tải {{completed}} trên {{total}} tệp…",
+    "bulk_download_progress_one": "Đang tải {{completed}} trên {{total}} tệp…",
+    "bulk_download_progress_other": "Đang tải {{completed}} trên {{total}} tệp…",
     "bulk_download_done": "Đã tải {{completed}} trên {{total}} tệp về {{dir}}.",
+    "bulk_download_done_one": "Đã tải {{completed}} trên {{total}} tệp về {{dir}}.",
+    "bulk_download_done_other": "Đã tải {{completed}} trên {{total}} tệp về {{dir}}.",
     "bulk_download_done_partial": "Đã tải {{completed}} trên {{total}} tệp ({{failed}} lỗi, {{skipped}} bỏ qua).",
+    "bulk_download_done_partial_one": "Đã tải {{completed}} trên {{total}} tệp ({{failed}} lỗi, {{skipped}} bỏ qua).",
+    "bulk_download_done_partial_other": "Đã tải {{completed}} trên {{total}} tệp ({{failed}} lỗi, {{skipped}} bỏ qua).",
     "bulk_download_cancelled": "Đã hủy tải xuống.",
     "bulk_download_scan_failed": "Không đọc được các mục đã chọn. Thử lại nhé.",
     "bulk_download_empty": "Không có mục nào trong lựa chọn tải được.",
@@ -542,6 +565,11 @@
   "pagination": {
     "page": "Trang"
   },
+  "pagination": {
+    "page": "Trang",
+    "prev": "Trước",
+    "next": "Tiếp"
+  },
   "error": {
     "title": "Đã xảy ra lỗi",
     "description": "DrPlay vừa gặp sự cố ngoài dự kiến. Tải lại ứng dụng để tiếp tục.",
@@ -559,6 +587,11 @@
   "ok": "OK",
   "recent": {
     "col_last_played": "Nghe gần đây nhất"
+  },
+  "recent": {
+    "col_last_played": "Nghe gần đây nhất",
+    "empty_title": "Chưa nghe gì cả",
+    "empty_subtitle": "Các bài bạn nghe sẽ hiện ở đây."
   },
   "cache": {
     "label": {

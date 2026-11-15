@@ -5,6 +5,7 @@ import {
   SkipForward,
   Repeat,
   Repeat1,
+  ListMusic,
   Shuffle,
   LoaderCircle,
   RefreshCw,
@@ -55,7 +56,7 @@ export function NowPlayingControls({
         <button
           onClick={onPrevTrack}
           aria-label={t("player.prev")}
-          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92]"
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <SkipBack className="w-5 h-5" />
         </button>
@@ -64,7 +65,7 @@ export function NowPlayingControls({
           onClick={hasError ? onRetry : onTogglePlay}
           disabled={isDownloading}
           aria-label={isPlaying ? t("player.pause") : t("player.play")}
-          className="w-10 h-10 flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90"
+          className="w-10 h-10 flex items-center justify-center text-white bg-brand-primary hover:bg-blue-600 hover:shadow-lg rounded-full transition-all duration-200 shadow-md active:scale-90 disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
           {/* The spinner follows the ENGINE's signal — the single source of
               truth for "the engine is waiting" (its startup loader is up for
@@ -85,7 +86,7 @@ export function NowPlayingControls({
         <button
           onClick={onNextTrack}
           aria-label={t("player.next")}
-          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92]"
+          className="text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] p-2 rounded-full transition-all active:scale-[0.92] disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <SkipForward className="w-5 h-5" />
         </button>
@@ -97,12 +98,13 @@ export function NowPlayingControls({
           <button
             onClick={onTogglePlayMode}
             aria-label={t("player.play_mode")}
+            title={t(`player.play_mode_${playMode}`)}
             className={`p-2 rounded-full transition-all active:scale-[0.92] ${playMode !== "normal" ? "text-brand-text hover:bg-brand-primary/10" : "text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f]"}`}
           >
             {playMode === "shuffle" && <Shuffle className="w-5 h-5" />}
             {playMode === "repeat-all" && <Repeat className="w-5 h-5" />}
             {playMode === "repeat-one" && <Repeat1 className="w-5 h-5" />}
-            {playMode === "normal" && <Repeat className="w-5 h-5" />}
+            {playMode === "normal" && <ListMusic className="w-5 h-5" />}
           </button>
         </div>
       </div>

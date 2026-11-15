@@ -218,7 +218,7 @@ export function CacheManagerModal({ open, onClose }: CacheManagerModalProps) {
   return createPortal(
     <div
       data-testid="cache-manager-overlay"
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4"
       role="presentation"
       onClick={(e) => {
         // Only close when the backdrop itself (not the dialog) is clicked.

@@ -18,6 +18,8 @@ import { useBulkDownload } from "../../hooks/useBulkDownload";
 import { DownloadToast } from "../components/MoreMenu/DownloadToast";
 import { DownloadFab } from "./components/DownloadFab";
 import { DownloadPanel } from "./components/DownloadPanel";
+import { LoaderCircle, CircleAlert } from "lucide-react";
+import { useDriveStore } from "../../store/driveStore";
 import type { SearchSort } from "../../hooks/useDriveSearch";
 import {
   useSkeletonRows,
@@ -85,6 +87,8 @@ interface MainContentProps {
   onRefresh: () => void;
   onRemoveItem?: (id: string) => void;
   currentTrack?: Track | null;
+  /** True while the current track is actually playing (vs paused). */
+  isPlaying?: boolean | undefined;
   sortOption?: string;
   onSortChange?: (option: string) => void;
   // True while the fullscreen NowPlaying overlay is open (plumbed from App):
@@ -109,6 +113,7 @@ export const MainContent = React.memo(function MainContent({
   onRefresh,
   onRemoveItem,
   currentTrack,
+  isPlaying = false,
   sortOption = "name_natural",
   onSortChange,
   isNowPlayingOpen = false,
@@ -131,6 +136,9 @@ export const MainContent = React.memo(function MainContent({
   );
 
   const skeletonRows = useSkeletonRows();
+  // A failed folder listing is an error state, not an empty folder — the
+  // empty branch below renders the retry UI from this flag.
+  const listingError = useDriveStore((state) => state.listingError);
 
   const explorer = useDriveExplorer(
     currentFolderId,
@@ -529,15 +537,32 @@ export const MainContent = React.memo(function MainContent({
           <div
             role="status"
             aria-label={t("drive.searching")}
-            className="text-gray-500 py-10 text-center"
+            className="flex items-center justify-center gap-2 text-gray-500 py-10 text-center"
           >
+            <LoaderCircle className="w-4 h-4 animate-spin" aria-hidden />
             {t("drive.searching")}
           </div>
         ) : explorer.filteredItems.length === 0 ? (
           <div className="text-gray-500 py-10 text-center">
-            {hasSearchQuery
-              ? t("drive.no_search_results")
-              : t("drive.no_audio")}
+            {hasSearchQuery ? (
+              t("drive.no_search_results")
+            ) : listingError ? (
+              <div className="flex flex-col items-center gap-3">
+                <p className="flex items-center gap-2 text-red-500">
+                  <CircleAlert className="w-4 h-4 shrink-0" aria-hidden />
+                  {t("drive.listing_error")}
+                </p>
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  className="px-5 py-2.5 bg-brand-primary hover:bg-brand-hover text-white rounded-xl text-sm font-medium transition-colors"
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            ) : (
+              t("drive.no_audio")
+            )}
           </div>
         ) : (
           <>
@@ -554,6 +579,7 @@ export const MainContent = React.memo(function MainContent({
                 {t("drive.results_truncated", {
                   shown: explorer.filteredItems.length,
                   total: searchTotalMatchesField,
+                  count: searchTotalMatchesField,
                 })}
               </div>
             ) : null}
@@ -568,7 +594,8 @@ export const MainContent = React.memo(function MainContent({
               currentFolderName={currentFolderName}
               folderHistory={folderHistory}
               highlightedFileId={highlightedFileId}
-              isPlaying={currentTrack?.id}
+              currentTrackId={currentTrack?.id}
+              isPlaying={isPlaying}
               onRefresh={onRefresh}
               onRemoveItem={onRemoveItem}
               isSelectionMode={explorer.isSelectionMode}

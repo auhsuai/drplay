@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Volume, Volume1, Volume2, VolumeX } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { AudioController } from "../../lib/AudioController";
 import { onPlayerUi } from "../../player/playerUiBus";
 
@@ -28,6 +29,7 @@ export function VolumeSlider({
   // Rehydrate from the engine (source of truth): release() keeps the engine's
   // volume/mute, so a remount (logout→login) must show the engine's current
   // level, not the 1/false defaults (D3/R1.4).
+  const { t } = useTranslation();
   const [volume, setVolume] = useState(() => audio.getVolume());
   const [isMuted, setIsMuted] = useState(() => audio.isMuted());
   const [isVolumeActive, setIsVolumeActive] = useState(false);
@@ -124,10 +126,14 @@ export function VolumeSlider({
     <div className="flex items-center justify-end min-w-0 pl-2 gap-4">
       {leading}
       <div className="flex items-center gap-2">
-        <VolumeIcon
-          className="w-6 h-6 text-gray-500 hover:text-white cursor-pointer"
+        <button
+          type="button"
           onClick={toggleMute}
-        />
+          aria-label={isMuted ? t("player.unmute") : t("player.mute")}
+          className="p-2 rounded-full text-gray-500 hover:text-white hover:bg-gray-100 dark:hover:bg-[#2a2b2f] transition-colors"
+        >
+          <VolumeIcon className="w-6 h-6" />
+        </button>
         <div
           ref={volumeBarRef}
           data-testid="volume-bar"

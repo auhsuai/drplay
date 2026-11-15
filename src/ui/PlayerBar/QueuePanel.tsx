@@ -174,7 +174,7 @@ export function QueuePanel({ open, onClose, onSelectTrack }: QueuePanelProps) {
       aria-hidden={!open}
       inert={!open}
       className={`shrink-0 h-full flex flex-col overflow-hidden bg-white dark:bg-[#121212] transition-all duration-300 ease-in-out ${
-        open ? "w-[400px]" : "w-0"
+        open ? "w-[min(400px,45vw)]" : "w-0"
       }`}
     >
       {hasOpened ? (
@@ -245,7 +245,7 @@ function QueuePanelDialog({
   const { t } = useTranslation();
 
   return (
-    <div className="flex w-[400px] shrink-0 flex-1 min-h-0 flex-col gap-4 pl-4 pr-8 pt-8">
+    <div className="flex w-[min(400px,45vw)] shrink-0 flex-1 min-h-0 flex-col gap-4 pl-4 pr-8 pt-8">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-bold text-gray-900 dark:text-white">
           {t("queue.title")}

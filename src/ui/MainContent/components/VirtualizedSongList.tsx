@@ -30,6 +30,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   currentFolderName,
   folderHistory,
   highlightedFileId,
+  currentTrackId,
   isPlaying,
   onRefresh,
   onRemoveItem,
@@ -54,7 +55,10 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   folderHistory: { id: string; name: string }[];
   highlightedFileId:
     { id: string; ts: number; folderId: string } | null | undefined;
-  isPlaying: string | undefined;
+  /** Id of the current track (row highlight), if any. */
+  currentTrackId: string | undefined;
+  /** True while that track is actually playing (vs paused). */
+  isPlaying?: boolean | undefined;
   onRefresh: () => void;
   onRemoveItem?: ((id: string) => void) | undefined;
   isSelectionMode: boolean;
@@ -114,8 +118,8 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
     }, 0);
   };
 
-  const playingIndex = isPlaying
-    ? items.findIndex((item) => item.trackInfo?.id === isPlaying)
+  const playingIndex = currentTrackId
+    ? items.findIndex((item) => item.trackInfo?.id === currentTrackId)
     : -1;
 
   // Items change (search filter, navigation, data churn) while an index is
@@ -292,7 +296,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
             aria-selected={
               isSelectionMode
                 ? selectedIds.has(item.id)
-                : !!isPlaying && item.trackInfo?.id === isPlaying
+                : !!currentTrackId && item.trackInfo?.id === currentTrackId
             }
             onFocus={() => {
               setActiveIndex(virtualRow.index);
@@ -320,7 +324,10 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
                     ? highlightedFileId.ts
                     : undefined
                 }
-                isPlaying={!!isPlaying && item.trackInfo?.id === isPlaying}
+                isCurrent={
+                  !!currentTrackId && item.trackInfo?.id === currentTrackId
+                }
+                isPlaying={isPlaying}
                 onRefresh={onRefresh}
                 onRemoveItem={onRemoveItem}
                 isSelectionMode={isSelectionMode}

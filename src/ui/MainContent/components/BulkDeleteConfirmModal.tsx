@@ -116,7 +116,7 @@ export function BulkDeleteConfirmModal({
           <button
             onClick={onConfirm}
             disabled={isOperating}
-            className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm active:scale-95 disabled:opacity-50 flex items-center gap-2"
+            className="px-5 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors shadow-sm active:scale-95 disabled:opacity-50 flex items-center gap-2"
           >
             {isOperating && <LoaderCircle className="w-4 h-4 animate-spin" />}
             {t("drive.delete")}
