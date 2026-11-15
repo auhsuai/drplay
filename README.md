@@ -39,6 +39,8 @@ DrPlay is a Windows desktop app built with Tauri 2, React, TypeScript, and Rust.
 
 - Sign in with a Google account through the system browser.
 - Browse folders, navigate with breadcrumbs, sort and search the local library mirror, and page through large folder listings.
+- Search across the library, including recursive search from a library root, with sortable result columns and a visible pending state while results are still arriving.
+- Sort My Drive, Recent, and Trash listings by name, date, or size, with full file names and extensions, real dates and sizes, and a media icon for video files.
 - Configure an ordered list of library root folders and navigate between them through a virtual root.
 - Use a virtualized file list intended to keep scrolling responsive in large libraries.
 - Create folders, upload files and folders, download files, move items, and move items to Drive Trash.
@@ -48,10 +50,14 @@ DrPlay is a Windows desktop app built with Tauri 2, React, TypeScript, and Rust.
 ### Player and library features
 
 - Play/pause, seek, volume, shuffle, repeat, queue management, and next/previous track controls.
+- Open a native picture-in-picture window for the current track, with its own transport controls; closing it pauses playback.
+- Open the video menu to switch the audio track or subtitle track, and open the Media Info dialog to inspect the file's track list.
+- In Now Playing, the mouse cursor hides automatically after 2 seconds of inactivity, and fullscreen mode keeps the video rect in sync with the window.
+- Keep the machine awake while media is playing; only one instance of the app runs at a time.
 - Maintain liked songs, playlists, listening history, playback/session state, and library presentation state locally.
 - Provide Home views such as recently added, recent files, heavy rotation, discovery, and resume/jump-back-in content.
-- Read media metadata and cache cover art/thumbnails to reduce repeated work.
-- Support system-tray behavior, Windows media controls, light/dark themes, English/Vietnamese UI, and a settings screen with cache and error-log tools.
+- Read media metadata and cache cover art/thumbnails to reduce repeated work. Cover art can be cropped in the app when it is edited.
+- Support system-tray behavior, Windows media controls, light/dark themes, English/Vietnamese UI, and a settings screen with cache and error-log tools. Destructive actions in Settings ask through an in-app confirmation dialog rather than the browser's confirm prompt.
 - Synchronize eligible Drive file metadata in the background so the local library can update without requiring a full app reload.
 
 ### Local file downloads
@@ -64,8 +70,10 @@ The library currently admits files based on an explicit filename-extension allow
 
 | Type | Extensions included in the library |
 |---|---|
-| Audio | `.mp3`, `.flac`, `.wav`, `.ogg`, `.m4a`, `.aac`, `.opus` |
-| Video | `.mkv`, `.mp4` |
+| Audio | `.mp3`, `.flac`, `.wav`, `.ogg`, `.m4a`, `.aac`, `.opus`, `.wma`, `.aif`, `.aiff`, `.oga`, `.m4b`, `.ape`, `.wv`, `.tak`, `.dsf`, `.dff` |
+| Video | `.mkv`, `.mp4`, `.webm`, `.m4v`, `.mov`, `.avi`, `.wmv`, `.flv`, `.mpeg`, `.mpg`, `.ogv`, `.3gp`, `.vob`, `.asf`, `.ts` |
+
+The list above is the allowlist in `src/utils/audioQuery.ts` (`PLAYABLE_AUDIO_EXTENSIONS` / `PLAYABLE_VIDEO_EXTENSIONS`).
 
 This is the set DrPlay currently indexes as playable media, not a guarantee that every codec/profile inside every file will play on every machine. Actual playback also depends on the bundled mpv/libmpv build, the selected audio/video output path, available hardware decoding, and the Windows environment. A format that mpv could decode in principle may still be excluded from the library until it is explicitly supported by the app's media-type rules and tested through the full streaming path.
 
@@ -90,6 +98,8 @@ React + TypeScript UI
 There are two distinct media-data paths in the codebase; they should not be treated as one shared cache:
 
 1. **Native playback path:** the default Windows engine is in-process `libmpv`. It requests media from a local Rust HTTP proxy bound to `127.0.0.1` on an ephemeral port. The proxy sends authenticated requests to Google Drive, forwards byte-range requests and response headers, handles redirects deliberately, and bounds stalled network requests. A standalone `mpv.exe` sidecar is retained as a fallback.
+
+   When switching from an audio track to a video track, the app selects the video track with `vid=auto` and watches `vo-configured` to confirm a video output is live. If the sound is playing but no picture has appeared after about 5 seconds, it reloads the video once automatically; if that also fails, it reports a video-output error instead of leaving a black screen indefinitely. The rendered first frame is held briefly (up to 2 seconds) rather than discarded while the video surface is not yet ready to present it.
 2. **Service-worker path:** `/drive-stream/{fileId}` fetches media from Google Drive for browser-side media/range and metadata workflows. It includes a persistent IndexedDB byte cache and a best-effort next-track prefetch mechanism. This cache does not automatically warm the native mpv proxy's separate playback path.
 
 ### Local library mirror and sync
@@ -159,7 +169,7 @@ Clearing DrPlay caches should not be confused with deleting files from Google Dr
 - **Codec/container allowlist:** the UI/library only indexes the extensions listed under [Supported media](#supported-media), even if the bundled engine can decode other formats.
 - **Offline playback:** browsing cached metadata may still be possible, but streaming requires network access to Google Drive. Only files explicitly downloaded to the local download path are available as standalone local copies.
 - **Runtime and build environment:** Windows builds bundle a pinned WebView2 Fixed Version Runtime and mpv/libmpv artifacts. These must be refreshed and verified as part of releases. The mpv source removes old upstream release tags periodically; the fetch script can fall back to the latest release with a warning when the pinned tag disappears, which means such a fallback build is integrity-checked but not fully reproducible from a fixed upstream engine tag.
-- **Test claims:** tests exist in both frontend and Rust code. The current GitHub Actions workflow builds the Windows installer but does not itself run the full test/lint suite. Run the relevant commands locally rather than inferring test status from a successful installer build.
+- **Test claims:** tests exist in both frontend and Rust code. The GitHub Actions workflow runs the frontend test suite (`npm test`), lint, and the frontend build on every push and pull request to `main`, and the Windows installer build runs only after those checks pass. It does not run `prettier --check`, `i18n:check`, or the Rust test suite — run those commands locally rather than inferring their status from a successful installer build.
 
 ## Install and development setup
 
@@ -213,6 +223,8 @@ npm run fetch-webview2
 
 `npm run fetch-mpv` is the production path: it downloads only `libmpv-2.dll`, the in-process playback engine, because `bundle.externalBin` is empty and the MSI does **not** include `mpv.exe`. Users install the external mpv player on demand from Settings.
 
+The fallback engine is optional and downloadable from Settings → Playback → Fallback engine; it can be removed again from the same place. It is not bundled with the MSI.
+
 Development and integration flows that still exercise the sidecar path need the `mpv.exe` binary as well:
 
 ```powershell
@@ -253,27 +265,45 @@ npm run i18n:check
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Run Rust/build commands in the supported Windows environment with the required OAuth build input and native dependencies available. Some tests may be platform-specific. A passing unit-test suite does not replace real-account OAuth testing, runtime network testing, or playback verification on representative hardware.
+As measured on 2026-11-15, the frontend suite has over 4,000 Vitest tests across about 240 test files. Rust tests exist (including render-pipeline tests for the audio-to-video transition), but they are not run in CI — run them on a Windows machine with Cargo and the native playback dependencies available. Some tests may be platform-specific. A passing unit-test suite does not replace real-account OAuth testing, runtime network testing, or playback verification on representative hardware.
 
 ## Project layout
 
 ```text
 src/
-  ui/                 React screens and components
+  ui/                 React screens and components (HomeTab, LikedSongs,
+                      Playlist, PipWindow, Settings, Sidebar, Login,
+                      PlayerBar, MainContent, NowPlaying, layouts,
+                      components, debug; TrashGate at the ui/ root)
+  player/             Player commands, video menu, first-frame signal,
+                      fullscreen and auto-hide-cursor behavior
+  search/             Global/recursive search engine and worker
   hooks/              Auth, Drive navigation, player, sync, and UI hooks
   store/              Shared application/player state
+  lib/                mpvAudio, mpvControl, playback watchdog machines,
+                      picture-in-picture helpers
   utils/              Drive API, tokens, metadata, media queries, cache, errors
   workers/             Full/delta sync and background worker logic
   db/                 IndexedDB/Dexie schemas and persistence helpers
+  data/               Static app data (greetings)
+  locales/en, vi/     English and Vietnamese UI strings
 public/
   sw.js                Service-worker media/range proxy and byte cache
 src-tauri/
   src/auth.rs          Google OAuth flow
   src/token_store.rs   OS credential-vault integration
   src/stream_proxy/    Localhost Drive streaming proxy
-  src/player/          In-process libmpv engine and rendering pipeline
-  src/mpv/             mpv.exe fallback, IPC, process lifecycle, Job Object
+  src/player/          In-process libmpv engine (engine/) and rendering
+                       pipeline (render/); video surface and events
+  src/mpv/             mpv.exe fallback, IPC, process lifecycle, Job Object,
+                       video lifecycle
   src/protocol/        Custom app protocol and cover handling
+  src/pip_window.rs    Native picture-in-picture window
+  src/tray.rs          System-tray behavior
+  src/media_controls.rs  Windows media controls
+  src/thumbnail.rs    Thumbnail generation
+  src/context_menu.rs  Native context menu
+  src/video_host.rs    Native video host window
   tauri.conf.json      Window, CSP, bundled runtime and resources
 scripts/               Windows mpv/WebView2 artifact fetch scripts
 docs/                  Screenshots referenced by this README
@@ -291,4 +321,4 @@ Issues and pull requests are welcome. Before submitting a change:
 
 ## License
 
-No `LICENSE` file is currently included in this repository. Until the owner adds a license, do not assume that public availability grants permission to redistribute or reuse the code.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
