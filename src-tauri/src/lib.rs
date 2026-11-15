@@ -166,13 +166,16 @@ fn apply_window_activity_for_window(window: &tauri::Window, event: WindowActivit
 const LOG_MAX_FILE_SIZE_BYTES: u128 = 5 * 1024 * 1024;
 
 /// Default log level; overridable at runtime via `DRPLAY_LOG_LEVEL` (an
-/// invalid value falls back to Info). Before R05-6 the app had no logger at
-/// all, so every `log::*` call site was silently dropped.
+/// invalid value falls back to Warn). INFO records (engine startup, surface
+/// changes, stream-proxy binds, ...) are hidden by default so the log file
+/// and terminal only show warnings and errors; set `DRPLAY_LOG_LEVEL=info`
+/// (or `debug`/`trace`) to bring them back when debugging. Before R05-6 the
+/// app had no logger at all, so every `log::*` call site was silently dropped.
 fn log_level_from_env() -> log::LevelFilter {
     std::env::var("DRPLAY_LOG_LEVEL")
         .ok()
         .and_then(|raw| raw.parse().ok())
-        .unwrap_or(log::LevelFilter::Info)
+        .unwrap_or(log::LevelFilter::Warn)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
