@@ -121,8 +121,13 @@ export function MoreMenu({
     setDownloadFileName,
     downloadMessage,
     setDownloadMessage,
+    downloadProgress,
+    downloadPaused,
     handleDownloadClick,
     executeDownload,
+    cancelDownload,
+    pauseDownload,
+    resumeDownload,
   } = useMenuDownload(t);
 
   const {
@@ -311,6 +316,17 @@ export function MoreMenu({
           }}
           onConfirm={() => {
             void executeDownload();
+          }}
+          downloadProgress={downloadProgress}
+          downloadPaused={downloadPaused}
+          onCancelDownload={() => {
+            void cancelDownload();
+          }}
+          onPauseDownload={() => {
+            void pauseDownload();
+          }}
+          onResumeDownload={() => {
+            void resumeDownload();
           }}
           t={t}
         />,

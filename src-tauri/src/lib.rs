@@ -30,6 +30,7 @@ mod pip_window;
 mod pip_window_aspect;
 mod stream_proxy;
 mod path_scope;
+mod file_download;
 // Optional downloadable mpv.exe fallback (S1 slice): the self-contained
 // download/verify/extract/install service plus its two IPC commands. Engine
 // SELECTION is not here -- `player::engine_state()` is only read.
@@ -317,6 +318,11 @@ pub fn run() {
             login_google_native,
             refresh_google_token,
             register_download_path,
+            file_download::start_file_download,
+            file_download::pause_file_download,
+            file_download::resume_file_download,
+            file_download::cancel_file_download,
+            file_download::file_download_free_space,
             update_minimize_to_tray,
             set_tray_labels,
             clear_local_cache,

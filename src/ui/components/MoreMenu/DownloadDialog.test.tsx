@@ -109,3 +109,130 @@ describe("DownloadDialog dialog semantics + focus (P2-09b-5/-6/-7)", () => {
     invoker.remove();
   });
 });
+
+describe("DownloadDialog progress (streaming download)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function progressProps(
+    over: Partial<Parameters<typeof DownloadDialog>[0]> = {},
+  ) {
+    return baseProps({
+      isDownloadingFile: true,
+      downloadProgress: {
+        downloaded: 512,
+        total: 1024,
+        percent: 50,
+        speedBytesPerSec: 256,
+        stage: "downloading",
+        paused: false,
+      },
+      onCancelDownload: vi.fn(),
+      onPauseDownload: vi.fn(),
+      onResumeDownload: vi.fn(),
+      ...over,
+    });
+  }
+
+  it("shows the percent and downloaded/total while downloading", () => {
+    render(<DownloadDialog {...progressProps()} />);
+
+    expect(screen.getByText("50%")).toBeInTheDocument();
+    // 512 B / 1 KB via formatBytes, plus the speed in the same line.
+    expect(screen.getByText("512 B / 1 KB · 256 B/s")).toBeInTheDocument();
+  });
+
+  it("shows the transfer speed while downloading", () => {
+    render(<DownloadDialog {...progressProps()} />);
+
+    expect(screen.getByText("512 B / 1 KB · 256 B/s")).toBeInTheDocument();
+  });
+
+  it("shows only the downloaded bytes when the total is unknown", () => {
+    render(
+      <DownloadDialog
+        {...progressProps({
+          downloadProgress: {
+            downloaded: 512,
+            total: undefined,
+            percent: undefined,
+            speedBytesPerSec: undefined,
+            stage: "downloading",
+            paused: false,
+          },
+        })}
+      />,
+    );
+
+    // Percent unknown: both the header (no percent) and the footer show
+    // the downloaded bytes only — two "512 B" texts, no "%" anywhere.
+    expect(screen.getAllByText("512 B")).toHaveLength(2);
+    expect(screen.queryByText(/%/)).toBeNull();
+  });
+
+  it("shows the verifying stage instead of the percent", () => {
+    render(
+      <DownloadDialog
+        {...progressProps({
+          downloadProgress: {
+            downloaded: 1024,
+            total: 1024,
+            percent: 100,
+            speedBytesPerSec: undefined,
+            stage: "verifying",
+            paused: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("menu.download_verifying")).toBeInTheDocument();
+  });
+
+  it("Pause calls onPauseDownload, Cancel calls onCancelDownload", () => {
+    const onPauseDownload = vi.fn();
+    const onCancelDownload = vi.fn();
+    render(
+      <DownloadDialog
+        {...progressProps({ onPauseDownload, onCancelDownload })}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("menu.download_pause"));
+    expect(onPauseDownload).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("menu.cancel"));
+    expect(onCancelDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows Resume (not Pause) while paused and calls onResumeDownload", () => {
+    const onResumeDownload = vi.fn();
+    render(
+      <DownloadDialog
+        {...progressProps({
+          downloadPaused: true,
+          downloadProgress: {
+            downloaded: 512,
+            total: 1024,
+            percent: 50,
+            speedBytesPerSec: undefined,
+            stage: "downloading",
+            paused: true,
+          },
+          onResumeDownload,
+        })}
+      />,
+    );
+
+    expect(screen.getByText("menu.download_paused")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("menu.download_resume"));
+    expect(onResumeDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not show a progress bar before the download starts", () => {
+    render(<DownloadDialog {...baseProps()} />);
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});

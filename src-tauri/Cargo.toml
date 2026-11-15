@@ -73,6 +73,8 @@ bytes = "1.6.0"
 # without `default` (which would drag in aes256/bzip2/ppmd) keeps the graph
 # minimal -- those codecs are neither written nor read by this feature.
 sevenz-rust2 = { version = "0.24", default-features = false }
+md-5 = "0.10"
+libc = "0.2"
 
 [dev-dependencies]
 sevenz-rust2 = { version = "0.24", default-features = false, features = ["compress"] }

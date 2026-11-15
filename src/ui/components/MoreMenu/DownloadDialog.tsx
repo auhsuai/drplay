@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
-import { X, Download, LoaderCircle } from "lucide-react";
+import { X, Download, Pause, Play } from "lucide-react";
+import { formatBytes } from "../../../utils/formatBytes";
+import type { DownloadProgressState } from "../../../utils/fileDownload";
 
 interface DownloadDialogProps {
   show: boolean;
@@ -9,6 +11,12 @@ interface DownloadDialogProps {
   onClose: () => void;
   onConfirm: () => void;
   t: import("i18next").TFunction;
+  /** Live progress while a download runs; `null` before it starts. */
+  downloadProgress?: DownloadProgressState | null;
+  downloadPaused?: boolean;
+  onCancelDownload?: () => void;
+  onPauseDownload?: () => void;
+  onResumeDownload?: () => void;
 }
 
 export function DownloadDialog({
@@ -19,6 +27,11 @@ export function DownloadDialog({
   onClose,
   onConfirm,
   t,
+  downloadProgress = null,
+  downloadPaused = false,
+  onCancelDownload,
+  onPauseDownload,
+  onResumeDownload,
 }: DownloadDialogProps) {
   // Focus the file-name field when the dialog opens (replaces the autoFocus
   // prop, which jsx-a11y/no-autofocus rejects), and remember the invoker so
@@ -120,32 +133,102 @@ export function DownloadDialog({
           />
         </div>
 
+        {isDownloadingFile && downloadProgress && (
+          <div
+            className="flex flex-col gap-2"
+            role="status"
+            aria-label={t("menu.downloading")}
+          >
+            <div className="flex items-center justify-between text-sm text-gray-700 dark:text-gray-300">
+              <span>
+                {downloadProgress.stage === "verifying"
+                  ? t("menu.download_verifying")
+                  : downloadPaused
+                    ? t("menu.download_paused")
+                    : t("menu.downloading")}
+              </span>
+              <span>
+                {downloadProgress.percent !== undefined
+                  ? `${String(downloadProgress.percent)}%`
+                  : formatBytes(downloadProgress.downloaded)}
+              </span>
+            </div>
+            <div className="w-full h-2 rounded-full bg-gray-200 dark:bg-[#2c2d32] overflow-hidden">
+              <div
+                className="h-full bg-brand-primary rounded-full transition-all duration-200"
+                style={{
+                  width:
+                    downloadProgress.percent !== undefined
+                      ? `${String(downloadProgress.percent)}%`
+                      : "100%",
+                }}
+              />
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400">
+              {downloadProgress.total !== undefined
+                ? `${formatBytes(downloadProgress.downloaded)} / ${formatBytes(downloadProgress.total)}`
+                : formatBytes(downloadProgress.downloaded)}
+              {downloadProgress.speedBytesPerSec !== undefined &&
+                downloadProgress.stage === "downloading" &&
+                !downloadPaused &&
+                ` · ${formatBytes(downloadProgress.speedBytesPerSec)}/s`}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-end gap-3 mt-2">
-          <button
-            onClick={() => {
-              onClose();
-            }}
-            disabled={isDownloadingFile}
-            className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors disabled:opacity-50"
-          >
-            {t("menu.cancel")}
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={isDownloadingFile || !downloadFileName.trim()}
-            className="px-5 py-2.5 text-sm font-medium text-white bg-brand-primary hover:bg-blue-600 rounded-xl shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2 disabled:opacity-50"
-          >
-            {isDownloadingFile ? (
-              <LoaderCircle className="w-4 h-4 animate-spin" />
-            ) : (
-              <Download className="w-4 h-4" />
-            )}
-            <span>
-              {isDownloadingFile
-                ? t("menu.downloading")
-                : t("menu.confirm_download")}
-            </span>
-          </button>
+          {isDownloadingFile ? (
+            <>
+              <button
+                onClick={() => {
+                  if (downloadPaused) {
+                    onResumeDownload?.();
+                  } else {
+                    onPauseDownload?.();
+                  }
+                }}
+                className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors flex items-center gap-2"
+              >
+                {downloadPaused ? (
+                  <Play className="w-4 h-4" />
+                ) : (
+                  <Pause className="w-4 h-4" />
+                )}
+                <span>
+                  {downloadPaused
+                    ? t("menu.download_resume")
+                    : t("menu.download_pause")}
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  onCancelDownload?.();
+                }}
+                className="px-5 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl shadow-md shadow-red-500/20 transition-all"
+              >
+                {t("menu.cancel")}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => {
+                  onClose();
+                }}
+                className="px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#2a2b2f] rounded-xl transition-colors"
+              >
+                {t("menu.cancel")}
+              </button>
+              <button
+                onClick={onConfirm}
+                disabled={!downloadFileName.trim()}
+                className="px-5 py-2.5 text-sm font-medium text-white bg-brand-primary hover:bg-blue-600 rounded-xl shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                <span>{t("menu.confirm_download")}</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

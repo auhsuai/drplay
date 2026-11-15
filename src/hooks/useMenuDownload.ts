@@ -1,44 +1,46 @@
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { join } from "@tauri-apps/api/path";
 import { getValidToken } from "../utils/apiClient";
 import {
   getEffectiveDownloadPath,
   getCustomDownloadPath,
 } from "../utils/downloadPath";
-import { mergeWithTimeoutSignal } from "../utils/driveApi";
-import { authHeaders, DRIVE_FILES_URL } from "../utils/driveFiles";
+import { sanitizeFilename } from "../utils/sanitizeFilename";
+import {
+  classifyDownloadError,
+  downloadErrorMessage,
+  fetchMetadataBestEffort,
+  toDownloadProgressState,
+  type DownloadProgressState,
+  type FileDownloadProgressEvent,
+} from "../utils/fileDownload";
 import { captureError } from "../utils/errorLog";
-import { isAbortError } from "./player/utils";
 import type { Track } from "../types";
 import type { TFunction } from "i18next";
 
-// The download buffers the ENTIRE file into RAM via arrayBuffer(), so an
-// unresponsive server would hold the bytes (and memory) forever. 5 minutes is
-// generous for legit multi-hundred-MB audio files yet still bounds the
-// pathological case. AbortSignal.timeout rejects with a DOMException named
-// 'TimeoutError' (MDN AbortSignal.timeout, Baseline 2024). Same pattern as
-// fetchWithAuth / useDrive.ts.
-const DOWNLOAD_TIMEOUT_MS = 300_000;
+// Streaming download, Rust-first: the bytes never pass through the
+// WebView. The Rust command (`start_file_download`) streams the Drive file
+// into `<dest>.part`, resumes it with HTTP Range, verifies size + MD5, and
+// renames it into place; progress arrives over a Tauri Channel. The old
+// frontend `fetch` + `arrayBuffer()` path buffered the ENTIRE file in RAM
+// and is deliberately gone — do not reintroduce it for "simplicity".
 
-// Windows forbids these characters in file names; also guard against DOS
-// device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) and trailing dots/spaces.
-// Copied verbatim from the removed GlobalContextMenu.tsx (the last known-good
-// download implementation) so the written name matches what worked before.
-// \p{Cc} matches Unicode control characters (incl. C0 \x00-\x1F plus the C1
-// range \x7F-\x9F) — slightly wider than the old literal class, but avoids
-// eslint no-control-regex (control chars cannot be written in a regex literal)
-// and is strictly safer for Windows file names.
-const sanitizeFilename = (
-  name: string,
-  fallbackName: string = "untitled",
-): string => {
-  let s = name.replace(/[/\\<>:"|?*\p{Cc}]/gu, "_");
-  s = s.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i, "_$1$2");
-  s = s.replace(/[\s.]+$/g, "");
-  s = s.slice(0, 255);
-  return s || fallbackName;
+export type FileDownloadResult = {
+  path: string;
+  size: number;
+  resumed: boolean;
 };
+
+function newDownloadId(): string {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  return `dl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 export function useMenuDownload(t: TFunction) {
   const [isDownloadingFile, setIsDownloadingFile] = useState(false);
@@ -46,19 +48,28 @@ export function useMenuDownload(t: TFunction) {
   const [downloadFileName, setDownloadFileName] = useState("");
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadTrack, setDownloadTrack] = useState<Track | null>(null);
+  const [downloadProgress, setDownloadProgress] =
+    useState<DownloadProgressState | null>(null);
+  const [downloadPaused, setDownloadPaused] = useState(false);
 
-  // Abort the in-flight download when the component unmounts (or a newer
-  // download supersedes it). Without a signal the fetch and its RAM-buffered
-  // bytes survive the component and keep consuming memory.
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // The id of the in-flight download: what pause/resume/cancel address.
+  // Minted fresh per download (never reused), so a stale cancel for a
+  // previous download can never touch the current one.
+  const downloadIdRef = useRef<string | null>(null);
   // Sync busy-guard for executeDownload: state updates land only after
   // re-render, so two clicks in the same tick both read isDownloadingFile
-  // as false and would start two download_file invocations for one file.
+  // as false and would start two downloads for one file.
   const isDownloadingRef = useRef(false);
 
+  // Cancel the in-flight download when the component unmounts: the Rust
+  // worker keeps the `.part` file, so a later download resumes it instead
+  // of restarting.
   useEffect(() => {
     return () => {
-      abortControllerRef.current?.abort();
+      const id = downloadIdRef.current;
+      if (id) {
+        void invoke("cancel_file_download", { downloadId: id }).catch(() => {});
+      }
     };
   }, []);
 
@@ -84,8 +95,54 @@ export function useMenuDownload(t: TFunction) {
     setDownloadFileName(
       `${track.title} - ${track.artist || t("common.unknown")}`,
     );
+    setDownloadProgress(null);
+    setDownloadPaused(false);
     setShowDownloadDialog(true);
     setIsOpen(false);
+  };
+
+  const cancelDownload = async () => {
+    const id = downloadIdRef.current;
+    if (!id) return;
+    try {
+      await invoke("cancel_file_download", { downloadId: id });
+    } catch (err: unknown) {
+      void captureError({
+        level: "warn",
+        source: "useMenuDownload",
+        message: `Cancel download failed: ${String(err)}`,
+      });
+    }
+  };
+
+  const pauseDownload = async () => {
+    const id = downloadIdRef.current;
+    if (!id) return;
+    try {
+      await invoke("pause_file_download", { downloadId: id });
+      setDownloadPaused(true);
+    } catch (err: unknown) {
+      void captureError({
+        level: "warn",
+        source: "useMenuDownload",
+        message: `Pause download failed: ${String(err)}`,
+      });
+    }
+  };
+
+  const resumeDownload = async () => {
+    const id = downloadIdRef.current;
+    if (!id) return;
+    try {
+      await invoke("resume_file_download", { downloadId: id });
+      setDownloadPaused(false);
+    } catch (err: unknown) {
+      void captureError({
+        level: "warn",
+        source: "useMenuDownload",
+        message: `Resume download failed: ${String(err)}`,
+      });
+    }
   };
 
   const executeDownload = async () => {
@@ -97,42 +154,27 @@ export function useMenuDownload(t: TFunction) {
     if (isDownloadingRef.current || isDownloadingFile || !downloadTrack) return;
     isDownloadingRef.current = true;
     setIsDownloadingFile(true);
-    setShowDownloadDialog(false);
+    // The dialog STAYS open while the download runs: it is the progress
+    // surface (percent, speed, Pause/Cancel). It closes in `finally`,
+    // once the download settles and the toast takes over.
+    setDownloadProgress(null);
+    setDownloadPaused(false);
 
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    // Merge the cancel signal with a bounded timeout so a stalled server
-    // cannot hold the RAM-buffered bytes forever (MDN AbortSignal.any /
-    // AbortSignal.timeout; same pattern as useDrive.ts:72).
-    const signal = mergeWithTimeoutSignal(
-      controller.signal,
-      DOWNLOAD_TIMEOUT_MS,
-    );
+    const track = downloadTrack;
+    const downloadId = newDownloadId();
+    downloadIdRef.current = downloadId;
 
     try {
-      const freshToken = await getValidToken(false, signal);
-      if (!freshToken) throw new Error("No valid token");
+      const freshToken = await getValidToken(false);
+      if (!freshToken) throw new Error("unauthorized: no valid token");
 
-      const downloadUrl = `${DRIVE_FILES_URL}/${downloadTrack.id}?alt=media`;
-      const response = await fetch(downloadUrl, {
-        headers: authHeaders(freshToken),
-        signal,
-      });
-
-      if (!response.ok)
-        throw new Error(`Fetch failed: HTTP ${String(response.status)}`);
-
-      const bytes = new Uint8Array(await response.arrayBuffer());
       const dir = await getEffectiveDownloadPath();
       if (getCustomDownloadPath()) {
         try {
-          // Extend the fs scope so write_file may write outside the base
-          // $DOWNLOAD scope (runtime scope extension, tauri_plugin_fs::FsExt).
-          // If this fails the write itself rejects with a scope error — do
-          // not block the main flow here, let write_file surface it.
+          // Extend the fs scope so the Rust command may write outside the
+          // base $DOWNLOAD scope (runtime scope extension, tauri_plugin_fs::FsExt).
+          // If this fails the start command itself rejects with a scope
+          // error — do not block the main flow here, let it surface there.
           await invoke("register_download_path", { path: dir });
         } catch (scopeErr: unknown) {
           void captureError({
@@ -142,11 +184,37 @@ export function useMenuDownload(t: TFunction) {
           });
         }
       }
+
+      // Metadata for the Rust gates: the size feeds the pre-flight
+      // free-space check and the progress total, the MD5 feeds the
+      // verification gate. Best-effort: a transient metadata failure does
+      // not block the download (the command falls back to Content-Length),
+      // but a 404/410 means the file is gone and the download is refused
+      // here, before any byte moves.
+      const { metadata, fileGone } = await fetchMetadataBestEffort(track.id);
+      if (fileGone)
+        throw new Error("file_missing: the file is no longer on Drive");
+      const expectedSize = metadata.size ?? track.size;
+
+      // Pre-flight free-space check: refuse a download that cannot fit
+      // instead of failing halfway through a multi-GB transfer. The Rust
+      // command re-checks the same value itself, so a race between this
+      // check and the start can only make the warning stale, never the
+      // download wrong.
+      if (expectedSize !== undefined) {
+        const free = await invoke<number | null>("file_download_free_space", {
+          dir,
+        }).catch(() => null);
+        if (free !== null && free < expectedSize) {
+          throw new Error(
+            "insufficient_space: not enough free space on the destination drive",
+          );
+        }
+      }
+
       const base = downloadFileName.trim() || "audio";
-      const ext = downloadTrack.originalName?.includes(".")
-        ? downloadTrack.originalName.slice(
-            downloadTrack.originalName.lastIndexOf("."),
-          )
+      const ext = track.originalName?.includes(".")
+        ? track.originalName.slice(track.originalName.lastIndexOf("."))
         : ".mp3";
       const finalFileName = sanitizeFilename(
         `${base}${ext}`,
@@ -156,57 +224,46 @@ export function useMenuDownload(t: TFunction) {
       // POSIX build no longer writes a literal backslash into the file name.
       const savePath = await join(dir, finalFileName);
 
-      // tauri-plugin-fs v2: write_file reads the target path from a request
-      // header and takes the bytes as the raw invoke body. Passing the
-      // Uint8Array as the top-level arg keeps the IPC on the octet-stream
-      // path (no Array.from / JSON number-array, ~8x the file size in peak
-      // memory). See plugin-fs guest-js writeFile() for the identical shape.
-      await invoke("plugin:fs|write_file", bytes, {
-        headers: { path: encodeURIComponent(savePath) },
+      // Progress arrives over a Tauri Channel: one invoke, many ordered
+      // events, no polling. The channel is created per download so a stale
+      // event from a previous download can never update this one.
+      const channel = new Channel<FileDownloadProgressEvent>((event) => {
+        const state = toDownloadProgressState(event);
+        setDownloadProgress(state);
+        setDownloadPaused(state.paused);
       });
 
-      setDownloadMessage(`${t("menu.saved_at")} ${savePath}`);
+      const result = await invoke<FileDownloadResult>("start_file_download", {
+        request: {
+          downloadId,
+          fileId: track.id,
+          destPath: savePath,
+          token: freshToken,
+          expectedSize: expectedSize ?? null,
+          md5: metadata.md5Checksum ?? null,
+        },
+        onProgress: channel,
+      });
+
+      setDownloadMessage(`${t("menu.saved_at")} ${result.path}`);
     } catch (err: unknown) {
-      // Duck-typed name extraction: DOMException is NOT instanceof Error in
-      // some environments (jsdom), yet carries a reliable .name. Still needed
-      // here for 'TimeoutError' (AbortSignal.timeout) and the failure log —
-      // the AbortError branch itself uses the shared isAbortError check.
-      const errName =
-        err &&
-        typeof err === "object" &&
-        typeof (err as { name?: unknown }).name === "string"
-          ? (err as { name: string }).name
-          : "";
-      if (isAbortError(err)) {
-        // Deliberate cancel (unmount / superseded download): the component may
-        // already be gone, so do NOT touch state — and do not surface a
-        // failure message for a user-initiated cancel. Log for visibility.
-        void captureError({
-          level: "warn",
-          source: "useMenuDownload",
-          message:
-            "Download aborted — download was cancelled (unmount or superseded)",
-        });
-        return;
-      }
-      if (errName === "TimeoutError") {
-        void captureError({
-          level: "error",
-          source: "useMenuDownload",
-          message: `Download timeout — no response within ${String(DOWNLOAD_TIMEOUT_MS)}ms`,
-        });
-        setDownloadMessage(t("menu.download_failed"));
-        return;
-      }
+      const kind = classifyDownloadError(err);
       void captureError({
         level: "error",
         source: "useMenuDownload",
-        message: `Download failed: ${String(err)}`,
+        message: `Download failed (${kind}): ${String(err)}`,
       });
-      setDownloadMessage(t("menu.download_failed"));
+      // A user-initiated cancel is silent by design; every other failure
+      // gets a specific message instead of the old single generic toast.
+      const message = downloadErrorMessage(kind, t);
+      if (message !== null) setDownloadMessage(message);
     } finally {
+      downloadIdRef.current = null;
       isDownloadingRef.current = false;
       setIsDownloadingFile(false);
+      setDownloadProgress(null);
+      setDownloadPaused(false);
+      setShowDownloadDialog(false);
     }
   };
 
@@ -218,7 +275,12 @@ export function useMenuDownload(t: TFunction) {
     setDownloadFileName,
     downloadMessage,
     setDownloadMessage,
+    downloadProgress,
+    downloadPaused,
     handleDownloadClick,
     executeDownload,
+    cancelDownload,
+    pauseDownload,
+    resumeDownload,
   };
 }
