@@ -36,6 +36,11 @@ interface DefaultMenuItemsProps {
   isBulkSelected?: boolean | undefined;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
+  /** Download the whole current selection. Only the explorer rows wire
+   * this; when it is present and this row is bulk-selected, Download
+   * downloads the selection instead of just this track — the same rule
+   * Move/Delete already follow. */
+  onBulkDownloadClick?: (() => void) | undefined;
   setShowMoveScreen: (value: boolean) => void;
   t: import("i18next").TFunction;
 }
@@ -54,6 +59,7 @@ export function DefaultMenuItems({
   isBulkSelected,
   onBulkMoveClick,
   onBulkDeleteClick,
+  onBulkDownloadClick,
   setShowMoveScreen,
   t,
 }: DefaultMenuItemsProps) {
@@ -138,6 +144,16 @@ export function DefaultMenuItems({
           icon={Download}
           label={t("menu.download")}
           onClick={(e) => {
+            // A bulk-selected row downloads the whole selection (same
+            // rule as Move/Delete); otherwise this is the single-file
+            // download with its rename dialog.
+            if (isBulkSelected && onBulkDownloadClick) {
+              e.stopPropagation();
+              setIsOpen(false);
+              onClose?.();
+              onBulkDownloadClick();
+              return;
+            }
             handleDownloadClick(e, track, setIsOpen);
             onClose?.();
           }}

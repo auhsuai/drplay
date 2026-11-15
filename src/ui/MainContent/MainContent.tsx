@@ -14,6 +14,8 @@ import { BulkDeleteConfirmModal } from "./components/BulkDeleteConfirmModal";
 import { NewFolderModal } from "./components/NewFolderModal";
 
 import { useDriveExplorer } from "../../hooks/useDriveExplorer";
+import { useBulkDownload } from "../../hooks/useBulkDownload";
+import { DownloadToast } from "../components/MoreMenu/DownloadToast";
 import type { SearchSort } from "../../hooks/useDriveSearch";
 import {
   useSkeletonRows,
@@ -206,6 +208,40 @@ export const MainContent = React.memo(function MainContent({
     setShowBulkDeleteConfirm(true);
   }, []);
 
+  // Selection-driven bulk download: the Download button in the selection
+  // toolbar (and ⋯ → Download on a bulk-selected row) downloads exactly
+  // the selected items — files as files, folders as whole trees. The hook
+  // lives here, not in a per-row menu, so the job survives row unmounts
+  // and folder navigation; its only feedback surface is the existing
+  // DownloadToast below.
+  //
+  // The click handler MUST be stable (useCallback []) and read the
+  // selection through a ref: SongCard's memo comparator deliberately
+  // ignores callback props, so a mounted card keeps the callback from its
+  // last render — closing over `explorer.selectedIds` directly would
+  // download a stale selection (same trap as handlePlay/playContextRef).
+  const bulkDownload = useBulkDownload(t);
+  const bulkSelectionRef = useRef({
+    filteredItems: explorer.filteredItems,
+    selectedIds: explorer.selectedIds,
+  });
+  useEffect(() => {
+    bulkSelectionRef.current = {
+      filteredItems: explorer.filteredItems,
+      selectedIds: explorer.selectedIds,
+    };
+  });
+  const bulkDownloadRef = useRef(bulkDownload);
+  useEffect(() => {
+    bulkDownloadRef.current = bulkDownload;
+  });
+  const handleBulkDownloadClick = useCallback(() => {
+    const { filteredItems, selectedIds } = bulkSelectionRef.current;
+    const items = filteredItems.filter((i) => selectedIds.has(i.id));
+    if (items.length === 0) return;
+    void bulkDownloadRef.current.handleBulkDownload(items);
+  }, []);
+
   // Search sort wiring (Phase B2): while a search is active the header's
   // sortOption/onSortChange route through the SEARCH sort model, never the
   // listing sortOption (B2-3 isolation). FileListHeader's native toggle
@@ -353,6 +389,11 @@ export const MainContent = React.memo(function MainContent({
           }}
           onBulkMoveClick={handleBulkMoveClick}
           onBulkDeleteClick={handleBulkDeleteClick}
+          onBulkDownloadClick={handleBulkDownloadClick}
+          onBulkDownloadCancel={() => {
+            void bulkDownload.cancelBulkDownload();
+          }}
+          isBulkDownloading={bulkDownload.isBulkDownloading}
         />
 
         {/* Trash-style sortable column header, living INSIDE the sticky
@@ -474,6 +515,7 @@ export const MainContent = React.memo(function MainContent({
               setIsSelectionMode={explorer.setIsSelectionMode}
               onBulkMoveClick={handleBulkMoveClick}
               onBulkDeleteClick={handleBulkDeleteClick}
+              onBulkDownloadClick={handleBulkDownloadClick}
               hideRowMenus={isVirtualRoot}
               hideRowColumns={isVirtualRoot}
             />
@@ -510,6 +552,12 @@ export const MainContent = React.memo(function MainContent({
         isOperating={explorer.isBulkOperating}
         selectedCount={explorer.selectedIds.size}
       />
+
+      {/* Bulk-download feedback reuses the single-file DownloadToast: one
+          line (progress, then the final counts), auto-dismissed after 5 s. */}
+      {bulkDownload.bulkMessage && (
+        <DownloadToast message={bulkDownload.bulkMessage} />
+      )}
 
       <NewFolderModal
         isOpen={showNewFolderModal}

@@ -156,3 +156,45 @@ export async function listFolderAudioFiles(
     signal,
   );
 }
+
+// List EVERY immediate child of a folder (files, subfolders, shortcuts) —
+// the folder-download scan needs the full tree, not just playable media.
+// `trashed=false` is explicit: files.list returns trashed items by default.
+// `shortcutDetails(targetId)` + `capabilities/canDownload` feed the scan's
+// shortcut resolution and no-download skip; `md5Checksum` feeds the Rust
+// verification gate for each downloaded file.
+export async function listFolderAllEntries(
+  token: string,
+  folderId: string,
+  signal?: AbortSignal,
+): Promise<DriveFileItem[]> {
+  return fetchAllPages<DriveFileItem>(
+    token,
+    `'${folderId}' in parents and trashed=false`,
+    "nextPageToken,files(id,name,mimeType,size,md5Checksum,shortcutDetails(targetId),capabilities/canDownload)",
+    "list folder entries",
+    signal,
+  );
+}
+
+// Fetch one file's metadata by id (files.get) — the folder-download scan
+// uses it to resolve a shortcut's targetId into a real file/folder record.
+// A 404/410 surfaces as a thrown error, which the caller treats as an
+// unresolvable shortcut (skip + report), never as a download attempt.
+export async function fetchDriveFileById(
+  token: string,
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<DriveFileItem> {
+  const url = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,md5Checksum,shortcutDetails(targetId),capabilities/canDownload`;
+  const response = await driveFetch(url, {
+    headers: authHeaders(token),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch file ${fileId} (${String(response.status)})`,
+    );
+  }
+  return (await response.json()) as DriveFileItem;
+}

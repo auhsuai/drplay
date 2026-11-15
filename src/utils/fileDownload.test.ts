@@ -49,6 +49,10 @@ describe("classifyDownloadError", () => {
       "already_in_progress: a download is already running",
       "already_in_progress",
     ],
+    [
+      "already_exists: a file already exists at the destination",
+      "already_exists",
+    ],
     ["something entirely different", "unknown"],
     ["", "unknown"],
   ] as const)("maps %j to %j", (message, expected) => {
@@ -74,6 +78,7 @@ describe("downloadErrorMessage", () => {
     ["checksum", "menu.download_failed_checksum"],
     ["size", "menu.download_failed_size"],
     ["save", "menu.download_failed_save"],
+    ["already_exists", "menu.download_failed_exists"],
     ["unknown", "menu.download_failed"],
   ] as const)("kind %j renders key %j", (kind, key) => {
     expect(downloadErrorMessage(kind, t)).toBe(key);
@@ -136,11 +141,38 @@ describe("fetchDriveFileMetadata", () => {
     } as unknown as Response);
 
     const meta = await fetchDriveFileMetadata("file-1");
-    expect(meta).toEqual({ size: 12345, md5Checksum: "abc123" });
+    expect(meta).toEqual({
+      size: 12345,
+      md5Checksum: "abc123",
+      mimeType: undefined,
+      canDownload: undefined,
+    });
     expect(mockedFetchWithAuth).toHaveBeenCalledWith(
-      expect.stringContaining("files/file-1?fields=size,md5Checksum"),
+      expect.stringContaining(
+        "files/file-1?fields=size,md5Checksum,mimeType,capabilities/canDownload",
+      ),
       expect.anything(),
     );
+  });
+
+  it("parses mimeType and canDownload when Drive sends them", async () => {
+    mockedFetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          size: "99",
+          mimeType: "application/pdf",
+          capabilities: { canDownload: false },
+        }),
+    } as unknown as Response);
+
+    const meta = await fetchDriveFileMetadata("file-1");
+    expect(meta).toEqual({
+      size: 99,
+      md5Checksum: undefined,
+      mimeType: "application/pdf",
+      canDownload: false,
+    });
   });
 
   it("tolerates a file without an md5 (Docs native, folders)", async () => {
@@ -150,7 +182,12 @@ describe("fetchDriveFileMetadata", () => {
     } as unknown as Response);
 
     const meta = await fetchDriveFileMetadata("file-1");
-    expect(meta).toEqual({ size: 10, md5Checksum: undefined });
+    expect(meta).toEqual({
+      size: 10,
+      md5Checksum: undefined,
+      mimeType: undefined,
+      canDownload: undefined,
+    });
   });
 
   it("throws with the status on a non-OK response", async () => {

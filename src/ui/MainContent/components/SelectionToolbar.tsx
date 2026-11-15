@@ -4,6 +4,7 @@ import {
   FolderOutput,
   Trash2,
   LoaderCircle,
+  Download,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -15,6 +16,11 @@ interface SelectionToolbarProps {
   onToggleSelectAll: () => void;
   onBulkMoveClick: () => void;
   onBulkDeleteClick: () => void;
+  /** Download exactly what is selected (files and/or folders). */
+  onBulkDownloadClick: () => void;
+  /** While a bulk download runs, the same button cancels it. */
+  onBulkDownloadCancel: () => void;
+  isBulkDownloading: boolean;
 }
 
 export function SelectionToolbar({
@@ -25,6 +31,9 @@ export function SelectionToolbar({
   onToggleSelectAll,
   onBulkMoveClick,
   onBulkDeleteClick,
+  onBulkDownloadClick,
+  onBulkDownloadCancel,
+  isBulkDownloading,
 }: SelectionToolbarProps) {
   const { t } = useTranslation();
 
@@ -53,6 +62,22 @@ export function SelectionToolbar({
       >
         <FolderOutput className="w-4 h-4" />
         <span className="hidden sm:inline">{t("drive.bulk_move")}</span>
+      </button>
+
+      <button
+        onClick={isBulkDownloading ? onBulkDownloadCancel : onBulkDownloadClick}
+        aria-label={t("menu.download")}
+        disabled={selectedCount === 0 && !isBulkDownloading}
+        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1a1b1e] hover:bg-gray-50 dark:hover:bg-[#25262a] rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {isBulkDownloading ? (
+          <LoaderCircle className="w-4 h-4 animate-spin" />
+        ) : (
+          <Download className="w-4 h-4" />
+        )}
+        <span className="hidden sm:inline">
+          {isBulkDownloading ? t("menu.cancel") : t("menu.download")}
+        </span>
       </button>
 
       <button

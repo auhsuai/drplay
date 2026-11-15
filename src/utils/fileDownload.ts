@@ -67,6 +67,9 @@ export function toDownloadProgressState(
 export type DriveFileMetadata = {
   size?: number | undefined;
   md5Checksum?: string | undefined;
+  mimeType?: string | undefined;
+  /** `false` when Drive says this account may not download the file. */
+  canDownload?: boolean | undefined;
 };
 
 export class FileMetadataError extends Error {
@@ -87,7 +90,7 @@ export async function fetchDriveFileMetadata(
   fileId: string,
   signal?: AbortSignal,
 ): Promise<DriveFileMetadata> {
-  const url = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=size,md5Checksum`;
+  const url = `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=size,md5Checksum,mimeType,capabilities/canDownload`;
   const response = await fetchWithAuth(url, signal ? { signal } : {});
   if (!response.ok) {
     throw new FileMetadataError(
@@ -108,16 +111,33 @@ export async function fetchDriveFileMetadata(
       "Failed to read file metadata (invalid response)",
     );
   }
-  const item = data as { size?: unknown; md5Checksum?: unknown };
+  const item = data as {
+    size?: unknown;
+    md5Checksum?: unknown;
+    mimeType?: unknown;
+    capabilities?: unknown;
+  };
   const size =
     typeof item.size === "string" && item.size !== ""
       ? Number.parseInt(item.size, 10)
+      : undefined;
+  const capabilities =
+    typeof item.capabilities === "object" && item.capabilities !== null
+      ? (item.capabilities as { canDownload?: unknown })
       : undefined;
   return {
     size: size !== undefined && Number.isFinite(size) ? size : undefined,
     md5Checksum:
       typeof item.md5Checksum === "string" && item.md5Checksum !== ""
         ? item.md5Checksum
+        : undefined,
+    mimeType:
+      typeof item.mimeType === "string" && item.mimeType !== ""
+        ? item.mimeType
+        : undefined,
+    canDownload:
+      typeof capabilities?.canDownload === "boolean"
+        ? capabilities.canDownload
         : undefined,
   };
 }
@@ -138,6 +158,7 @@ export type DownloadErrorKind =
   | "save"
   | "cancelled"
   | "already_in_progress"
+  | "already_exists"
   | "unknown";
 
 export function classifyDownloadError(message: unknown): DownloadErrorKind {
@@ -178,6 +199,8 @@ export function classifyDownloadError(message: unknown): DownloadErrorKind {
       return "cancelled";
     case "already_in_progress":
       return "already_in_progress";
+    case "already_exists":
+      return "already_exists";
     default:
       return "unknown";
   }
@@ -212,6 +235,8 @@ export function downloadErrorMessage(
       return t("menu.download_failed_save");
     case "already_in_progress":
       return t("menu.download_failed");
+    case "already_exists":
+      return t("menu.download_failed_exists");
     case "cancelled":
       return null;
     case "unknown":

@@ -49,6 +49,10 @@ export interface MoreMenuProps {
   isBulkSelected?: boolean | undefined;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
+  /** Download the whole current selection (files and/or folders). Wired
+   * only by the explorer rows; everywhere else the per-row Download
+   * (single file) is the only download action. */
+  onBulkDownloadClick?: (() => void) | undefined;
   onRemoveFromQueue?: (() => void) | undefined;
   disableRemoveFromQueue?: boolean | undefined;
   onRemoveFolderFromQueue?: (() => void) | undefined;
@@ -86,6 +90,7 @@ export function MoreMenu({
   isBulkSelected,
   onBulkMoveClick,
   onBulkDeleteClick,
+  onBulkDownloadClick,
   onRemoveFromQueue,
   disableRemoveFromQueue,
   onRemoveFolderFromQueue,
@@ -237,6 +242,7 @@ export function MoreMenu({
         onToggleQueue,
         onBulkMoveClick,
         onBulkDeleteClick,
+        onBulkDownloadClick,
         setShowMoveScreen,
       }}
       flags={{

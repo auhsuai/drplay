@@ -40,8 +40,11 @@
 //!   MD5 is available the size gate is the only check, and that is reported
 //!   honestly (no fabricated checksum).
 //!
-//! Out of scope for this step (deliberately): folder downloads, multi-file
-//! queues, speed limiting, Google Docs export, Drive shortcuts.
+//! Out of scope for this step (deliberately): multi-file queues, speed
+//! limiting, Google Docs export, Drive shortcuts. Folder downloads (Step 2)
+//! reuse this module per file and only add `ensure_download_directory`
+//! below, which creates the destination tree with the same `create_dir_all`
+//! the single-file path already uses.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -203,6 +206,13 @@ pub enum FileDownloadError {
     AlreadyInProgress,
     /// The destination path is unusable (empty name, parent not a directory).
     InvalidPath { detail: String },
+    /// The destination already holds a file that is NOT the complete
+    /// expected download (wrong size, or no expected size to compare
+    /// against). The bulk-download flow treats this as a per-file failure
+    /// instead of silently overwriting the user's file: `std::fs::rename`
+    /// on Windows refuses to replace an existing file anyway, so
+    /// downloading first and failing at publish would waste the transfer.
+    AlreadyExists { detail: String },
     /// Not enough free space on the destination volume.
     InsufficientSpace { needed: u64, available: u64 },
     /// The finished byte count differs from the expected size.
@@ -229,6 +239,7 @@ impl FileDownloadError {
             Self::Cancelled => "cancelled",
             Self::AlreadyInProgress => "already_in_progress",
             Self::InvalidPath { .. } => "invalid_path",
+            Self::AlreadyExists { .. } => "already_exists",
             Self::InsufficientSpace { .. } => "insufficient_space",
             Self::SizeMismatch { .. } => "size_mismatch",
             Self::ChecksumMismatch => "checksum_mismatch",
@@ -288,6 +299,10 @@ impl std::fmt::Display for FileDownloadError {
             ),
             Self::Cancelled => write!(f, "the download was cancelled"),
             Self::AlreadyInProgress => write!(f, "a download with this id is already running"),
+            Self::AlreadyExists { detail } => write!(
+                f,
+                "a file already exists at the destination: {detail}"
+            ),
             Self::InvalidPath { detail } => write!(f, "the destination path is unusable: {detail}"),
             Self::InsufficientSpace { needed, available } => write!(
                 f,
@@ -992,6 +1007,39 @@ pub async fn download_file(
         });
     }
 
+    // A destination file that is already complete needs no network at all:
+    // re-running the same selection skips it instead of re-downloading the
+    // whole file and then failing at publish (`std::fs::rename` refuses to
+    // replace an existing file on Windows). The gate is size-only by
+    // design — hashing a multi-GB file on every re-run would cost more
+    // than the re-download it saves — and it only applies when the
+    // frontend knew the expected size. A same-named file of a different
+    // size is an error, never a silent overwrite.
+    if let Ok(meta) = tokio::fs::metadata(&dest).await {
+        if meta.is_dir() {
+            return Err(FileDownloadError::InvalidPath {
+                detail: "the destination is a directory".to_string(),
+            });
+        }
+        match req.expected_size {
+            Some(expected) if meta.len() == expected => {
+                return Ok(FileDownloadResult {
+                    path: dest.to_string_lossy().into_owned(),
+                    size: meta.len(),
+                    resumed: false,
+                });
+            }
+            _ => {
+                return Err(FileDownloadError::AlreadyExists {
+                    detail: format!(
+                        "\"{}\" already exists",
+                        dest.to_string_lossy()
+                    ),
+                });
+            }
+        }
+    }
+
     // Pre-flight free-space check: refuse a download that cannot fit
     // instead of failing halfway through a multi-GB transfer.
     if let Some(expected) = req.expected_size {
@@ -1625,6 +1673,27 @@ pub fn file_download_free_space(dir: String) -> Result<Option<u64>, String> {
     Ok(free_space_available(&path))
 }
 
+/// Create the destination directory tree for a folder download
+/// (`create_dir_all`, so nested subfolders are created in one call).
+/// Deliberately a Rust command, not the frontend fs plugin: the
+/// capabilities file grants no `fs:allow-mkdir`, and the single-file
+/// download already creates its parent the same way inside
+/// `download_file`. The root folder is created even when every file in
+/// it is skipped, so the user still sees the (empty) folder.
+#[tauri::command]
+pub fn ensure_download_directory(path: String) -> Result<(), String> {
+    let dir = PathBuf::from(&path);
+    if dir.as_os_str().is_empty() {
+        return Err("the destination path is empty".to_string());
+    }
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create the destination folder: {e}"))?;
+    if !dir.is_dir() {
+        return Err(format!("the destination is not a directory: \"{path}\""));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1926,6 +1995,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn existing_complete_destination_is_skipped_without_network() {
+        // Re-running the same selection must not re-download a file that is
+        // already on disk at the expected size: the transport is never
+        // called (calls stays 0) and the result reports the existing size.
+        let dir = temp_dir("skip-complete");
+        let dest = dir.join("song.mp3");
+        let body = b"already here".to_vec();
+        std::fs::write(&dest, &body).unwrap();
+        let mut r = req(&dest);
+        r.expected_size = Some(body.len() as u64);
+
+        let transport = StubTransport::serving(b"different bytes".to_vec());
+        let calls = Arc::clone(&transport.calls);
+        let control = Arc::new(DownloadControl::new());
+        let out = download_file(&*transport, &FixedToken, &r, &control, &mut no_progress)
+            .await
+            .expect("a complete destination must be skipped, not re-downloaded");
+        assert_eq!(out.path, dest.to_string_lossy());
+        assert_eq!(out.size, body.len() as u64);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "no bytes may move");
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn existing_destination_with_wrong_size_is_an_error_not_an_overwrite() {
+        let dir = temp_dir("skip-wrong-size");
+        let dest = dir.join("song.mp3");
+        std::fs::write(&dest, b"short").unwrap();
+        let mut r = req(&dest);
+        r.expected_size = Some(100);
+
+        let transport = StubTransport::serving(vec![0u8; 100]);
+        let control = Arc::new(DownloadControl::new());
+        let err = download_file(&*transport, &FixedToken, &r, &control, &mut no_progress)
+            .await
+            .expect_err("a same-named file of a different size must fail");
+        assert!(
+            matches!(err, FileDownloadError::AlreadyExists { .. }),
+            "{err:?}"
+        );
+        // The user's file is untouched.
+        assert_eq!(std::fs::read(&dest).unwrap(), b"short");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn existing_destination_directory_is_an_invalid_path() {
+        let dir = temp_dir("skip-is-dir");
+        let dest = dir.join("song.mp3");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut r = req(&dest);
+        r.expected_size = Some(10);
+
+        let transport = StubTransport::serving(vec![0u8; 10]);
+        let control = Arc::new(DownloadControl::new());
+        let err = download_file(&*transport, &FixedToken, &r, &control, &mut no_progress)
+            .await
+            .expect_err("a directory at the destination must fail");
+        assert!(
+            matches!(err, FileDownloadError::InvalidPath { .. }),
+            "{err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn checksum_mismatch_deletes_the_part_file() {
         let dir = temp_dir("checksum");
         let dest = dir.join("song.mp3");
@@ -2117,6 +2253,20 @@ mod tests {
             4,
             "one 4-byte chunk landed"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_download_directory_creates_nested_tree() {
+        let dir = temp_dir("ensure_dir");
+        let nested = dir.join("Root").join("Sub").join("Deep");
+        ensure_download_directory(nested.to_string_lossy().into_owned())
+            .expect("nested folders must be created");
+        assert!(nested.is_dir());
+        // Idempotent: creating an existing tree is a no-op, not an error.
+        ensure_download_directory(nested.to_string_lossy().into_owned())
+            .expect("re-creating an existing folder must succeed");
+        assert!(ensure_download_directory(String::new()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

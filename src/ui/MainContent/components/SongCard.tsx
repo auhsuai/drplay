@@ -53,6 +53,7 @@ interface SongCardProps {
   menuVariant?: MoreMenuVariant;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
+  onBulkDownloadClick?: (() => void) | undefined;
 }
 
 // Card state precedence mirrors the old nested ternary: flash overrides
@@ -154,6 +155,7 @@ export const SongCard = React.memo(
     menuVariant,
     onBulkMoveClick,
     onBulkDeleteClick,
+    onBulkDownloadClick,
   }: SongCardProps) {
     const { t } = useTranslation();
     const cardRef = React.useRef<HTMLDivElement>(null);
@@ -351,6 +353,7 @@ export const SongCard = React.memo(
                   isBulkSelected={isSelectionMode && isSelected}
                   onBulkMoveClick={onBulkMoveClick}
                   onBulkDeleteClick={onBulkDeleteClick}
+                  onBulkDownloadClick={onBulkDownloadClick}
                 />
               </div>
             )}

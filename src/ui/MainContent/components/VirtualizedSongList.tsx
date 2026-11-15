@@ -39,6 +39,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode,
   onBulkMoveClick,
   onBulkDeleteClick,
+  onBulkDownloadClick,
   hideRowMenus = false,
   hideRowColumns = false,
   ref,
@@ -62,6 +63,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
   setIsSelectionMode: React.Dispatch<React.SetStateAction<boolean>>;
   onBulkMoveClick: () => void;
   onBulkDeleteClick: () => void;
+  onBulkDownloadClick?: (() => void) | undefined;
   // Hides each row's MoreMenu + context menu (virtual root: root rows are
   // navigation targets, never delete/move targets).
   hideRowMenus?: boolean;
@@ -327,6 +329,7 @@ export const VirtualizedSongList = React.memo(function VirtualizedSongList({
                 onEnableSelectionMode={handleEnableSelectionMode}
                 onBulkMoveClick={onBulkMoveClick}
                 onBulkDeleteClick={onBulkDeleteClick}
+                onBulkDownloadClick={onBulkDownloadClick}
                 hideMenu={hideRowMenus}
                 hideColumns={hideRowColumns}
               />

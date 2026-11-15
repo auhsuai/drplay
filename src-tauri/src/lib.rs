@@ -323,6 +323,7 @@ pub fn run() {
             file_download::resume_file_download,
             file_download::cancel_file_download,
             file_download::file_download_free_space,
+            file_download::ensure_download_directory,
             update_minimize_to_tray,
             set_tray_labels,
             clear_local_cache,

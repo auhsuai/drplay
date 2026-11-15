@@ -21,6 +21,15 @@ export interface DriveFileItem {
   appProperties?: Record<string, string>;
   md5Checksum?: string;
   capabilities?: Record<string, boolean>;
+  // Shortcut target (mimeType application/vnd.google-apps.shortcut only):
+  // `targetId` is the Drive id the shortcut points at, `targetMimeType`
+  // says whether that target is a folder or a file. Drive does NOT resolve
+  // shortcuts in files.list — the folder-download scan fetches the target
+  // itself (files.get) and treats a folder target as a folder.
+  shortcutDetails?: {
+    targetId?: string;
+    targetMimeType?: string;
+  };
 }
 export interface DriveFilesListResponse {
   files?: DriveFileItem[];

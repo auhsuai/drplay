@@ -53,6 +53,7 @@ interface MoreMenuVariantActions {
   onToggleQueue?: (() => void) | undefined;
   onBulkMoveClick?: (() => void) | undefined;
   onBulkDeleteClick?: (() => void) | undefined;
+  onBulkDownloadClick?: (() => void) | undefined;
   setShowMoveScreen: (value: boolean) => void;
 }
 
@@ -113,6 +114,7 @@ export function MoreMenuContent({
     onToggleQueue,
     onBulkMoveClick,
     onBulkDeleteClick,
+    onBulkDownloadClick,
     setShowMoveScreen,
   } = variantActions;
   const {
@@ -194,6 +196,7 @@ export function MoreMenuContent({
           isBulkSelected={isBulkSelected}
           onBulkMoveClick={onBulkMoveClick}
           onBulkDeleteClick={onBulkDeleteClick}
+          onBulkDownloadClick={onBulkDownloadClick}
           setShowMoveScreen={setShowMoveScreen}
           t={t}
         />
