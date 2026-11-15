@@ -28,6 +28,15 @@ pub(super) mod requests;
 /// safety-net `update()` cadence.
 const RENDER_WAIT_TIMEOUT: Duration = Duration::from_millis(250);
 
+/// Bound for holding the first frame of a load while the surface cannot
+/// present it (see `pump_frames`): a surface that never becomes presentable
+/// (the Now Playing overlay is never opened) must degrade to the old
+/// skip-render behavior instead of holding the frame — and the video timing
+/// — forever. 2s is far above the mount-then-loadfile window of a normal
+/// audio -> video switch (the surface mounts before the loadfile even
+/// starts) and far below any user-visible stall.
+const FIRST_FRAME_HOLD_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Frontend event: "the render thread has handed its first frame of the current
 /// media load to DirectComposition". ONE-SHOT per media load (re-armed by
 /// `RenderSurface::rearm_first_frame`, which `engine.rs` calls on `loadfile`,
@@ -75,6 +84,11 @@ struct RenderThreadState {
     /// it a resize while paused/buffering never repaints and the video area
     /// stays black until the next frame arrives.
     needs_repaint: bool,
+    /// Since when the first frame of the current load has been held instead
+    /// of skip-rendered (see `pump_frames`). `None` = not holding. The hold
+    /// is bounded by `FIRST_FRAME_HOLD_TIMEOUT`; it is cleared as soon as a
+    /// frame is presented.
+    first_frame_hold_since: Option<Instant>,
 }
 
 impl RenderThreadState {
@@ -136,6 +150,7 @@ impl RenderThreadState {
             gl_context,
             render_ctx,
             needs_repaint: false,
+            first_frame_hold_since: None,
         })
     }
 
@@ -145,16 +160,25 @@ impl RenderThreadState {
     /// must be submitted before the hand-off — see the `glFlush` call below).
     /// Hidden/collapsed frames render with
     /// MPV_RENDER_PARAM_SKIP_RENDERING so playback timing keeps running
-    /// without touching the texture. A headless engine (no composition
-    /// pipeline, S2 tests) always renders normally — skipping there would
-    /// leave the FBO black.
+    /// without touching the texture — EXCEPT the first frame of a load, which
+    /// is HELD instead (see below): a skipped frame counts as rendered
+    /// (render.h), so skip-rendering the first frame would lose the video's
+    /// first picture before the surface ever shows it. A headless engine (no
+    /// composition pipeline, S2 tests) always renders normally — skipping
+    /// there would leave the FBO black.
+    ///
+    /// `first_frame_presented` is whether a frame has already been presented
+    /// for the current media load (the render loop passes the shared
+    /// one-shot first-frame signal, re-armed on every `loadfile`): it is
+    /// what separates "the first frame is still owed" from the steady state
+    /// where skip-rendering while hidden is the correct behavior (S3-04).
     ///
     /// A pending `needs_repaint` also drives the pump without an update flag:
     /// render.h documents that a render call after a target-surface change
     /// reconfigures the renderer and redraws the previous frame even when no
     /// new frame is available, which is exactly what repaints a paused frame
     /// after a resize rebuilt the FBO and the DComp surface.
-    fn pump_frames(&mut self) -> PumpOutcome {
+    fn pump_frames(&mut self, first_frame_presented: bool) -> PumpOutcome {
         // SAFETY: render context is valid; called on the owning thread with
         // the GL context current.
         let flags = unsafe { (self.api.update)(self.render_ctx) };
@@ -166,6 +190,33 @@ impl RenderThreadState {
             None => false, // headless: keep rendering into the FBO (S2 behavior)
             Some(present) => !present.can_present(),
         };
+        if skip_for_hidden && !first_frame_presented {
+            // Audio -> video, first frame of the load: the surface cannot
+            // present yet (hidden, or no rect), and a skip-render here would
+            // CONSUME this frame — render.h: "the render API will consider
+            // this frame as having been rendered" — so the video's first
+            // picture is gone before the surface ever shows it. Hold it
+            // instead: return without rendering and keep `needs_repaint`
+            // armed, so the next pump renders it once the surface is
+            // presentable. `update()` above still runs on every pump and the
+            // 250ms safety-net loop keeps calling this, so the loop cannot
+            // stall — and the hold is bounded by FIRST_FRAME_HOLD_TIMEOUT,
+            // after which the old skip behavior resumes so playback timing
+            // keeps running even if the surface never becomes presentable.
+            // (Whether the frame truly stays queued while never rendered is
+            // undocumented in render.h — the bound plus the frontend
+            // video-output watchdog's reload are what make a wrong guess
+            // here degrade to the old behavior instead of a wedge.)
+            let hold_since = *self
+                .first_frame_hold_since
+                .get_or_insert_with(Instant::now);
+            if hold_since.elapsed() < FIRST_FRAME_HOLD_TIMEOUT {
+                self.needs_repaint = true;
+                return PumpOutcome::default();
+            }
+            // Hold expired: fall through to the skip-render below.
+            self.first_frame_hold_since = None;
+        }
         if skip_for_hidden {
             return match render_frame(&self.api, &self.gl_context, self.render_ctx, true) {
                 Ok(()) => PumpOutcome { rendered: true, presented: false },
@@ -221,15 +272,25 @@ impl RenderThreadState {
         let unlocked = present.unlock();
         match (rendered, unlocked) {
             (Ok(()), Ok(())) => {
-                // The repaint attempt reached the present stage. Clear the flag
-                // even on a present error: a persistent failure must not turn
-                // into a per-tick error log, and the next rebuild/frame will
-                // re-arm it. Errors from render/unlock fall through with the
-                // flag kept, so the next pump retries immediately.
-                self.needs_repaint = false;
+                // The repaint attempt reached the present stage. Clear the
+                // flag ONLY once a frame was actually presented: a failed
+                // present must not consume the repaint, or the first frame
+                // lost to a transient present failure never gets a second
+                // chance. The one exception is the steady state (a frame was
+                // already presented for this load): there the old rule holds
+                // and the flag is cleared even on a present error, so a
+                // persistent failure cannot turn into a per-tick error log —
+                // the next rebuild/frame re-arms it.
                 match present.present() {
-                    Ok(()) => PumpOutcome { rendered: true, presented: true },
+                    Ok(()) => {
+                        self.needs_repaint = false;
+                        self.first_frame_hold_since = None;
+                        PumpOutcome { rendered: true, presented: true }
+                    }
                     Err(present_error) => {
+                        if first_frame_presented {
+                            self.needs_repaint = false;
+                        }
                         log::error!("[player] DComp present failed: {present_error}");
                         PumpOutcome { rendered: true, presented: false }
                     }
@@ -439,7 +500,12 @@ pub(super) fn render_thread_main(
 
         // The only mpv API this thread ever calls: mpv_render_* on its own
         // context, with the GL context current (render.h threading rules).
-        let outcome = state.pump_frames();
+        // The first-frame signal is the pump's "a frame was already presented
+        // for this load" fact: until it flips, a hidden frame is held rather
+        // than skip-rendered (see pump_frames), so the first picture of a
+        // video is not consumed before its surface is presentable.
+        let first_frame_presented = shared.first_frame_emitted.load(Ordering::SeqCst);
+        let outcome = state.pump_frames(first_frame_presented);
         if outcome.rendered {
             shared.frames.fetch_add(1, Ordering::SeqCst);
         }

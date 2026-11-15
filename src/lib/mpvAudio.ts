@@ -9,6 +9,7 @@ import type {
   AudioEventHandler,
 } from "./audioNativeEvents";
 import {
+  asBoolean,
   buildProxyStreamUrl,
   classifyEndFileError,
   describeError,
@@ -26,6 +27,7 @@ import {
   STALL_MIN_RESUME_SECS,
   TAURI_COMMANDS,
   toTimeRanges,
+  VIDEO_OUTPUT_WATCHDOG_MS,
   withStallQueryTimeout,
   type MpvEventCallbacks,
   type MpvRange,
@@ -126,6 +128,37 @@ export class MpvAudioController {
   /** Sidecar restarts spent on the current load (bounded by
    *  LOADFILE_RESTART_MAX_ATTEMPTS, reset per user/UI load attempt). */
   private loadRestarts = 0;
+  /**
+   * Video-output watchdog (audio -> video black screen): the latest
+   * `vo-configured` push — true once mpv has a live video output for the
+   * current load. Reset at the start of every loadTrack (see below), so a
+   * previous video's `true` can never satisfy a new load.
+   */
+  private voConfigured = false;
+  /** Last `current-vo` push (diagnostic only — the watchdog decides on
+   *  `vo-configured`, this only names the driver in its log line). */
+  private lastCurrentVo: string | null = null;
+  /** Last REAL time-pos (property pushes + watchdog backfill only — the
+   *  interpolator's synthetic clock never writes here, so a value > 0 is
+   *  proof audio bytes are actually flowing). */
+  private lastRealTimePos = 0;
+  /** One-shot video-output watchdog timer for the load in flight, armed in
+   *  beginTrack for video tracks only. Owned by the TimerRegistry, so
+   *  release() clears it with every other playback timer. */
+  private videoOutputWatchdog: ReturnType<typeof setTimeout> | null = null;
+  /** What the armed watchdog belongs to: the track + load attempt + session
+   *  epoch it was armed for. The fire-time checks compare against these so
+   *  a superseded load can never retry (or fail) the track that replaced it. */
+  private videoOutputWatchdogArmed: {
+    trackId: string;
+    attempt: number;
+    epoch: number;
+  } | null = null;
+  /** Track id the single video-output retry was already spent on. Per
+   *  TRACK, not per attempt: the retry reload mints a new attempt (and
+   *  re-arms the watchdog), so a per-attempt budget would loop forever.
+   *  Cleared when a different track loads. */
+  private videoOutputRetryTrackId: string | null = null;
   /** F5 reload in progress: the engine is being shut down for a page
    *  refresh. Playback entry points stay locked and late end-file/ipc-closed
    *  events are ignored until the page goes away (or the shutdown fails and
@@ -212,6 +245,9 @@ export class MpvAudioController {
         this.clearSeekAck();
       }
       this.currentTime = time;
+      // Real time-pos only (see the field comment): the video-output
+      // watchdog reads this as its "audio is actually flowing" proof.
+      this.lastRealTimePos = time;
       this.interpolator.noteRealTime(time);
       this.watchdog.noteEmit();
       this.reconciler.noteTick(time);
@@ -310,6 +346,7 @@ export class MpvAudioController {
       this.playbackFinished = true;
       this.playing = false;
       this.clearLoadDeadline();
+      this.clearVideoOutputWatchdog();
       this.interpolator.reset();
       // Why (S4): the track is terminal — no more ticks can confirm progress,
       // so the spinner must not ride the 8s safety net (eof and error alike).
@@ -363,6 +400,19 @@ export class MpvAudioController {
     },
     onMalformed: (detail) => {
       logWarn(detail);
+    },
+    onVoConfigured: (configured) => {
+      this.voConfigured = configured;
+      if (configured) {
+        // The VO is live: the video-output watchdog has nothing left to
+        // watch for this load (a presented first frame implies this too —
+        // mpv configures the VO before the first frame can present — so no
+        // separate first-frame signal is needed here).
+        this.clearVideoOutputWatchdog();
+      }
+    },
+    onCurrentVo: (currentVo) => {
+      this.lastCurrentVo = currentVo;
     },
   };
 
@@ -542,6 +592,18 @@ export class MpvAudioController {
     this.watchdog.stop();
     this.clearLoadDeadline();
     this.armLoadDeadline(track.id);
+    // Video-output watchdog (audio -> video black screen): a new track gets
+    // a fresh retry budget only when it is a DIFFERENT track — the retry
+    // reload below mints a new attempt for the SAME track and must not
+    // reset the budget, or the watchdog would loop forever. Audio tracks
+    // never arm it (no VO is expected for them).
+    if (
+      this.videoOutputRetryTrackId !== null &&
+      this.videoOutputRetryTrackId !== track.id
+    ) {
+      this.videoOutputRetryTrackId = null;
+    }
+    this.armVideoOutputWatchdog(track);
     // Why (R4): the buffering session state (sticky stall flag, tick
     // baselines, safety net) belongs to the previous track — the new track
     // must start clean instead of inheriting a spinner it cannot settle.
@@ -560,18 +622,25 @@ export class MpvAudioController {
    *   because every transport-ish caller (end-file network classification,
    *   command rejection, stall/deadline exhaustion) IS a network failure; the
    *   engine-death path passes `engine_closed` explicitly (see onEngineClosed).
+   * @param message the surfaced message. Defaults to the generic
+   *   "cannot play" copy; the video-output path passes its own so the toast
+   *   can say the picture (not the sound) failed.
    */
   private playbackFailure(
     where: string,
     e: unknown,
     trackIdOverride?: string,
     code: string = "network_interrupted",
+    message: string = "Không phát được bài hát này, hãy thử lại.",
   ): void {
     // Why (F8-6): one failure surface per attempt — a crash mid-loadfile
     // fires both onEngineClosed and the command-rejection catch, and only
     // the first may surface (log/error/store), whichever order they land in.
     if (this.failureSurfacedForAttempt) return;
     this.failureSurfacedForAttempt = true;
+    // The load is terminal either way: a video-output timer for it must
+    // never fire (and retry) after the failure surfaced.
+    this.clearVideoOutputWatchdog();
     // Why (F8-5): a failed load/command is terminal — without this flag a
     // later playTrack of the same track took the same-track resume branch
     // (no-op, or a resume command into the same broken engine) instead of
@@ -585,7 +654,7 @@ export class MpvAudioController {
     this.emit(
       "error",
       {
-        message: "Không phát được bài hát này, hãy thử lại.",
+        message,
         code,
       },
       trackIdOverride,
@@ -649,6 +718,15 @@ export class MpvAudioController {
   ): Promise<void> {
     const port = await this.session.ensureProxyPort();
     if (this.session.isStale(epoch)) return;
+    // Video-output watchdog: reset the VO signal BEFORE the load starts, so
+    // a push for the previous load (delivered late, or the previous video's
+    // `true`) can never satisfy this one. Reset here — not in beginTrack,
+    // which runs after the loadfile — because a `vo-configured=true` push
+    // for THIS load can already arrive while the commands below are in
+    // flight, and beginTrack would erase it.
+    this.voConfigured = false;
+    this.lastCurrentVo = null;
+    this.lastRealTimePos = 0;
     // Phase B: mpv's `video` is a PROCESS-GLOBAL option (like `pause`), so it
     // is set on EVERY load — a video->audio switch must turn the video output
     // back off or the last movie's window stays up. Set before the loadfile so
@@ -866,6 +944,7 @@ export class MpvAudioController {
     this.reconciler.stop();
     this.reconciler.reset();
     this.clearLoadDeadline();
+    this.clearVideoOutputWatchdog();
     this.loadRestarts = 0;
     this.interpolator.reset();
     this.throttle = freshThrottleClocks();
@@ -1024,6 +1103,184 @@ export class MpvAudioController {
       this.timers.clearTimeout(this.loadDeadline);
       this.loadDeadline = null;
     }
+  }
+
+  /** Arm the video-output watchdog for a video load (no-op for audio).
+   *  The timer is owned by the TimerRegistry, so release() clears it; the
+   *  armed record is what the fire-time checks compare against. */
+  private armVideoOutputWatchdog(track: Track): void {
+    this.clearVideoOutputWatchdog();
+    if (
+      classifyMediaKind(track.originalName ?? track.title) !== MEDIA_KIND_VIDEO
+    ) {
+      return;
+    }
+    this.videoOutputWatchdogArmed = {
+      trackId: track.id,
+      attempt: this.loadAttemptSeq,
+      epoch: this.session.epoch,
+    };
+    this.videoOutputWatchdog = this.timers.setTimeout(
+      "video-output-watchdog",
+      () => {
+        void this.onVideoOutputWatchdog();
+      },
+      VIDEO_OUTPUT_WATCHDOG_MS,
+    );
+  }
+
+  private clearVideoOutputWatchdog(): void {
+    if (this.videoOutputWatchdog !== null) {
+      this.timers.clearTimeout(this.videoOutputWatchdog);
+      this.videoOutputWatchdog = null;
+    }
+    this.videoOutputWatchdogArmed = null;
+  }
+
+  /** The armed watchdog's fire-time guards, shared by the pre-poll and
+   *  post-poll checks (a track switch / pause / release may land while the
+   *  poll is in flight). A method, not inline reads: TS narrows these
+   *  properties from the first guard and would flag a second inline read as
+   *  always-false, even though the await in between can change them. */
+  private videoOutputWatchdogStillArmed(
+    trackId: string,
+    attempt: number,
+    epoch: number,
+  ): boolean {
+    if (this.session.isStale(epoch)) return false;
+    if (this.currentTrackId !== trackId) return false;
+    if (this.loadAttemptSeq !== attempt) return false;
+    if (this.playbackFinished || !this.playing || this.paused) return false;
+    return true;
+  }
+
+  /**
+   * Video-output watchdog (audio -> video black screen): a video track whose
+   * playhead is already advancing but whose VO never configured is exactly
+   * the reported bug — audio plays, the video area stays black, and nothing
+   * else in the engine can see it (the time-pos watchdog and the stall
+   * reconciler both go green on advancing audio). The cure is the user's
+   * own manual one: switch the video output off and back on and reload the
+   * track, which is what made the second video load work.
+   *
+   * - Fires once per load, ~5s after beginTrack. Every guard is re-checked
+   *   here (not at arm time): a superseded load, a pause, a finished track
+   *   or a VO that configured late all abort silently.
+   * - `vo-configured` is re-polled live before deciding: a push can be lost
+   *   (or arrive before the arm), so the push state alone is not the truth.
+   * - Retry budget is one per TRACK (see the field comment): the retry
+   *   reload mints a new attempt and re-arms this watchdog, so a per-attempt
+   *   budget would loop forever. A second fire for the same track surfaces
+   *   a terminal error instead of black forever.
+   * - Deliberately NOT the load deadline's job (30s, file-loaded) or the
+   *   stall reconciler's (pinned playhead): this load DID start — its
+   *   playhead advances — it just has no picture.
+   */
+  private async onVideoOutputWatchdog(): Promise<void> {
+    const armed = this.videoOutputWatchdogArmed;
+    this.videoOutputWatchdogArmed = null;
+    this.videoOutputWatchdog = null;
+    if (armed === null) return;
+    if (
+      !this.videoOutputWatchdogStillArmed(
+        armed.trackId,
+        armed.attempt,
+        armed.epoch,
+      )
+    ) {
+      return;
+    }
+    // The chain must be up: without playback-restart the load may still be
+    // starting, and the load deadline (not this watchdog) owns that case.
+    if (!this.chainReady) return;
+    // A live poll is the truth — a lost push must not trigger a reload of a
+    // healthy video. An unreadable poll (IPC error) is not evidence either
+    // way, so it falls through to the push state below.
+    try {
+      const live = await withStallQueryTimeout(
+        invoke(TAURI_COMMANDS.mpvGetProperty, {
+          prop: MPV_PROPERTIES.voConfigured,
+        }),
+      );
+      if (asBoolean(live) === true) {
+        this.voConfigured = true;
+        return;
+      }
+    } catch (e: unknown) {
+      logWarn(`video-output-watchdog poll failed: ${describeError(e)}`);
+    }
+    // Re-check after the await: a track switch / pause / release / VO push
+    // may have landed while the poll was in flight.
+    if (
+      !this.videoOutputWatchdogStillArmed(
+        armed.trackId,
+        armed.attempt,
+        armed.epoch,
+      )
+    ) {
+      return;
+    }
+    if (this.voConfigured) return;
+    // Time-pos must actually have advanced: a playhead that never left 0
+    // is a load that never started, owned by the load deadline / stall
+    // reconciler — not a video-output failure. (Null time-pos pushes/polls
+    // are dropped before onTimeUpdate — mpv sends null while idle/between
+    // files, never while audio flows — so a null can neither fake this
+    // proof nor mask a real black-screen case, whose pushes are numeric.)
+    if (this.lastRealTimePos <= 0) return;
+    const track = this.lastTrack;
+    if (track === null || track.id !== armed.trackId) return;
+    if (this.videoOutputRetryTrackId === armed.trackId) {
+      // The one retry is spent and the VO is still not configured: surface
+      // a terminal error so the UI shows it instead of black forever.
+      logWarn(
+        `video-output-watchdog: vo-configured still false for ${armed.trackId} after the video-output retry (current-vo=${this.lastCurrentVo ?? "none"}) — surfacing video_output_missing`,
+      );
+      this.failVideoOutputMissing();
+      return;
+    }
+    this.videoOutputRetryTrackId = armed.trackId;
+    logWarn(
+      `video-output-watchdog: vo-configured still false for ${armed.trackId} after ${String(VIDEO_OUTPUT_WATCHDOG_MS)}ms with time-pos at ${this.lastRealTimePos.toFixed(1)}s (current-vo=${this.lastCurrentVo ?? "none"}) — retrying the video output once`,
+    );
+    try {
+      // Off then on, exactly like the user's manual switch to another video
+      // and back: `no` tears the stuck VO state down, `auto` (via
+      // loadTrack) re-selects the default video track of THIS file.
+      await this.sendCommand([
+        MPV_COMMANDS.setProperty,
+        MPV_PROPERTY_ARGS.video,
+        MPV_VIDEO.off,
+      ]);
+      if (this.session.isStale(armed.epoch)) return;
+      if (this.currentTrackId !== armed.trackId) return;
+      await this.loadTrack(track, undefined, armed.epoch);
+    } catch (e: unknown) {
+      if (this.session.isStale(armed.epoch)) return;
+      // A failed retry is terminal for this load — surface the bounded
+      // error instead of retrying the video output forever.
+      this.failVideoOutputMissing();
+      logWarn(`video-output-retry-failed: ${describeError(e)}`);
+    }
+  }
+
+  /** Terminal video-output failure: stop the self-heal machinery, then
+   *  surface the bounded error + play state (mirrors failTerminal, but with
+   *  the video-output code/message instead of the generic network one). */
+  private failVideoOutputMissing(): void {
+    this.clearVideoOutputWatchdog();
+    this.playbackFinished = true;
+    this.clearLoadDeadline();
+    this.interpolator.reset();
+    this.watchdog.stop();
+    this.reconciler.stop();
+    this.playbackFailure(
+      "video-output-missing",
+      new Error("vo-configured stayed false after a video-output retry"),
+      undefined,
+      "video_output_missing",
+      "Không hiển thị được hình ảnh video, hãy thử lại.",
+    );
   }
 
   /** One load-deadline sidecar swap (F8-1) lives in EngineSession.swapSidecar;

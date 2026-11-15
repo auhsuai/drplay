@@ -12,12 +12,15 @@ import {
   classifyEndFileError,
   dispatchMpvEvent,
   dispatchPropertyEvent,
+  MPV_PROPERTIES,
+  MPV_VIDEO,
   resetWarnThrottleForTest,
   STALL_LOAD_GRACE_MS,
   STALL_POLL_INTERVAL_MS,
   STALL_RECONCILE_MS,
   STALL_RECOVER_MS,
   STALL_RECOVERY_MAX_ATTEMPTS,
+  VIDEO_OUTPUT_WATCHDOG_MS,
   type MpvEventCallbacks,
 } from "./mpvProtocol";
 import {
@@ -1099,5 +1102,46 @@ describe("classifyEndFileError (R05: proxy status is the primary source)", () =>
     expect(classifyEndFileError("Connection reset by peer")).toBe("network");
     expect(classifyEndFileError("connection timed out")).toBe("network");
     expect(classifyEndFileError("http error 403")).toBe("format");
+  });
+});
+
+describe("video-output properties (audio -> video black screen)", () => {
+  it("MPV_VIDEO.on is auto, not a strict track id — an audio-only load must not poison the next video load", () => {
+    expect(MPV_VIDEO).toEqual({ on: "auto", off: "no" });
+    expect(MPV_PROPERTIES.voConfigured).toBe("vo-configured");
+    expect(MPV_PROPERTIES.currentVo).toBe("current-vo");
+    // The watchdog window sits well below the 30s load deadline.
+    expect(VIDEO_OUTPUT_WATCHDOG_MS).toBeLessThan(30_000);
+  });
+
+  it("vo-configured pushes route to onVoConfigured; a nil push is dropped, not treated as false", () => {
+    const cb = makeCb();
+    cb.onVoConfigured = vi.fn();
+    dispatchPropertyEvent({ name: "vo-configured", data: true }, cb);
+    dispatchPropertyEvent({ name: "vo-configured", data: false }, cb);
+    expect(cb.onVoConfigured).toHaveBeenCalledTimes(2);
+    expect(cb.onVoConfigured).toHaveBeenNthCalledWith(1, true);
+    expect(cb.onVoConfigured).toHaveBeenNthCalledWith(2, false);
+
+    dispatchPropertyEvent({ name: "vo-configured", data: null }, cb);
+    expect(cb.onVoConfigured).toHaveBeenCalledTimes(2);
+  });
+
+  it("current-vo pushes route to onCurrentVo, including null (no VO active)", () => {
+    const cb = makeCb();
+    cb.onCurrentVo = vi.fn();
+    dispatchPropertyEvent({ name: "current-vo", data: "gpu-next" }, cb);
+    dispatchPropertyEvent({ name: "current-vo", data: null }, cb);
+    expect(cb.onCurrentVo).toHaveBeenNthCalledWith(1, "gpu-next");
+    expect(cb.onCurrentVo).toHaveBeenNthCalledWith(2, null);
+  });
+
+  it("a consumer without the new optional callbacks keeps working (pushes are dropped, not a crash)", () => {
+    const cb = makeCb();
+    expect(() => {
+      dispatchPropertyEvent({ name: "vo-configured", data: true }, cb);
+      dispatchPropertyEvent({ name: "current-vo", data: "gpu-next" }, cb);
+      dispatchPropertyEvent({ name: "video-out", data: true }, cb);
+    }).not.toThrow();
   });
 });

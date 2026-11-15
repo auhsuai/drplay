@@ -36,12 +36,22 @@ use ipc::MpvIpc;
 /// The ids are stable handles chosen by us; the names map 1:1 to mpv properties.
 /// Shared with the libmpv engine (src/player/engine.rs), which observes the
 /// same set so both engines emit identical property-change events.
+///
+/// (6) `vo-configured` is the honest "a video output is live right now"
+/// signal (mpv manual) — the frontend's video-output watchdog reads it to
+/// tell "audio playing with no picture" from healthy playback. There is no
+/// mpv property named `video-out`; do not add one. (7) `current-vo` is the
+/// live VO driver name (null while no VO is active), kept for diagnosis.
+/// Both are new push events: the frontend's property dispatch ignores
+/// unknown names, so older consumers keep working.
 pub(crate) const OBSERVED_PROPERTIES: &[(u64, &str)] = &[
     (1, "time-pos"),
     (2, "duration"),
     (3, "pause"),
     (4, "paused-for-cache"),
     (5, "demuxer-cache-state"),
+    (6, "vo-configured"),
+    (7, "current-vo"),
 ];
 
 /// Shared slot holding the running mpv instance (`None` = not spawned).

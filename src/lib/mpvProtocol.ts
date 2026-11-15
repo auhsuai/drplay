@@ -33,6 +33,13 @@ export const MPV_PROPERTIES = {
   pause: "pause",
   pausedForCache: "paused-for-cache",
   cacheState: "demuxer-cache-state",
+  /** Whether mpv's video output is configured right now (mpv manual:
+   *  "vo-configured"). False while no VO is live — e.g. after an audio-only
+   *  load tore it down — even though time-pos keeps advancing. There is no
+   *  mpv property named "video-out": do not use that name here. */
+  voConfigured: "vo-configured",
+  /** Current video output driver name, or null when no VO is active. */
+  currentVo: "current-vo",
 } as const;
 
 export const MPV_EVENTS = {
@@ -77,13 +84,26 @@ export const MPV_BOOL = { yes: "yes", no: "no" } as const;
  * Values for the `video` property, which is mpv's process-global video
  * on/off option (Phase B). NOT MPV_BOOL: verified against the shipped sidecar
  * (mpv v0.41.0) that `set_property video "yes"` is REJECTED with
- * `unsupported format for accessing property`, while `"1"` and `"no"` are
+ * `unsupported format for accessing property`, while `"auto"` and `"no"` are
  * both accepted and take effect before the next loadfile. An A/B run over a
  * real MKV: `video=no` -> 0 video decoders (audio-only, exactly the old
- * `--no-video` behavior), `video=1` -> `vd: Opening decoder h264` +
+ * `--no-video` behavior), `video=auto` -> `vd: Opening decoder h264` +
  * `VO: gpu-next`.
+ *
+ * Why "auto", not "1": `video` is the runtime form of mpv's `--vid` option,
+ * and since mpv 0.33.0 a numeric value is a STRICT track-ID selection — it
+ * pins the video track to id 1 and can leave the player in a 'no video
+ * track' state carried over from a previous audio-only load (the audio ->
+ * video black-screen bug: the VO is never (re)created even though audio
+ * plays). "auto" asks mpv to pick the default video track of THIS file on
+ * every load, so an audio-only load cannot poison the next video load. The
+ * same reset is what third-party libmpv embedders used to fix the identical
+ * symptom ("preventing audio state from producing a black screen on the
+ * next video"). Explicit per-track selection by the user (track menus) still
+ * uses numeric `vid` values through mpvControl — this constant is only the
+ * per-load on/off.
  */
-export const MPV_VIDEO = { on: "1", off: "no" } as const;
+export const MPV_VIDEO = { on: "auto", off: "no" } as const;
 
 export const PROXY_ORIGIN = "http://127.0.0.1";
 export const STREAM_PATH = "/stream/";
@@ -134,6 +154,13 @@ export const STALL_LOAD_GRACE_MS = 150_000;
  *  restarts the mpv sidecar — the only proven cure — and loads the track
  *  once more. Well above a healthy slow load; far below "the app is dead". */
 export const LOADFILE_DEADLINE_MS = 30_000;
+/** Video-output watchdog (audio -> video black screen): how long after a
+ *  video load begins to wait for `vo-configured` to turn true while the
+ *  playhead is already advancing. Past this with audio flowing but no VO,
+ *  the video output is treated as lost and retried once (see mpvAudio.ts).
+ *  5s is well above a healthy VO (re)creation on the target machines and
+ *  far below the 30s load deadline, which owns loads that never start. */
+export const VIDEO_OUTPUT_WATCHDOG_MS = 5_000;
 /** Sidecar restarts per load before the failure surfaces (bounded budget). */
 export const LOADFILE_RESTART_MAX_ATTEMPTS = 1;
 /** Bound for one sidecar-restart IPC call (shutdown/spawn). Why: the Rust
@@ -350,6 +377,16 @@ export type MpvEventCallbacks = {
   onEndFile: (outcome: "eof" | "error", mpvError?: string | null) => void;
   onEngineClosed: (cause: string) => void;
   onMalformed: (detail: string) => void;
+  /**
+   * mpv's `vo-configured` push (observed since the video-output fix):
+   * true once a video output is live for the current load. Optional:
+   * consumers that do not care about video output leave it unset and the
+   * dispatch drops the push (as it does for every other unknown property).
+   */
+  onVoConfigured?: (configured: boolean) => void;
+  /** mpv's `current-vo` push: the live VO driver name, or null when no VO
+   *  is active. Diagnostic only; optional like onVoConfigured. */
+  onCurrentVo?: (currentVo: string | null) => void;
 };
 
 /** Parse one `mpv-property` payload and route it to the matching callback. */
@@ -386,6 +423,22 @@ export function dispatchPropertyEvent(
     }
     case MPV_PROPERTIES.cacheState: {
       cb.onCacheState(extractCacheRanges(data));
+      return;
+    }
+    case MPV_PROPERTIES.voConfigured: {
+      // A nil value means "unavailable", not "false": the watchdog's
+      // default state is already false, so a nil-drop cannot lose a true.
+      const configured = asBoolean(data);
+      if (configured !== null) cb.onVoConfigured?.(configured);
+      else warnThrottled(`vo-configured nil-drop: ${truncateRaw(data)}`);
+      return;
+    }
+    case MPV_PROPERTIES.currentVo: {
+      // Null is a real value here: no VO active (diagnostic, not an error).
+      // A non-string, non-null value is malformed and dropped silently.
+      if (typeof data === "string" || data === null) {
+        cb.onCurrentVo?.(data);
+      }
       return;
     }
     default:

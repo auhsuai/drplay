@@ -1297,3 +1297,86 @@ fn s3_10_resize_while_hidden_repaints_when_shown_again() {
     eprintln!("S3-10: paused at {paused_at} presents; repainted on show; peak={peak}");
     engine.destroy(true).expect("cleanup destroy");
 }
+
+/// Audio -> video on the same engine (the reported black-screen bug): an
+/// audio-only load tears the VO down (`video=no`), and the first video after
+/// it must recreate the VO and present a non-black first frame — even when
+/// the frame arrives while the surface is still hidden, as it does on the
+/// real audio -> video switch (the surface only mounts once the track
+/// commits, after the loadfile is already in flight).
+///
+/// Windows/GPU-gated like the other S3 tests: it early-returns when the
+/// libmpv DLL is absent and skips loudly when the media fixture is missing,
+/// so it cannot run on a headless Linux VM — run it on the Windows target
+/// machine. The non-GPU half of the fix (vid=auto + the video-output
+/// watchdog) is covered by the TypeScript tests instead.
+#[test]
+fn s3_11_audio_then_video_presents_a_non_black_first_frame() {
+    let _serial = serial();
+    if !engine_available() {
+        return;
+    }
+    let Some(media) = media_or_skip(FIXTURE_HEVC10) else {
+        return;
+    };
+    let window = HiddenTestWindow::create();
+    let engine = engine_with_window(window.hwnd());
+    let surface = engine.render_surface().expect("created during setup").clone();
+
+    // 1. Audio first, exactly like the app does it: `video=no`, surface
+    //    never shown. Playback must actually run (time-pos advances) while
+    //    nothing is ever presented.
+    let wav = std::env::temp_dir().join(format!("drplay-s3-11-audio-{}.wav", std::process::id()));
+    write_test_wav(&wav);
+    engine
+        .send_command(&command(&["set_property", "video", "no"]))
+        .expect("S3-11: video=no must be accepted");
+    load(&engine, &wav);
+    assert!(
+        wait_until(Duration::from_secs(10), || time_pos(&engine) > 0.0),
+        "S3-11: audio playback must actually run (time-pos never advanced)"
+    );
+    assert_eq!(
+        surface.presented_frame_count(),
+        0,
+        "S3-11: audio-only playback must present no frames"
+    );
+
+    // 2. First video after audio, surface still hidden while the load starts:
+    //    `video=auto` (not a numeric track id) + loadfile. Frames arriving
+    //    now must NOT be skip-rendered away — the first frame is held until
+    //    the surface can present it.
+    engine
+        .send_command(&command(&["set_property", "video", "auto"]))
+        .expect("S3-11: video=auto must be accepted");
+    load(&engine, &media);
+    // Let frames arrive while hidden (the race window of the bug).
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(
+        engine
+            .get_property("vo-configured")
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        "S3-11: vo-configured must be true after the video load (the VO was recreated)"
+    );
+
+    // 3. Show the surface (the real switch mounts it now) and require a
+    //    presented, non-black first frame.
+    surface.set_rect(0, 0, 640, 360).expect("S3-11: set_rect");
+    surface.set_visible(true).expect("S3-11: set_visible(true)");
+    if let Err(short) = wait_for_presented(&surface, 1, Duration::from_secs(15)) {
+        panic!("S3-11: the first video after audio must present a frame: {short}");
+    }
+    let sample = surface
+        .sample_pixels(Duration::from_secs(5))
+        .expect("S3-11: the FBO readback must succeed after the first present");
+    let peak = peak_channel(&sample);
+    assert!(
+        peak > NON_BLACK_CHANNEL_THRESHOLD,
+        "S3-11: the first presented frame after audio must be non-black, peak={peak}"
+    );
+    eprintln!("S3-11: audio -> video presented a non-black first frame; peak={peak}");
+    engine.destroy(true).expect("cleanup destroy");
+    let _ = std::fs::remove_file(&wav);
+}

@@ -92,12 +92,14 @@ pub(crate) fn rotate_mpv_log(log_file: &Path) -> Result<(), String> {
 /// `--no-video` (and no `--video=no`): mpv's `video` property is a runtime
 /// property, so the frontend sets it from the track's media kind right before
 /// `loadfile` — `no` for audio (byte-identical to the old startup flag) and
-/// `1` for video. One engine, no respawn when the kind changes. The frontend
+/// `auto` for video. One engine, no respawn when the kind changes. The frontend
 /// is the only layer that knows a track's kind, so keeping the choice out of
-/// the spawn-time flag set keeps one source of truth. (`1`, not `yes`:
-/// verified against this sidecar that mpv v0.41.0 REJECTS
+/// the spawn-time flag set keeps one source of truth. (`auto`, not `1` or
+/// `yes`: verified against this sidecar that mpv v0.41.0 REJECTS
 /// `set_property video "yes"` with "unsupported format for accessing
-/// property", while `"1"` and `"no"` are both accepted.)
+/// property", while `"auto"` and `"no"` are both accepted; `"1"` is a strict
+/// track-ID selection since mpv 0.33.0, not "enable video", and can leave a
+/// 'no video track' state carried over from an audio-only load.)
 /// `--vo=` is still pinned so video output never depends on mpv
 /// auto-detection (and never on a user mpv.conf — see `--no-config`).
 /// `--hwdec=auto-safe` (see `MPV_HWDEC`) is the hardware-decoding policy:

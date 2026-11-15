@@ -13,7 +13,11 @@ vi.mock("../utils/errorLog", () => ({ captureError: vi.fn() }));
 
 import { MpvAudioController } from "./mpvAudio";
 import { captureError } from "../utils/errorLog";
-import { LOADFILE_DEADLINE_MS, resetWarnThrottleForTest } from "./mpvProtocol";
+import {
+  LOADFILE_DEADLINE_MS,
+  resetWarnThrottleForTest,
+  VIDEO_OUTPUT_WATCHDOG_MS,
+} from "./mpvProtocol";
 import { BufferingTracker, TimePosWatchdog } from "./mpvPlaybackMachines";
 
 const PROXY_PORT = 51234;
@@ -174,7 +178,7 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
       (c) => c[0] === "set_property" && c[1] === "video",
     );
     const loadIdx = cmds.findIndex((c) => c[0] === "loadfile");
-    expect(cmds[videoIdx]).toEqual(["set_property", "video", "1"]);
+    expect(cmds[videoIdx]).toEqual(["set_property", "video", "auto"]);
     expect(videoIdx).toBeLessThan(loadIdx);
   });
 
@@ -195,7 +199,7 @@ describe("MpvAudioController — playback wiring (plan 2.3)", () => {
 
   it("case-insensitive: Clip.MP4 is video too", async () => {
     await ctrl.playTrack(mp4Track);
-    expect(mpvCommands()).toContainEqual(["set_property", "video", "1"]);
+    expect(mpvCommands()).toContainEqual(["set_property", "video", "auto"]);
   });
 
   it("video -> audio switch turns the video output back off (process-global property)", async () => {
@@ -1940,5 +1944,143 @@ describe("MpvAudioController — engineEpoch stale-event guard (Fix B3)", () => 
     expect(engineEpochOf(ctrl)).toBe(1);
     fireTauri("mpv-property", { name: "time-pos", data: 2, epoch: 1 });
     expect(ctrl.getCurrentTime()).toBe(2);
+  });
+});
+
+describe("MpvAudioController — video-output watchdog (audio -> video black screen)", () => {
+  let ctrl: MpvAudioController;
+  let errors: unknown[];
+
+  const videoTrack: Track = {
+    id: "V",
+    title: "Movie",
+    artist: "",
+    streamUrl: "/drive-stream/V",
+    originalName: "Movie.mkv",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(1000); // Date.now() off the 0 sentinel
+    tauriListeners.clear();
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset();
+    resetWarnThrottleForTest();
+    vi.mocked(captureError).mockClear();
+    attachMocks();
+    ctrl = new MpvAudioController();
+    errors = [];
+    ctrl.on("error", (payload) => errors.push(payload));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** The chain is up and the playhead is advancing — the watchdog's inputs. */
+  function startVideoPlaying(timePos: number): void {
+    fireMpvEvent("playback-restart");
+    fireProperty("time-pos", timePos);
+  }
+
+  /** Advance `ms` in 1s steps, keeping time-pos advancing so the time-pos
+   *  watchdog and the stall reconciler stay quiet. */
+  async function advancePlaying(
+    ms: number,
+    fromTimePos: number,
+  ): Promise<void> {
+    let timePos = fromTimePos;
+    for (let elapsed = 0; elapsed < ms; elapsed += 1000) {
+      timePos += 1;
+      fireProperty("time-pos", timePos);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    // Flush the watchdog's async chain (poll + retry loadfile).
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("video track with vo-configured staying false retries the video output once after 5s", async () => {
+    await ctrl.playTrack(videoTrack);
+    tauriMocks.invoke.mockClear();
+    startVideoPlaying(2);
+
+    await advancePlaying(VIDEO_OUTPUT_WATCHDOG_MS, 2);
+
+    // The retry is the user's manual cure, automated: off, then on (auto),
+    // then the same track reloaded — and exactly once.
+    expect(mpvCommands()).toEqual([
+      ["set_property", "video", "no"],
+      ["set_property", "video", "auto"],
+      ["loadfile", `${PROXY_URL_PREFIX}V`, "replace"],
+      ["set_property", "pause", "no"],
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it("a second fire for the same track surfaces video_output_missing instead of retrying again", async () => {
+    await ctrl.playTrack(videoTrack);
+    tauriMocks.invoke.mockClear();
+    startVideoPlaying(2);
+
+    await advancePlaying(VIDEO_OUTPUT_WATCHDOG_MS, 2);
+    expect(mpvCommands().filter((c) => c[0] === "loadfile")).toHaveLength(1);
+    tauriMocks.invoke.mockClear();
+
+    // The retry minted a new attempt: its own watchdog window, same track.
+    startVideoPlaying(2);
+    await advancePlaying(VIDEO_OUTPUT_WATCHDOG_MS, 2);
+
+    expect(mpvCommands().filter((c) => c[0] === "loadfile")).toHaveLength(0);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        code: "video_output_missing",
+        trackId: "V",
+      }),
+    ]);
+  });
+
+  it("vo-configured true before the deadline disarms the watchdog (no retry)", async () => {
+    await ctrl.playTrack(videoTrack);
+    tauriMocks.invoke.mockClear();
+    startVideoPlaying(2);
+    fireProperty("vo-configured", true);
+
+    await advancePlaying(VIDEO_OUTPUT_WATCHDOG_MS + 1000, 2);
+
+    expect(mpvCommands()).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("audio track never arms the watchdog", async () => {
+    await ctrl.playTrack(trackA);
+    tauriMocks.invoke.mockClear();
+    startVideoPlaying(2);
+
+    await advancePlaying(VIDEO_OUTPUT_WATCHDOG_MS + 1000, 2);
+
+    expect(mpvCommands()).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("time-pos never advancing means no retry (a load that never started belongs to the load deadline)", async () => {
+    await ctrl.playTrack(videoTrack);
+    tauriMocks.invoke.mockClear();
+    fireMpvEvent("playback-restart");
+
+    await vi.advanceTimersByTimeAsync(VIDEO_OUTPUT_WATCHDOG_MS + 1000);
+
+    expect(mpvCommands()).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("release() cancels the video-output watchdog (no timer leak)", async () => {
+    await ctrl.playTrack(videoTrack);
+
+    ctrl.release();
+    await vi.advanceTimersByTimeAsync(VIDEO_OUTPUT_WATCHDOG_MS + 1000);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(errors).toEqual([]);
   });
 });
