@@ -1621,7 +1621,6 @@ pub async fn start_file_download(
     };
     let transport = HttpFileTransport::new().map_err(|e| download_error_message(&e))?;
     let token_source = ProductionTokenRefresher;
-    let mut on_progress = on_progress;
     let result = download_file(
         &transport,
         &token_source,
